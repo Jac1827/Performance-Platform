@@ -12493,6 +12493,94 @@ function getPortfolioPriorityLeadTrend(currentLeads, previousLeads, selectedMont
   };
 }
 
+function normalizeFinancialLedgerPeriodKey(value, fallbackYear = new Date().getFullYear()) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  let match = raw.match(/^(\d{4})-(\d{1,2})$/);
+  if (match) return `${match[1]}-${String(Number(match[2])).padStart(2, "0")}`;
+  match = raw.match(/^(\d{1,2})[\/-](\d{2,4})$/);
+  if (match) {
+    const year = String(match[2]).length === 2 ? `20${match[2]}` : match[2];
+    return `${year}-${String(Number(match[1])).padStart(2, "0")}`;
+  }
+  match = raw.match(/^([A-Za-z]+)\s+(\d{4})$/);
+  if (match) {
+    const monthToken = String(match[1]).toLowerCase();
+    let monthIdx = FULL_MONTHS.findIndex(label => label.toLowerCase() === monthToken);
+    if (monthIdx < 0) monthIdx = MONTHS.findIndex(label => label.toLowerCase() === monthToken.slice(0, 3));
+    if (monthIdx >= 0) return `${match[2]}-${String(monthIdx + 1).padStart(2, "0")}`;
+  }
+  match = raw.match(/^([A-Za-z]+)$/);
+  if (match) {
+    const monthToken = String(match[1]).toLowerCase();
+    let monthIdx = FULL_MONTHS.findIndex(label => label.toLowerCase() === monthToken);
+    if (monthIdx < 0) monthIdx = MONTHS.findIndex(label => label.toLowerCase() === monthToken.slice(0, 3));
+    if (monthIdx >= 0) return `${fallbackYear}-${String(monthIdx + 1).padStart(2, "0")}`;
+  }
+  return "";
+}
+
+function getFinancialLedgerRowsForMonth(record = {}, selectedMonth = getSelectedDashboardMonthIndex(), year = new Date().getFullYear()) {
+  const ledger = (record?.financialLedger && typeof record.financialLedger === "object") ? record.financialLedger : {};
+  const targetKey = `${year}-${String(selectedMonth + 1).padStart(2, "0")}`;
+  if (Array.isArray(ledger[targetKey])) return ledger[targetKey];
+  for (const [periodKey, rows] of Object.entries(ledger)) {
+    if (!Array.isArray(rows)) continue;
+    if (normalizeFinancialLedgerPeriodKey(periodKey, year) === targetKey) return rows;
+  }
+  return [];
+}
+
+function summarizeFinancialLedgerRows(rows = []) {
+  const summary = {
+    hasData: false,
+    revenueActual: 0,
+    revenueBudget: 0,
+    expenseActual: 0,
+    expenseBudget: 0,
+    annualBudget: 0,
+    noiActual: 0,
+    noiBudget: 0,
+    noiVariance: 0,
+    expenseVariance: 0,
+    revenueVariance: 0
+  };
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const glCode = Number(String(row?.glCode ?? "").replace(/[^\d.-]/g, ""));
+    const sectionLabel = String(row?.section ?? "").toLowerCase();
+    const actual = Number(row?.actual ?? row?.yAct ?? 0) || 0;
+    const budget = Number(row?.budget ?? row?.yBud ?? 0) || 0;
+    const annualBudget = Number(row?.annualBudget ?? row?.annBud ?? 0) || 0;
+    const isIncome = sectionLabel.includes("income") || (Number.isFinite(glCode) && glCode > 0 && glCode < 5000);
+    if (!actual && !budget && !annualBudget) return;
+    summary.hasData = true;
+    summary.annualBudget += annualBudget;
+    if (isIncome) {
+      summary.revenueActual += actual;
+      summary.revenueBudget += budget;
+    } else {
+      summary.expenseActual += actual;
+      summary.expenseBudget += budget;
+    }
+  });
+  summary.noiActual = summary.revenueActual - summary.expenseActual;
+  summary.noiBudget = summary.revenueBudget - summary.expenseBudget;
+  summary.noiVariance = summary.noiActual - summary.noiBudget;
+  summary.expenseVariance = summary.expenseActual - summary.expenseBudget;
+  summary.revenueVariance = summary.revenueActual - summary.revenueBudget;
+  return summary;
+}
+
+function getFinancialSummaryForMonth(record = {}, selectedMonth = getSelectedDashboardMonthIndex(), year = new Date().getFullYear()) {
+  return summarizeFinancialLedgerRows(getFinancialLedgerRowsForMonth(record, selectedMonth, year));
+}
+
+function formatSignedFinancialCurrency(value = 0) {
+  const numeric = Number(value ?? 0) || 0;
+  if (!numeric) return "$0";
+  return `${numeric > 0 ? "+" : "-"}${formatDlrCurrency(Math.abs(numeric))}`;
+}
+
 function buildPortfolioHomePriorities(details = [], selectedMonth = getSelectedDashboardMonthIndex()) {
   const priorities = [];
   const previousMonthIdx = selectedMonth > 0 ? selectedMonth - 1 : null;
@@ -12570,6 +12658,26 @@ function buildPortfolioHomePriorities(details = [], selectedMonth = getSelectedD
         actionLabel: "Open Comp Calc"
       });
     }
+
+    const financial = getFinancialSummaryForMonth(record, selectedMonth);
+    if (financial.hasData && Math.abs(financial.noiVariance) >= 1000) {
+      const isUnderBudget = financial.noiVariance < 0;
+      priorities.push({
+        community: detail.name,
+        title: isUnderBudget
+          ? `NOI is ${formatDlrCurrency(Math.abs(financial.noiVariance))} under budget`
+          : `NOI is ${formatDlrCurrency(Math.abs(financial.noiVariance))} over budget`,
+        body: isUnderBudget
+          ? `${detail.name} is tracking ${formatDlrCurrency(financial.noiActual)} in NOI versus ${formatDlrCurrency(financial.noiBudget)} budget for ${FULL_MONTHS[selectedMonth]}. Revenue is ${formatSignedFinancialCurrency(financial.revenueVariance)} to budget and expenses are ${formatSignedFinancialCurrency(financial.expenseVariance)} to budget.`
+          : `${detail.name} is tracking ${formatDlrCurrency(financial.noiActual)} in NOI versus ${formatDlrCurrency(financial.noiBudget)} budget for ${FULL_MONTHS[selectedMonth]}. Revenue is ${formatSignedFinancialCurrency(financial.revenueVariance)} to budget and expenses are ${formatSignedFinancialCurrency(financial.expenseVariance)} to budget.`,
+        value: formatSignedFinancialCurrency(financial.noiVariance),
+        valueSub: "NOI vs budget",
+        tone: isUnderBudget ? "critical" : "good",
+        severity: (isUnderBudget ? 72 : 52) + Math.min(Math.abs(financial.noiVariance) / 2500, 18),
+        actionType: "financial",
+        actionLabel: "Open Financials"
+      });
+    }
   });
   return priorities
     .sort((a, b) => (Number(b.severity) || 0) - (Number(a.severity) || 0) || String(a.community).localeCompare(String(b.community)))
@@ -12578,11 +12686,14 @@ function buildPortfolioHomePriorities(details = [], selectedMonth = getSelectedD
 
 function renderPortfolioPriorityItem(priority) {
   const color = getPortfolioPriorityToneColor(priority.tone);
+  const actionHtml = priority.actionType === "financial"
+    ? `<button type="button" class="portfolio-priority-chip" onmousedown='window.location.href=${JSON.stringify(`financial-accountability.html?community=${encodeURIComponent(String(priority.community || ""))}&period=${encodeURIComponent(getWorkspacePeriodString(getSelectedDashboardMonthIndex()))}`)}; return false;'>${escapeHtml(priority.actionLabel || "Open Financials")}</button>`
+    : `<button type="button" class="portfolio-priority-chip" onmousedown='return queueWorkspaceNavigation(${JSON.stringify(priority.community)}, ${Number(priority.tabIdx) || 0})'>${escapeHtml(priority.actionLabel || "Open")}</button>`;
   return `<div class="portfolio-rank-item portfolio-priority-item" style="border-left-color:${color}">
     <div>
       <div class="portfolio-priority-title">${escapeHtml(priority.title)}</div>
       <div class="meta">${escapeHtml(priority.community)} · ${escapeHtml(priority.body)}</div>
-      <button type="button" class="portfolio-priority-chip" onmousedown='return queueWorkspaceNavigation(${JSON.stringify(priority.community)}, ${Number(priority.tabIdx) || 0})'>${escapeHtml(priority.actionLabel || "Open")}</button>
+      ${actionHtml}
     </div>
     <div style="text-align:right;min-width:76px">
       <div class="metric" style="color:${color}">${escapeHtml(priority.value)}</div>
@@ -14060,6 +14171,24 @@ function renderPortfolioHomeTab() {
       .sort((a, b) => (b.summary.applicationsApproved ?? 0) - (a.summary.applicationsApproved ?? 0))
       .slice(0, 4);
     const portfolioPriorities = buildPortfolioHomePriorities(details, selectedMonth);
+    const financialSummaries = details
+      .map(detail => ({ detail, financial: getFinancialSummaryForMonth(detail.record ?? {}, selectedMonth) }))
+      .filter(item => item.financial.hasData);
+    const financialAggregate = financialSummaries.reduce((acc, item) => {
+      acc.communityCount += 1;
+      acc.noiActual += Number(item.financial.noiActual ?? 0) || 0;
+      acc.noiBudget += Number(item.financial.noiBudget ?? 0) || 0;
+      acc.underBudgetCount += item.financial.noiVariance < 0 ? 1 : 0;
+      acc.overBudgetCount += item.financial.noiVariance > 0 ? 1 : 0;
+      return acc;
+    }, {
+      communityCount: 0,
+      noiActual: 0,
+      noiBudget: 0,
+      underBudgetCount: 0,
+      overBudgetCount: 0
+    });
+    financialAggregate.noiVariance = financialAggregate.noiActual - financialAggregate.noiBudget;
     const tiles = [
       {
         label: "Saved Communities",
@@ -14102,6 +14231,13 @@ function renderPortfolioHomeTab() {
         label: "Tour To Lease",
         value: `${(aggregate.tourToLeasePct ?? 0).toFixed(1)}%`,
         sub: `${Math.round(aggregate.tours ?? 0)} tours and ${Math.round(aggregate.leasesSigned ?? 0)} signed leases`
+      },
+      {
+        label: "NOI To Budget",
+        value: financialAggregate.communityCount > 0 ? formatSignedFinancialCurrency(financialAggregate.noiVariance) : "—",
+        sub: financialAggregate.communityCount > 0
+          ? `${financialAggregate.underBudgetCount} under budget · ${financialAggregate.overBudgetCount} over budget`
+          : "No saved financial uploads in scope yet"
       },
       {
         label: "ORA Average",
