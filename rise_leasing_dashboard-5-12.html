@@ -3647,26 +3647,28 @@ function loadPropertyData(propName) {
   importRoutingMode = d.importRoutingMode;
   customUnits = d.customUnits;
   corporateLeaseUnits = d.corporateLeaseUnits;
-  investorName = d.investorName;
+  investorName = String(d.investorName ?? "").trim();
   investorEmailContacts = normalizeInvestorEmailContacts(d.investorEmailContacts);
   communityFloorPlans = normalizeCommunityFloorPlans(d.communityFloorPlans);
-  communityAddress = d.communityAddress;
-  communityWebsiteUrl = d.communityWebsiteUrl;
-  floorPlanRatesPageUrl = d.floorPlanRatesPageUrl;
-  communityGeo = d.communityGeo;
-  communityPhotoBank = d.photoBank;
-  bonusPayouts = d.bonusPayouts;
-  bonusConvGoal = d.bonusConvGoal;
-  bonusRolesByQ = d.bonusRolesByQ;
+  communityAddress = String(d.communityAddress ?? "").trim();
+  communityWebsiteUrl = String(d.communityWebsiteUrl ?? "").trim();
+  floorPlanRatesPageUrl = String(d.floorPlanRatesPageUrl ?? "").trim();
+  communityGeo = d.communityGeo && Number.isFinite(Number(d.communityGeo?.lat)) && Number.isFinite(Number(d.communityGeo?.lng))
+    ? { lat: Number(d.communityGeo.lat), lng: Number(d.communityGeo.lng), updatedAt: String(d.communityGeo.updatedAt ?? "") }
+    : null;
+  communityPhotoBank = normalizeCommunityPhotoBank(d.photoBank);
+  bonusPayouts = (d.bonusPayouts && typeof d.bonusPayouts === "object") ? d.bonusPayouts : { apps: 25, leases: 50, conversion: 75 };
+  bonusConvGoal = Number(d.bonusConvGoal ?? 40) || 40;
+  bonusRolesByQ = rebuildBonusRolesByQuarter(d.bonusRolesByQ, normalizePropertyTeamConfig(d.propertyTeamConfig));
   commissionData = d.commissionData;
-  propertyTeamConfig = d.propertyTeamConfig;
-  communityTeamProfiles = d.communityTeamProfiles;
-  propertyTurnoverConfig = d.propertyTurnoverConfig;
-  propertyTurnoverByQuarter = d.propertyTurnoverByQuarter;
-  msoeByQuarter = d.msoeByQuarter;
-  reputationData = d.reputationData;
-  marketSurveyData = d.marketSurveyData;
-  latestDlrSummary = d.latestDlrSummary;
+  propertyTeamConfig = normalizePropertyTeamConfig(d.propertyTeamConfig);
+  communityTeamProfiles = normalizeCommunityTeamProfiles(d.communityTeamProfiles, propertyTeamConfig);
+  propertyTurnoverConfig = normalizePropertyTurnoverConfig(d.propertyTurnoverConfig);
+  propertyTurnoverByQuarter = normalizePropertyTurnoverByQuarter(d.propertyTurnoverByQuarter, propertyTurnoverConfig);
+  msoeByQuarter = normalizeMsoeByQuarter(d.msoeByQuarter);
+  reputationData = normalizeReputationData(d.reputationData);
+  marketSurveyData = normalizeMarketSurveyData(d.marketSurveyData);
+  latestDlrSummary = normalizeDlrSummary(d.latestDlrSummary);
   marketSurveyHistory = normalizeMarketSurveyHistory(d.marketSurveyHistory);
   importTracking = normalizeImportTracking(d.importTracking);
   financialLedger = d.financialLedger;
@@ -6072,9 +6074,10 @@ function renderTab() {
     } catch (error) {
       console.error("Tab failed to render", { activeTab, error });
       const activeLabel = document.querySelectorAll(".tab")[activeTab]?.textContent?.trim() || `Tab ${activeTab}`;
+      const errorDetail = String(error?.message || error || "Unknown render error");
       panel.innerHTML = `<div class="card mb4">
         <div class="card-title" style="margin-bottom:8px">${escapeHtml(activeLabel)}</div>
-        <div class="alert-red">This section hit a render issue and did not finish loading. Refresh once. If it still fails, the saved data for this section likely needs cleanup after the recent browser-storage migration.</div>
+        <div class="alert-red">This section hit a render issue and did not finish loading. ${escapeHtml(errorDetail)}</div>
       </div>`;
     }
   }
@@ -6817,9 +6820,10 @@ function renderPortfolioScopedSetupTab() {
   return renderPortfolioScopePanel("Portfolio Community Setup", "A read-through of saved setup data across the full portfolio.", cardsHtml, bodyHtml + selectedCommunityEditor);
   } catch (error) {
     console.error("Portfolio Community Setup failed to render", error);
+    const errorDetail = String(error?.message || error || "Unknown render error");
     return `<div class="card mb4">
       <div class="card-title" style="margin-bottom:8px">Portfolio Community Setup</div>
-      <div class="alert-red">Portfolio Community Setup hit a render issue after loading saved setup data. Refresh once. If it persists, one of the saved community setup records needs cleanup.</div>
+      <div class="alert-red">Portfolio Community Setup hit a render issue after loading saved setup data. ${escapeHtml(errorDetail)}</div>
     </div>`;
   }
 }
@@ -7581,9 +7585,10 @@ function renderSetupTab() {
   ].join("");
   } catch (error) {
     console.error("Community Setup failed to render", error);
+    const errorDetail = String(error?.message || error || "Unknown render error");
     return `<div class="card mb4">
       <div class="card-title" style="margin-bottom:8px">Community Setup</div>
-      <div class="alert-red">Community Setup hit a render issue after loading saved data. Refresh once. If it still fails, one of the saved setup records needs cleanup after the storage migration.</div>
+      <div class="alert-red">Community Setup hit a render issue after loading saved data. ${escapeHtml(errorDetail)}</div>
     </div>`;
   }
 }
