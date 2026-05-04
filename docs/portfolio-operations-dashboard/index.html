@@ -2916,10 +2916,12 @@ function getLeadSourceBreakdown(monthEntry = {}) {
 }
 
 function getLeadSourceTotal(monthEntry = {}) {
+  const explicitGuestCards = Math.max(0, Number(monthEntry.guestCards) || 0);
+  if (explicitGuestCards > 0) return explicitGuestCards;
   const sources = getLeadSourceBreakdown(monthEntry);
   const sourceTotal = Object.values(sources).reduce((sum, value) => sum + value, 0);
   if (sourceTotal > 0) return sourceTotal;
-  return Math.max(0, Number(monthEntry.guestCards) || 0);
+  return explicitGuestCards;
 }
 
 function getApplicationDecisionMetrics(monthEntry = {}) {
