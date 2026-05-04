@@ -21353,6 +21353,12 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
     const headerKeys = (monthlyRows[0] || []).map(normalizeAtlasColumnKey);
     const colIdx = Object.fromEntries(headerKeys.map((key, idx) => [key, idx]));
     const getCell = (row, key) => row[colIdx[key]] ?? "";
+    const getNumericCell = (row, key) => {
+      const raw = getCell(row, key);
+      if (raw === "" || raw === null || raw === undefined) return null;
+      const numeric = Number(String(raw).replace(/[$,%]/g, ""));
+      return Number.isFinite(numeric) ? numeric : null;
+    };
     const masterSheet = workbook.SheetNames.find(name => normalizeAtlasColumnKey(name) === "community_master");
     const communityMap = {};
     if (masterSheet) {
@@ -21406,11 +21412,11 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
         move_outs: getCell(row, "move_outs") ?? "",
         move_ins: getCell(row, "move_ins") ?? "",
         guest_cards: getCell(row, "leads") || getCell(row, "traffic") || "",
-        walk_in: "",
+        walk_in: getCell(row, "lead_walk_ins") ?? "",
         off_site_event: "",
-        phone_calls: "",
-        emails_online: "",
-        text_chat_other: "",
+        phone_calls: getCell(row, "lead_calls") ?? "",
+        emails_online: getCell(row, "lead_emails_online") ?? "",
+        text_chat_other: getCell(row, "lead_chat_text_other") ?? "",
         tours: getCell(row, "tours") ?? "",
         applications: getCell(row, "applications") ?? "",
         applications_approved: getCell(row, "approved_applications") ?? "",
@@ -21451,7 +21457,11 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
           concessions: "concessions",
           ner: "ner",
           renewal_expirations: "renewal_expirations",
-          renewals_signed: "renewals_signed"
+          renewals_signed: "renewals_signed",
+          lead_walk_ins: "walk_in",
+          lead_calls: "phone_calls",
+          lead_emails_online: "emails_online",
+          lead_chat_text_other: "text_chat_other"
         };
         clearMonthlyRecordFields(targetRecord, targetMonthIdx, Object.values(monthlyFieldMap));
         Object.entries(monthlyFieldMap).forEach(([sourceKey, targetKey]) => {
@@ -21482,6 +21492,13 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
       if (log.length < 18) {
         const monthLabel = MONTHS[targetMonthIdx];
         log.push(`${mappedName} · ${monthLabel}: occupied ${mappedRow.occupied || "—"}, leased ${mappedRow.leased || "—"}, leads ${mappedRow.guest_cards || "—"}`);
+        const leadWalkIns = getNumericCell(row, "lead_walk_ins");
+        const leadCalls = getNumericCell(row, "lead_calls");
+        const leadEmailsOnline = getNumericCell(row, "lead_emails_online");
+        const leadChatTextOther = getNumericCell(row, "lead_chat_text_other");
+        if ([leadWalkIns, leadCalls, leadEmailsOnline, leadChatTextOther].some(value => value !== null)) {
+          log.push(`↳ lead mix: walk ${leadWalkIns ?? 0}, calls ${leadCalls ?? 0}, email/online ${leadEmailsOnline ?? 0}, text/chat/other ${leadChatTextOther ?? 0}`);
+        }
       }
     }
 
@@ -21538,6 +21555,10 @@ async function handleCSVFile(file, options = {}) {
         phoneCalls: ["phone_calls","phonecalls","phone calls"],
         emailsOnline: ["emails_online","emailsonline","emails/online","email_online"],
         textChatOther: ["text_chat_other","textchatother","text/chat/other","chat_other"],
+        leadWalkIns: ["lead_walk_ins","lead_walkins","lead walk ins"],
+        leadCalls: ["lead_calls","leadcalls","lead calls"],
+        leadEmailsOnline: ["lead_emails_online","lead email online","lead emails online"],
+        leadChatTextOther: ["lead_chat_text_other","lead chat text other","lead_chat_other"],
         tours: ["tours","showings","total_tours"],
         applications: ["applications","apps","total_applications"],
         applicationsApproved: ["applications_approved","approved","approved_apps","apps_approved"],
@@ -21607,6 +21628,10 @@ async function handleCSVFile(file, options = {}) {
           phone_calls: findVal(row, fieldMap.phoneCalls) ?? "",
           emails_online: findVal(row, fieldMap.emailsOnline) ?? "",
           text_chat_other: findVal(row, fieldMap.textChatOther) ?? "",
+          lead_walk_ins: findVal(row, fieldMap.leadWalkIns) ?? "",
+          lead_calls: findVal(row, fieldMap.leadCalls) ?? "",
+          lead_emails_online: findVal(row, fieldMap.leadEmailsOnline) ?? "",
+          lead_chat_text_other: findVal(row, fieldMap.leadChatTextOther) ?? "",
           tours: findVal(row, fieldMap.tours) ?? "",
           applications: findVal(row, fieldMap.applications) ?? "",
           applications_approved: findVal(row, fieldMap.applicationsApproved) ?? "",
