@@ -1044,6 +1044,8 @@ let portfolioSetupCommunityName = "";
 let communityGeo = null;
 let financialLedger = {};
 let financialUpdatedAt = "";
+let financialBudgetLedger = {};
+let financialBudgetUpdatedAt = "";
 let currentOccupied = 87;
 let currentLeased = 90;
 let occupancyGoal = 95;
@@ -2925,6 +2927,8 @@ function normalizeSavedCommunityRecord(propName, data) {
     importTracking: normalizeImportTracking(input.importTracking),
     financialLedger: (input.financialLedger && typeof input.financialLedger === "object") ? input.financialLedger : {},
     financialUpdatedAt: String(input.financialUpdatedAt ?? ""),
+    financialBudgetLedger: (input.financialBudgetLedger && typeof input.financialBudgetLedger === "object") ? input.financialBudgetLedger : {},
+    financialBudgetUpdatedAt: String(input.financialBudgetUpdatedAt ?? ""),
     propertyName: propName
   };
 }
@@ -2967,7 +2971,9 @@ function getCurrentCommunityRecord() {
     marketSurveyHistory,
     importTracking,
     financialLedger,
-    financialUpdatedAt
+    financialUpdatedAt,
+    financialBudgetLedger,
+    financialBudgetUpdatedAt
   });
 }
 
@@ -3802,6 +3808,8 @@ function loadPropertyData(propName) {
   importTracking = normalizeImportTracking(d.importTracking);
   financialLedger = d.financialLedger;
   financialUpdatedAt = d.financialUpdatedAt;
+  financialBudgetLedger = d.financialBudgetLedger;
+  financialBudgetUpdatedAt = d.financialBudgetUpdatedAt;
   renewalImportLog = [];
   renewalImportSourceLabel = "";
   historicalImportTarget = normalizeHistoricalImportTarget({
@@ -12531,7 +12539,18 @@ function getFinancialLedgerRowsForMonth(record = {}, selectedMonth = getSelected
   return [];
 }
 
-function summarizeFinancialLedgerRows(rows = []) {
+function getFinancialBudgetLedgerRowsForMonth(record = {}, selectedMonth = getSelectedDashboardMonthIndex(), year = new Date().getFullYear()) {
+  const ledger = (record?.financialBudgetLedger && typeof record.financialBudgetLedger === "object") ? record.financialBudgetLedger : {};
+  const targetKey = `${year}-${String(selectedMonth + 1).padStart(2, "0")}`;
+  if (Array.isArray(ledger[targetKey])) return ledger[targetKey];
+  for (const [periodKey, rows] of Object.entries(ledger)) {
+    if (!Array.isArray(rows)) continue;
+    if (normalizeFinancialLedgerPeriodKey(periodKey, year) === targetKey) return rows;
+  }
+  return [];
+}
+
+function summarizeFinancialLedgerRows(rows = [], budgetRows = []) {
   const summary = {
     hasData: false,
     revenueActual: 0,
@@ -12545,12 +12564,25 @@ function summarizeFinancialLedgerRows(rows = []) {
     expenseVariance: 0,
     revenueVariance: 0
   };
+  const budgetIndex = {};
+  (Array.isArray(budgetRows) ? budgetRows : []).forEach((row) => {
+    const glCode = String(row?.glCode ?? row?.gl ?? "").trim();
+    if (!glCode) return;
+    budgetIndex[glCode] = {
+      budget: Number(row?.budget ?? row?.yBud ?? 0) || 0,
+      annualBudget: Number(row?.annualBudget ?? row?.annBud ?? 0) || 0,
+      section: String(row?.section ?? "")
+    };
+  });
   (Array.isArray(rows) ? rows : []).forEach((row) => {
-    const glCode = Number(String(row?.glCode ?? "").replace(/[^\d.-]/g, ""));
+    const rawGlCode = String(row?.glCode ?? row?.gl ?? "").trim();
+    const glCode = Number(String(rawGlCode).replace(/[^\d.-]/g, ""));
     const sectionLabel = String(row?.section ?? "").toLowerCase();
     const actual = Number(row?.actual ?? row?.yAct ?? 0) || 0;
-    const budget = Number(row?.budget ?? row?.yBud ?? 0) || 0;
-    const annualBudget = Number(row?.annualBudget ?? row?.annBud ?? 0) || 0;
+    const budgetFallback = budgetIndex[rawGlCode]?.budget;
+    const annualBudgetFallback = budgetIndex[rawGlCode]?.annualBudget;
+    const budget = Number(row?.budget ?? row?.yBud ?? budgetFallback ?? 0) || 0;
+    const annualBudget = Number(row?.annualBudget ?? row?.annBud ?? annualBudgetFallback ?? 0) || 0;
     const isIncome = sectionLabel.includes("income") || (Number.isFinite(glCode) && glCode > 0 && glCode < 5000);
     if (!actual && !budget && !annualBudget) return;
     summary.hasData = true;
@@ -12572,7 +12604,10 @@ function summarizeFinancialLedgerRows(rows = []) {
 }
 
 function getFinancialSummaryForMonth(record = {}, selectedMonth = getSelectedDashboardMonthIndex(), year = new Date().getFullYear()) {
-  return summarizeFinancialLedgerRows(getFinancialLedgerRowsForMonth(record, selectedMonth, year));
+  return summarizeFinancialLedgerRows(
+    getFinancialLedgerRowsForMonth(record, selectedMonth, year),
+    getFinancialBudgetLedgerRowsForMonth(record, selectedMonth, year)
+  );
 }
 
 function formatSignedFinancialCurrency(value = 0) {

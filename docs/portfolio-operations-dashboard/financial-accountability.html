@@ -23,6 +23,7 @@ const OPS_PROPERTY_CATALOG_KEY="rise_ops_property_catalog_v1";
 const ATLAS_STATE_DB_NAME="atlas_rise_state_v1";
 const ATLAS_STATE_STORE_NAME="records";
 const ATLAS_STATE_COMMUNITY_KEY="community_data";
+const APPROVED_BUDGET_STORAGE_KEY="rise_financial_accountability_approved_budgets_v1";
 const LEGACY_ENTITY_ID_MAP={
   "rise company budget":"rise_corp",
   "rise residential corporate":"rise_corp",
@@ -110,6 +111,18 @@ function loadStoredPageState(){
   }
 }
 
+function loadStoredApprovedBudgets(){
+  try{
+    const raw=window.localStorage.getItem(APPROVED_BUDGET_STORAGE_KEY);
+    const parsed=raw?JSON.parse(raw):null;
+    return parsed&&typeof parsed==="object"&&Array.isArray(parsed.records)
+      ? {records:parsed.records,updatedAt:parsed.updatedAt||null}
+      : {records:[],updatedAt:null};
+  }catch(_error){
+    return {records:[],updatedAt:null};
+  }
+}
+
 function persistPageState(){
   try{
     window.localStorage.setItem(STORAGE_KEY,JSON.stringify({
@@ -127,6 +140,15 @@ function persistPageState(){
       sortCol:state.sortCol,
       sortDir:state.sortDir,
       uploadEntity:state.uploadEntity
+    }));
+  }catch(_error){}
+}
+
+function persistApprovedBudgetState(){
+  try{
+    window.localStorage.setItem(APPROVED_BUDGET_STORAGE_KEY,JSON.stringify({
+      records:Array.isArray(state.approvedBudgets&&state.approvedBudgets.records)?state.approvedBudgets.records:[],
+      updatedAt:state.approvedBudgets&&state.approvedBudgets.updatedAt||null
     }));
   }catch(_error){}
 }
@@ -249,6 +271,17 @@ function buildFinancialLedgerRows(rows){
   }));
 }
 
+function buildFinancialBudgetLedgerRows(rows){
+  return (Array.isArray(rows)?rows:[]).map(row=>({
+    section:String(row&&row.section||""),
+    lineItem:String(row&&row.lineItem||row&&row.name||""),
+    glCode:String(row&&row.glCode||row&&row.gl||""),
+    budget:Number(row&&row.budget||0),
+    annualBudget:Number(row&&row.annualBudget||0),
+    updatedAt:String(row&&row.updatedAt||new Date().toISOString())
+  }));
+}
+
 async function applyDatasetToAtlasStore(dataset,entity){
   if(!dataset||!entity||entity.kind!=="community")return{ok:true};
   const communityName=String(entity.label||"").trim();
@@ -266,6 +299,33 @@ async function applyDatasetToAtlasStore(dataset,entity){
   };
   await persistAtlasCommunityStore(store);
   return{ok:true,periodKey};
+}
+
+async function applyApprovedBudgetDatasetToAtlasStore(dataset,entity){
+  if(!dataset||!entity||entity.kind!=="community")return{ok:true};
+  const communityName=String(entity.label||"").trim();
+  if(!communityName)return{ok:false,message:"No ATLAS community name was available for this budget baseline."};
+  const grouped={};
+  (Array.isArray(dataset.records)?dataset.records:[]).forEach(record=>{
+    const periodKey=normalizeFinancialPeriodKey(record&&record.period||"");
+    if(!periodKey)return;
+    if(!grouped[periodKey])grouped[periodKey]=[];
+    grouped[periodKey].push(record);
+  });
+  if(!Object.keys(grouped).length)return{ok:false,message:"No usable month-by-month budget rows were detected in this workbook."};
+  const store=await loadAtlasCommunityStore();
+  const existing=store&&typeof store[communityName]==="object"&&store[communityName]?store[communityName]:{propertyName:communityName};
+  const budgetLedger=existing.financialBudgetLedger&&typeof existing.financialBudgetLedger==="object"?{...existing.financialBudgetLedger}:{};
+  Object.entries(grouped).forEach(([periodKey,records])=>{
+    budgetLedger[periodKey]=buildFinancialBudgetLedgerRows(records);
+  });
+  store[communityName]={
+    ...existing,
+    financialBudgetLedger:budgetLedger,
+    financialBudgetUpdatedAt:new Date().toISOString()
+  };
+  await persistAtlasCommunityStore(store);
+  return{ok:true,periodKeys:Object.keys(grouped)};
 }
 
 async function removeDatasetFromAtlasStore(dataset,entity){
@@ -297,6 +357,212 @@ function applyIncomingAtlasContext(){
     state.entity=match.id;
     state.uploadEntity=match.id;
   }catch(_error){}
+}
+
+async function hydrateApprovedBudgetsFromAtlas(){
+  try{
+    const store=await loadAtlasCommunityStore();
+    const records=[];
+    Object.entries(store||{}).forEach(([property,record])=>{
+      const ledger=record&&record.financialBudgetLedger&&typeof record.financialBudgetLedger==="object"?record.financialBudgetLedger:{};
+      Object.entries(ledger).forEach(([period,rows])=>{
+        (Array.isArray(rows)?rows:[]).forEach(row=>{
+          records.push({
+            property,
+            period,
+            glCode:String(row&&row.glCode||""),
+            lineItem:String(row&&row.lineItem||""),
+            section:String(row&&row.section||""),
+            budget:Number(row&&row.budget||0),
+            annualBudget:Number(row&&row.annualBudget||0),
+            updatedAt:String(row&&row.updatedAt||record&&record.financialBudgetUpdatedAt||"")
+          });
+        });
+      });
+    });
+    if(records.length){
+      state.approvedBudgets={records,updatedAt:new Date().toISOString()};
+      persistApprovedBudgetState();
+      return;
+    }
+  }catch(_error){}
+  state.approvedBudgets=loadStoredApprovedBudgets();
+}
+
+function monthNameToIndex(label){
+  const raw=String(label||"").trim().toLowerCase();
+  if(!raw)return-1;
+  const fullIdx=FULL_MONTHS.findIndex(name=>name.toLowerCase()===raw);
+  if(fullIdx>=0)return fullIdx;
+  return MONTHS.findIndex(name=>name.toLowerCase()===raw.slice(0,3));
+}
+
+function parseBudgetYearStart(text){
+  const raw=String(text||"");
+  const match=raw.match(/(\d{4})/);
+  return match?Number(match[1]):new Date().getFullYear();
+}
+
+function extractWorkbookBudgetMeta(workbook){
+  const rows=XLSX.utils.sheet_to_json(workbook.Sheets["Set-Up"]||workbook.Sheets["Set-Up "],{header:1,raw:false,defval:""});
+  let property="",budgetDescription="",fiscalYearBegins="",budgetYearBegins="";
+  (Array.isArray(rows)?rows:[]).forEach(row=>{
+    const label=String(row&&row[0]||"").trim();
+    const value=String(row&&row[1]||"").trim();
+    if(/Property Name/i.test(label)&&!property)property=value;
+    if(/Budget Description/i.test(label)&&!budgetDescription)budgetDescription=value;
+    if(/Fiscal Year Begins/i.test(label)&&!fiscalYearBegins)fiscalYearBegins=value;
+    if(/Budget Year Begins/i.test(label)&&!budgetYearBegins)budgetYearBegins=value;
+  });
+  return{
+    property,
+    budgetDescription,
+    fiscalYearBegins,
+    budgetYearBegins,
+    baseYear:parseBudgetYearStart(budgetDescription||budgetYearBegins)
+  };
+}
+
+function buildAnnualBudgetRecordsFromWorkbook(workbook,fileName,entity){
+  const meta=extractWorkbookBudgetMeta(workbook);
+  const property=String(entity&&entity.label||meta.property||"").trim();
+  if(!property)throw new Error("Could not determine which community this approved budget workbook belongs to.");
+  const sourceSheetName=(workbook.SheetNames||[]).find(name=>/monthly budget rpt/i.test(name))
+    || (workbook.SheetNames||[]).find(name=>/budget summary rpt/i.test(name))
+    || (workbook.SheetNames||[]).find(name=>/import sheet/i.test(name));
+  if(!sourceSheetName)throw new Error("No budget detail tab was found. Expected a Monthly Budget Rpt, Budget Summary Rpt, or Import Sheet tab.");
+  const rows=XLSX.utils.sheet_to_json(workbook.Sheets[sourceSheetName],{header:1,raw:false,defval:""});
+  if(!Array.isArray(rows)||!rows.length)throw new Error("The approved budget workbook tab was empty.");
+  let monthHeaderRow=-1;
+  let monthColumns=[];
+  for(let i=0;i<rows.length;i++){
+    const row=rows[i]||[];
+    const found=[];
+    row.forEach((cell,idx)=>{
+      const cellText=String(cell||"").trim();
+      const monthIdx=monthNameToIndex(cellText);
+      if(monthIdx>=0)found.push({idx,monthIdx,label:cellText});
+    });
+    if(found.length>=6){
+      monthHeaderRow=i;
+      monthColumns=found;
+      break;
+    }
+  }
+  if(monthHeaderRow<0||!monthColumns.length)throw new Error("Could not find the monthly budget columns in this workbook.");
+  let section="";
+  const annualTotals={};
+  const records=[];
+  const extraYearTokenRow=rows[Math.max(0,monthHeaderRow-1)]||[];
+  for(let i=monthHeaderRow+1;i<rows.length;i++){
+    const row=rows[i]||[];
+    const rawGl=String(row[0]||"").trim();
+    const rawName=String(row[1]||"").trim();
+    const displayLabel=rawName||rawGl;
+    if(!rawGl&&!rawName)continue;
+    const numericGlMatch=rawGl.match(/^\d{3,6}$/);
+    if(!numericGlMatch){
+      const heading=(rawGl||rawName).replace(/\s+/g," ").trim();
+      if(heading&&heading===heading.toUpperCase()&&!/\d/.test(heading)&&heading.length<40)section=heading;
+      continue;
+    }
+    const glCode=numericGlMatch[0];
+    monthColumns.forEach(({idx,monthIdx,label})=>{
+      const rawValue=row[idx];
+      const budget=Number(String(rawValue??"").replace(/[$,()]/g,match=>match==="("?"-":""))||0;
+      if(!Number.isFinite(budget))return;
+      let year=meta.baseYear;
+      const upperLabel=String(label||"").toUpperCase();
+      if(/YR\s*2/.test(upperLabel))year=meta.baseYear+1;
+      else if(/YR\s*3/.test(upperLabel))year=meta.baseYear+2;
+      else{
+        const rowAbove=String(extraYearTokenRow[idx]||"").toUpperCase();
+        if(/YR\s*2/.test(rowAbove))year=meta.baseYear+1;
+        else if(/YR\s*3/.test(rowAbove))year=meta.baseYear+2;
+      }
+      const period=`${year}-${String(monthIdx+1).padStart(2,"0")}`;
+      const annualKey=`${year}::${glCode}`;
+      annualTotals[annualKey]=(annualTotals[annualKey]||0)+budget;
+      records.push({
+        property,
+        period,
+        glCode,
+        lineItem:rawName||glCode,
+        section:section||"",
+        budget,
+        annualBudget:0,
+        sourceFileName:fileName,
+        updatedAt:new Date().toISOString()
+      });
+    });
+  }
+  records.forEach(record=>{
+    const annualKey=`${String(record.period).slice(0,4)}::${record.glCode}`;
+    record.annualBudget=Number(annualTotals[annualKey]||0);
+  });
+  if(!records.length)throw new Error("No account-level monthly budget rows were detected in this workbook.");
+  return{
+    property,
+    sourceSheetName,
+    records
+  };
+}
+
+async function loadApprovedBudgetFile(file,ent){
+  state.loading=true;render();
+  try{
+    if(typeof XLSX==="undefined")throw new Error("Excel parser is not available on this page.");
+    const buffer=await file.arrayBuffer();
+    const workbook=XLSX.read(buffer,{type:"array"});
+    const entity=getEntityById(ent);
+    const parsed=buildAnnualBudgetRecordsFromWorkbook(workbook,file.name,entity);
+    const approvedAt=new Date().toISOString();
+    const existing=(state.approvedBudgets&&Array.isArray(state.approvedBudgets.records)?state.approvedBudgets.records:[])
+      .filter(record=>!(record.property===parsed.property&&parsed.records.some(next=>next.period===record.period&&next.glCode===record.glCode)));
+    state.approvedBudgets={
+      records:[...existing,...parsed.records],
+      updatedAt:approvedAt
+    };
+    persistApprovedBudgetState();
+    const atlasResult=await applyApprovedBudgetDatasetToAtlasStore(parsed,entity);
+    state.loading=false;
+    render();
+    if(atlasResult&&atlasResult.ok===false){
+      window.alert(atlasResult.message||"The approved budget baseline parsed, but could not be saved back into ATLAS.");
+    }
+  }catch(error){
+    console.error(error);
+    state.loading=false;
+    render();
+    window.alert(String(error&&error.message||error||"Could not load the approved budget workbook."));
+  }
+}
+
+function getApprovedBudgetRowsFor(property){
+  return (state.approvedBudgets&&Array.isArray(state.approvedBudgets.records)?state.approvedBudgets.records:[])
+    .filter(record=>normalizeCommunityLookupName(record&&record.property||"")===normalizeCommunityLookupName(property||""));
+}
+
+function buildApprovedBudgetIndex(property,selectedPeriod){
+  const normalizedPeriod=normalizeFinancialPeriodKey(selectedPeriod||"");
+  if(!normalizedPeriod)return{map:{},matchCount:0,source:"none"};
+  const year=Number(String(normalizedPeriod).slice(0,4));
+  const month=Number(String(normalizedPeriod).slice(5,7));
+  const rows=getApprovedBudgetRowsFor(property);
+  const map={};
+  let matchCount=0;
+  rows.forEach(record=>{
+    const period=normalizeFinancialPeriodKey(record&&record.period||"");
+    if(!period||Number(period.slice(0,4))!==year)return;
+    const periodMonth=Number(period.slice(5,7));
+    const glCode=String(record&&record.glCode||"").trim();
+    if(!glCode)return;
+    if(periodMonth<=month){
+      map[glCode]=(map[glCode]||0)+(Number(record&&record.budget||0)||0);
+      matchCount+=1;
+    }
+  });
+  return{map,matchCount,source:matchCount>0?"approved":"uploaded"};
 }
 
 function goBackToAtlas(){
@@ -340,7 +606,7 @@ return parseCSV(csvText);
 
 function getSt(a,b,inc){if(!b)return"on";if(inc)return a/b>=1?"on":a/b>=.9?"watch":"under";const r=a/b;return r<=1?"on":r<=1.1?"watch":"over";}
 
-let state={store:{},entity:"rise_corp",tab:"dash",selDs:null,cmpA:null,cmpB:null,compareMode:"report_vs_budget",compareBudgetDs:null,search:"",filterSec:"all",filterSt:"all",sortCol:null,sortDir:"desc",uploadEntity:"rise_corp",loading:false};
+let state={store:{},entity:"rise_corp",tab:"dash",selDs:null,cmpA:null,cmpB:null,compareMode:"report_vs_budget",compareBudgetDs:null,search:"",filterSec:"all",filterSt:"all",sortCol:null,sortDir:"desc",uploadEntity:"rise_corp",loading:false,approvedBudgets:loadStoredApprovedBudgets()};
 {
   const storedState=loadStoredPageState();
   if(storedState&&typeof storedState==="object"){
@@ -645,12 +911,13 @@ if(state.compareMode==="report_vs_budget"){
 const cmpBudgetData=entityDS.find(d=>d.id===state.compareBudgetDs);
 if(cmpBudgetData){
 const mapA=_.keyBy(cmpBudgetData.rows,"gl");
+const approvedBudgetIndex=buildApprovedBudgetIndex(curEntity.label,cmpBudgetData.period);
 const allGLs=[...new Set(Object.keys(mapA))];
-compResults=allGLs.map(gl=>{const a=mapA[gl]||{yAct:0,yBud:0};const budgetBase=Math.abs(a.yBud||0);return{gl:gl,name:a.name||"",section:a.section||"",aYAct:a.yAct||0,bYAct:a.yBud||0,yoyChange:budgetBase?((a.yAct-a.yBud)/budgetBase)*100:0,worse:isInc(a)?(a.yAct<a.yBud):((a.yAct>a.yBud)&&budgetBase>0)};}).filter(r=>r.aYAct||r.bYAct);
+ compResults=allGLs.map(gl=>{const a=mapA[gl]||{yAct:0,yBud:0};const approvedBudget=approvedBudgetIndex.map[gl];const compareBudget=approvedBudget!=null?approvedBudget:(a.yBud||0);const budgetBase=Math.abs(compareBudget||0);return{gl:gl,name:a.name||"",section:a.section||"",aYAct:a.yAct||0,bYAct:compareBudget||0,yoyChange:budgetBase?((a.yAct-compareBudget)/budgetBase)*100:0,worse:isInc(a)?(a.yAct<compareBudget):((a.yAct>compareBudget)&&budgetBase>0)};}).filter(r=>r.aYAct||r.bYAct);
 const bySec=_.groupBy(compResults,"section");
 compChartData=Object.entries(bySec).map(([sec,items])=>({section:sec,periodA:items.reduce((s,r)=>s+r.aYAct,0),periodB:items.reduce((s,r)=>s+r.bYAct,0)})).filter(r=>r.periodA||r.periodB);
 compareHeadingA=(cmpBudgetData.period||cmpBudgetData.name)+" Actual";
-compareHeadingB=(cmpBudgetData.period||cmpBudgetData.name)+" Budget";
+ compareHeadingB=approvedBudgetIndex.source==="approved"?(cmpBudgetData.period||cmpBudgetData.name)+" Approved Budget":(cmpBudgetData.period||cmpBudgetData.name)+" Budget";
 }
 } else {
 const cmpDataA=entityDS.find(d=>d.id===state.cmpA);
@@ -731,6 +998,14 @@ if(state.tab==="upload"){
 html+='<div style="font-size:14px;font-weight:700;color:'+D+';margin-bottom:10px">Upload Financial Data</div>';
 html+=uploadAreaHTML(state.uploadEntity);
 if(state.loading)html+='<div style="margin-top:12px;color:'+L+';font-weight:600">Processing...</div>';
+const approvedBudgetRows=getApprovedBudgetRowsFor(curEntity.label);
+html+='<div style="margin-top:18px;padding:14px;background:white;border:1px solid #e2e8f0;border-radius:10px;">';
+html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:4px">Approved Budget Baseline</div>';
+html+='<div style="font-size:11px;color:#64748b;margin-bottom:10px">Upload the annual budget workbook for the selected community. ATLAS will store the monthly GL baseline and use it for report-vs-budget comparisons against uploaded monthly actuals.</div>';
+html+='<button id="budgetUploadBtn" type="button" style="padding:8px 14px;background:'+D+';color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:12px;">Upload Approved Budget Workbook</button>';
+html+='<input id="budgetFileInput" type="file" accept=".xlsx,.xls,.xlsm" style="display:none"/>';
+html+='<div style="margin-top:10px;font-size:11px;color:#475569">'+(approvedBudgetRows.length?approvedBudgetRows.length+' stored budget rows for '+curEntity.label+'.':'No approved budget baseline stored yet for '+curEntity.label+'.')+'</div>';
+html+='</div>';
 html+='<div style="margin-top:20px;"><div style="font-size:12px;font-weight:600;color:#64748b;margin-bottom:8px">Data Library</div>';
 entities.filter(e=>(state.store[e.id]||[]).length>0).forEach(e=>{
 html+='<div style="margin-bottom:10px;"><div style="font-size:12px;font-weight:600;color:'+D+';margin-bottom:4px">'+e.label+' ('+state.store[e.id].length+' reports)</div>';
@@ -807,12 +1082,18 @@ const uploadEntSel=document.getElementById("uploadEntSel");
 if(uploadEntSel)uploadEntSel.addEventListener("change",()=>{if(state.tab==="upload")state.uploadEntity=uploadEntSel.value;else state.entity=uploadEntSel.value;render();});
 const dropZone=document.getElementById("dropZone");
 const fileInput=document.getElementById("fileInput");
+const budgetUploadBtn=document.getElementById("budgetUploadBtn");
+const budgetFileInput=document.getElementById("budgetFileInput");
 if(dropZone&&fileInput){
 dropZone.addEventListener("click",()=>fileInput.click());
 dropZone.addEventListener("dragover",e=>{e.preventDefault();dropZone.style.borderColor=D;dropZone.style.background="#f0f9ff";});
 dropZone.addEventListener("dragleave",()=>{dropZone.style.borderColor="#cbd5e1";dropZone.style.background="white";});
 dropZone.addEventListener("drop",e=>{e.preventDefault();dropZone.style.borderColor="#cbd5e1";const f=e.dataTransfer&&e.dataTransfer.files[0];const ent=(uploadEntSel?uploadEntSel.value:state.entity);if(f)loadFile(f,ent);});
 fileInput.addEventListener("change",()=>{const f=fileInput.files[0];const ent=(uploadEntSel?uploadEntSel.value:state.entity);if(f)loadFile(f,ent);});
+}
+if(budgetUploadBtn&&budgetFileInput){
+budgetUploadBtn.addEventListener("click",()=>budgetFileInput.click());
+budgetFileInput.addEventListener("change",()=>{const f=budgetFileInput.files[0];const ent=(uploadEntSel?uploadEntSel.value:state.entity);if(f)loadApprovedBudgetFile(f,ent);});
 }
 const genBtn=document.getElementById("genReport");
 if(genBtn&&summary){genBtn.addEventListener("click",()=>{
@@ -824,6 +1105,7 @@ const blob=new Blob([h],{type:"text/html"});const url=URL.createObjectURL(blob);
 }
 
 render();
+hydrateApprovedBudgetsFromAtlas().then(()=>render()).catch(()=>{});
 </script>
 </body>
 </html>
