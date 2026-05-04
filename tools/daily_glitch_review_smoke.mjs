@@ -96,7 +96,7 @@ function summarizeFirstDiff(label, sourcePath, publishedPath, sourceText, publis
       ].join("\n");
     }
   }
-  return `Source/doc drift detected for ${publishedPath}`;
+  return `Source/doc drift detected for ${label}`;
 }
 
 function validateRelativeRefs(relativePath, html) {
