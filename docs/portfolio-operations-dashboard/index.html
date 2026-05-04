@@ -10308,15 +10308,26 @@ function extractFloorPlanRatesFromFloorPlanDataSheet(rows = [], targetCommunity 
   return extracted;
 }
 
+function sheetReferencesTargetCommunity(rows = [], targetCommunity = "", sheetName = "") {
+  const normalizedTargetCommunity = normalizeCommunityLookupName(matchPropertyName(targetCommunity, { fallbackToCurrent: false }) || targetCommunity);
+  if (!normalizedTargetCommunity) return false;
+  const normalizedSheetName = normalizeCommunityLookupName(sheetName);
+  if (normalizedSheetName && normalizedSheetName.includes(normalizedTargetCommunity)) return true;
+  return (Array.isArray(rows) ? rows : []).some(row => {
+    const cells = Array.isArray(row) ? row : [];
+    return cells.some(cell => normalizeCommunityLookupName(cell).includes(normalizedTargetCommunity));
+  });
+}
+
 function extractMarketSurveyFloorPlanRates(workbook, targetCommunity = "") {
   if (!workbook || typeof XLSX === "undefined") return [];
+  const normalizedTargetCommunity = normalizeCommunityLookupName(matchPropertyName(targetCommunity, { fallbackToCurrent: false }) || targetCommunity);
+  if (!normalizedTargetCommunity) return [];
   const floorPlanSheetName = workbook.SheetNames.find(sheetName => /^Floor Plan Data$/i.test(String(sheetName ?? "").trim()));
   if (floorPlanSheetName) {
     const floorPlanRows = XLSX.utils.sheet_to_json(workbook.Sheets?.[floorPlanSheetName], { header: 1, defval: "", raw: false });
     const targetedRows = extractFloorPlanRatesFromFloorPlanDataSheet(floorPlanRows, targetCommunity);
     if (targetedRows.length > 0) return targetedRows;
-  }
-  if (String(targetCommunity ?? "").trim()) {
     return [];
   }
   const rows = [];
@@ -10324,6 +10335,7 @@ function extractMarketSurveyFloorPlanRates(workbook, targetCommunity = "") {
     const sheet = workbook.Sheets?.[sheetName];
     if (!sheet) return;
     const sheetRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
+    if (!sheetReferencesTargetCommunity(sheetRows, targetCommunity, sheetName)) return;
     const headerInfo = findMarketSurveyFloorPlanHeader(sheetRows);
     if (!headerInfo) return;
     const { rowIdx, headerMap } = headerInfo;
@@ -12958,14 +12970,26 @@ function getCompCalculatorSubjectActivity(detail, market, monthIdx = getSelected
   const dlrSummary = normalizeDlrSummary(record?.latestDlrSummary);
   const boxScore = normalizeDlrBoxScoreSnapshot(dlrSummary.dailyBoxScore);
   const applicationMetrics = getApplicationDecisionMetrics(monthEntry);
-  const guestCards = getLeadSourceTotal(monthEntry)
-    || Number(summary.guestCards ?? 0)
-    || Number(boxScore.newLeads ?? boxScore.guestCards ?? 0)
-    || 0;
-  const tours = Number(monthEntry.tours ?? summary.tours ?? boxScore.firstVisitsTours ?? boxScore.tours ?? 0) || 0;
-  const applications = applicationMetrics.applications || Number(summary.applications ?? boxScore.applications ?? 0) || 0;
-  const applicationsApproved = applicationMetrics.approvals || Number(summary.applicationsApproved ?? boxScore.applicationsApproved ?? 0) || 0;
-  const leasesSigned = Number(monthEntry.leasesSignedActual ?? summary.leasesSigned ?? boxScore.leasesSigned ?? 0) || 0;
+  const monthHasValue = key => Object.prototype.hasOwnProperty.call(monthEntry ?? {}, key);
+  const monthHasAnyLeadValue = ["guestCards", "walkIn", "offSiteEvent", "phoneCalls", "emailsOnline", "textChatOther"].some(monthHasValue);
+  const monthHasAnyApplicationValue = ["applications", "applicationsApproved", "denied", "cancelled", "pendingDecision"].some(monthHasValue);
+  const subjectGuestCards = getLeadSourceTotal(monthEntry);
+  const guestCards = monthHasAnyLeadValue
+    ? subjectGuestCards
+    : (Number(boxScore.newLeads ?? boxScore.guestCards ?? 0) || Number(summary.guestCards ?? 0) || 0);
+  const subjectTours = Number(monthEntry.tours ?? 0) || 0;
+  const tours = monthHasValue("tours")
+    ? subjectTours
+    : (Number(boxScore.firstVisitsTours ?? boxScore.tours ?? 0) || Number(summary.tours ?? 0) || 0);
+  const applications = monthHasAnyApplicationValue
+    ? applicationMetrics.applications
+    : (Number(boxScore.applications ?? 0) || Number(summary.applications ?? 0) || 0);
+  const applicationsApproved = monthHasAnyApplicationValue
+    ? applicationMetrics.approvals
+    : (Number(boxScore.applicationsApproved ?? 0) || Number(summary.applicationsApproved ?? 0) || 0);
+  const leasesSigned = monthHasValue("leasesSignedActual")
+    ? Number(monthEntry.leasesSignedActual ?? 0) || 0
+    : (Number(boxScore.leasesSigned ?? 0) || Number(summary.leasesSigned ?? 0) || 0);
   const currentOccPct = Number(summary.occPct ?? summary.occupancyPct ?? 0) || 0;
   const currentLeasedPct = Number(summary.leasedPct ?? 0) || 0;
   const budgetOccPct = Number(summary.budgetOccPct ?? market?.targetOccupancyPct ?? 0) || 0;
