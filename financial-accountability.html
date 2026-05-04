@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>RISE Residential Financial Platform</title>
+<title>ATLAS RISE Financial Accountability</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.21/lodash.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -24,6 +24,8 @@ const ATLAS_STATE_DB_NAME="atlas_rise_state_v1";
 const ATLAS_STATE_STORE_NAME="records";
 const ATLAS_STATE_COMMUNITY_KEY="community_data";
 const APPROVED_BUDGET_STORAGE_KEY="rise_financial_accountability_approved_budgets_v1";
+const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const FULL_MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
 const LEGACY_ENTITY_ID_MAP={
   "rise company budget":"rise_corp",
   "rise residential corporate":"rise_corp",
@@ -93,6 +95,23 @@ function getEntities(){
     entities.push({id,label:first&&first.entityLabel?String(first.entityLabel):prettyEntityLabel(id),kind:id==="rise_corp"?"corporate":"community"});
     seen.add(id);
   });
+  const approvedBudgetProperties=new Map();
+  const registerBudgetProperty=value=>{
+    const label=String(value||"").trim();
+    if(!label)return;
+    const normalized=normalizeCommunityLookupName(label);
+    if(!normalized)return;
+    if(!approvedBudgetProperties.has(normalized))approvedBudgetProperties.set(normalized,label);
+  };
+  (state&&state.approvedBudgets&&Array.isArray(state.approvedBudgets.records)?state.approvedBudgets.records:[]).forEach(record=>registerBudgetProperty(record&&record.property));
+  (state&&state.approvedBudgets&&Array.isArray(state.approvedBudgets.batches)?state.approvedBudgets.batches:[]).forEach(batch=>registerBudgetProperty(batch&&batch.property));
+  (state&&state.approvedBudgets&&Array.isArray(state.approvedBudgets.archivedBatches)?state.approvedBudgets.archivedBatches:[]).forEach(batch=>registerBudgetProperty(batch&&batch.property));
+  approvedBudgetProperties.forEach((label,normalized)=>{
+    const id=LEGACY_ENTITY_ID_MAP[normalized]||slugifyEntityId(label);
+    if(seen.has(id))return;
+    entities.push({id,label,kind:"community"});
+    seen.add(id);
+  });
   return entities;
 }
 
@@ -115,11 +134,9 @@ function loadStoredApprovedBudgets(){
   try{
     const raw=window.localStorage.getItem(APPROVED_BUDGET_STORAGE_KEY);
     const parsed=raw?JSON.parse(raw):null;
-    return parsed&&typeof parsed==="object"&&Array.isArray(parsed.records)
-      ? {records:parsed.records,updatedAt:parsed.updatedAt||null}
-      : {records:[],updatedAt:null};
+    return normalizeApprovedBudgetState(parsed);
   }catch(_error){
-    return {records:[],updatedAt:null};
+    return normalizeApprovedBudgetState(null);
   }
 }
 
@@ -134,22 +151,22 @@ function persistPageState(){
       cmpB:state.cmpB,
       compareMode:state.compareMode,
       compareBudgetDs:state.compareBudgetDs,
+      compareArchivedBudgetId:state.compareArchivedBudgetId,
       search:state.search,
       filterSec:state.filterSec,
       filterSt:state.filterSt,
       sortCol:state.sortCol,
       sortDir:state.sortDir,
-      uploadEntity:state.uploadEntity
+      uploadEntity:state.uploadEntity,
+      baselineEntity:state.baselineEntity
     }));
   }catch(_error){}
 }
 
 function persistApprovedBudgetState(){
   try{
-    window.localStorage.setItem(APPROVED_BUDGET_STORAGE_KEY,JSON.stringify({
-      records:Array.isArray(state.approvedBudgets&&state.approvedBudgets.records)?state.approvedBudgets.records:[],
-      updatedAt:state.approvedBudgets&&state.approvedBudgets.updatedAt||null
-    }));
+    state.approvedBudgets=normalizeApprovedBudgetState(state.approvedBudgets);
+    window.localStorage.setItem(APPROVED_BUDGET_STORAGE_KEY,JSON.stringify(state.approvedBudgets));
   }catch(_error){}
 }
 
@@ -227,6 +244,137 @@ async function persistAtlasCommunityStore(store){
   try{window.localStorage.setItem(COMMUNITY_STORAGE_KEY,JSON.stringify(serialized));}catch(_error){}
   try{window.localStorage.setItem(LEGACY_COMMUNITY_STORAGE_KEY,JSON.stringify(serialized));}catch(_error){}
   await atlasStateSetValue(ATLAS_STATE_COMMUNITY_KEY,serialized);
+}
+
+function normalizeApprovedBudgetRecord(row,batchId,propertyOverride){
+  const property=String((propertyOverride ?? (row&&row.property)) || "").trim();
+  return{
+    property,
+    period:String(row&&row.period||""),
+    glCode:String(row&&row.glCode||row&&row.gl||""),
+    lineItem:String(row&&row.lineItem||row&&row.name||""),
+    section:String(row&&row.section||""),
+    budget:Number(row&&row.budget||row&&row.yBud||0)||0,
+    annualBudget:Number(row&&row.annualBudget||row&&row.annBud||0)||0,
+    updatedAt:String(row&&row.updatedAt||""),
+    sourceFileName:String(row&&row.sourceFileName||""),
+    batchId:String(batchId||row&&row.batchId||"")
+  };
+}
+
+function buildApprovedBudgetBatchSummary(batch){
+  const batchId=String(batch&&batch.id||batch&&batch.batchId||`budget_${Date.now()}`);
+  const property=String(batch&&batch.property||"").trim();
+  const rows=(Array.isArray(batch&&batch.rows)?batch.rows:[]).map(row=>normalizeApprovedBudgetRecord(row,batchId,property));
+  const periods=[...new Set(rows.map(row=>normalizeFinancialPeriodKey(row.period||"")||row.period||"").filter(Boolean))];
+  const years=[...new Set(periods.map(period=>String(period).slice(0,4)).filter(year=>/^\d{4}$/.test(year)))].sort();
+  const annualBudgetTotal=rows.reduce((sum,row)=>sum+Number(row.budget||0),0);
+  return{
+    id:batchId,
+    property,
+    sourceFileName:String(batch&&batch.sourceFileName||""),
+    uploadedAt:String(batch&&batch.uploadedAt||new Date().toISOString()),
+    archivedAt:String(batch&&batch.archivedAt||""),
+    archivedReason:String(batch&&batch.archivedReason||""),
+    rowCount:rows.length,
+    annualBudgetTotal,
+    periods,
+    years,
+    yearLabel:years.length?years.join(", "):"Unknown",
+    rows
+  };
+}
+
+function normalizeApprovedBudgetState(raw){
+  const normalized={records:[],batches:[],archivedBatches:[],updatedAt:null};
+  if(raw&&typeof raw==="object"){
+    normalized.updatedAt=raw.updatedAt||null;
+    if(Array.isArray(raw.records))normalized.records=raw.records.map((row,index)=>normalizeApprovedBudgetRecord(row,row&&row.batchId||`legacy_row_${index}`));
+    if(Array.isArray(raw.batches))normalized.batches=raw.batches.map(batch=>buildApprovedBudgetBatchSummary(batch)).filter(batch=>batch.property||batch.rows.length);
+    if(Array.isArray(raw.archivedBatches))normalized.archivedBatches=raw.archivedBatches.map(batch=>buildApprovedBudgetBatchSummary(batch)).filter(batch=>batch.property||batch.rows.length);
+  }
+  if(!normalized.batches.length&&normalized.records.length){
+    const grouped=_.groupBy(normalized.records,row=>normalizeCommunityLookupName(row.property||""));
+    normalized.batches=Object.entries(grouped).map(([propertyKey,rows],index)=>{
+      const batchId=`legacy_batch_${index}_${Date.now()}`;
+      const property=String(rows[0]&&rows[0].property||propertyKey||"").trim();
+      const batchRows=rows.map(row=>normalizeApprovedBudgetRecord(row,batchId,property));
+      return buildApprovedBudgetBatchSummary({
+        id:batchId,
+        property,
+        sourceFileName:String(rows[0]&&rows[0].sourceFileName||"Legacy baseline"),
+        uploadedAt:String(rows[0]&&rows[0].updatedAt||normalized.updatedAt||new Date().toISOString()),
+        rows:batchRows
+      });
+    });
+    normalized.records=normalized.batches.flatMap(batch=>batch.rows.map(row=>({...row,batchId:batch.id,property:batch.property})));
+  }
+  if(!normalized.records.length&&normalized.batches.length){
+    normalized.records=normalized.batches.flatMap(batch=>batch.rows.map(row=>({...row,batchId:batch.id,property:batch.property})));
+  }
+  return normalized;
+}
+
+function getApprovedBudgetCurrentBatch(property){
+  const propertyKey=normalizeCommunityLookupName(property||"");
+  return (state.approvedBudgets&&Array.isArray(state.approvedBudgets.batches)?state.approvedBudgets.batches:[])
+    .find(batch=>normalizeCommunityLookupName(batch&&batch.property||"")===propertyKey)||null;
+}
+
+function getApprovedBudgetArchivedBatches(property){
+  const propertyKey=normalizeCommunityLookupName(property||"");
+  return (state.approvedBudgets&&Array.isArray(state.approvedBudgets.archivedBatches)?state.approvedBudgets.archivedBatches:[])
+    .filter(batch=>normalizeCommunityLookupName(batch&&batch.property||"")===propertyKey)
+    .sort((a,b)=>new Date(b.archivedAt||b.uploadedAt||0)-new Date(a.archivedAt||a.uploadedAt||0));
+}
+
+function getApprovedBudgetRowsForBatch(batchId){
+  const id=String(batchId||"");
+  const activeRows=(state.approvedBudgets&&Array.isArray(state.approvedBudgets.records)?state.approvedBudgets.records:[])
+    .filter(row=>String(row&&row.batchId||"")===id);
+  if(activeRows.length)return activeRows;
+  const archivedBatch=(state.approvedBudgets&&Array.isArray(state.approvedBudgets.archivedBatches)?state.approvedBudgets.archivedBatches:[])
+    .find(batch=>String(batch&&batch.id||"")===id);
+  return archivedBatch&&Array.isArray(archivedBatch.rows)?archivedBatch.rows:[];
+}
+
+function archiveApprovedBudgetBatch(property,batchId){
+  state.approvedBudgets=normalizeApprovedBudgetState(state.approvedBudgets);
+  const propertyKey=normalizeCommunityLookupName(property||"");
+  const batches=Array.isArray(state.approvedBudgets.batches)?state.approvedBudgets.batches:[];
+  const target=batchId
+    ? batches.find(batch=>String(batch&&batch.id||"")===String(batchId))
+    : batches.find(batch=>normalizeCommunityLookupName(batch&&batch.property||"")===propertyKey);
+  if(!target)return false;
+  const archivedBatch=buildApprovedBudgetBatchSummary({...target,archivedAt:new Date().toISOString(),archivedReason:"manual"});
+  state.approvedBudgets.archivedBatches=[archivedBatch,...(state.approvedBudgets.archivedBatches||[]).filter(batch=>String(batch&&batch.id||"")!==String(target.id))];
+  state.approvedBudgets.batches=batches.filter(batch=>String(batch&&batch.id||"")!==String(target.id));
+  state.approvedBudgets.records=(state.approvedBudgets.records||[]).filter(row=>String(row&&row.batchId||"")!==String(target.id));
+  state.approvedBudgets.updatedAt=new Date().toISOString();
+  persistApprovedBudgetState();
+  return true;
+}
+
+function replaceApprovedBudgetBatch(batch){
+  state.approvedBudgets=normalizeApprovedBudgetState(state.approvedBudgets);
+  const normalizedBatch=buildApprovedBudgetBatchSummary(batch);
+  const propertyKey=normalizeCommunityLookupName(normalizedBatch.property||"");
+  const existing=getApprovedBudgetCurrentBatch(normalizedBatch.property);
+  if(existing){
+    archiveApprovedBudgetBatch(existing.property,existing.id);
+    state.approvedBudgets=normalizeApprovedBudgetState(state.approvedBudgets);
+  }
+  state.approvedBudgets.records=[
+    ...(state.approvedBudgets.records||[]).filter(row=>normalizeCommunityLookupName(row&&row.property||"")!==propertyKey),
+    ...normalizedBatch.rows
+  ];
+  state.approvedBudgets.batches=[
+    ...(state.approvedBudgets.batches||[]).filter(batchItem=>normalizeCommunityLookupName(batchItem&&batchItem.property||"")!==propertyKey),
+    normalizedBatch
+  ];
+  state.approvedBudgets.updatedAt=new Date().toISOString();
+  persistApprovedBudgetState();
+  return normalizedBatch;
 }
 
 function normalizeFinancialPeriodKey(value,fallbackYear=new Date().getFullYear()){
@@ -356,11 +504,18 @@ function applyIncomingAtlasContext(){
     if(!match)return;
     state.entity=match.id;
     state.uploadEntity=match.id;
+    state.baselineEntity=match.id;
   }catch(_error){}
 }
 
 async function hydrateApprovedBudgetsFromAtlas(){
   try{
+    const storedLocal=normalizeApprovedBudgetState(loadStoredApprovedBudgets());
+    if((storedLocal.records&&storedLocal.records.length)||(storedLocal.batches&&storedLocal.batches.length)||(storedLocal.archivedBatches&&storedLocal.archivedBatches.length)){
+      state.approvedBudgets=storedLocal;
+      persistApprovedBudgetState();
+      return;
+    }
     const store=await loadAtlasCommunityStore();
     const records=[];
     Object.entries(store||{}).forEach(([property,record])=>{
@@ -381,7 +536,7 @@ async function hydrateApprovedBudgetsFromAtlas(){
       });
     });
     if(records.length){
-      state.approvedBudgets={records,updatedAt:new Date().toISOString()};
+      state.approvedBudgets=normalizeApprovedBudgetState({records,updatedAt:new Date().toISOString()});
       persistApprovedBudgetState();
       return;
     }
@@ -517,15 +672,19 @@ async function loadApprovedBudgetFile(file,ent){
     const entity=getEntityById(ent);
     const parsed=buildAnnualBudgetRecordsFromWorkbook(workbook,file.name,entity);
     const approvedAt=new Date().toISOString();
-    const existing=(state.approvedBudgets&&Array.isArray(state.approvedBudgets.records)?state.approvedBudgets.records:[])
-      .filter(record=>!(record.property===parsed.property&&parsed.records.some(next=>next.period===record.period&&next.glCode===record.glCode)));
-    state.approvedBudgets={
-      records:[...existing,...parsed.records],
-      updatedAt:approvedAt
-    };
-    persistApprovedBudgetState();
+    const batchId=`budget_${Date.now()}`;
+    const batchRows=parsed.records.map(record=>normalizeApprovedBudgetRecord({...record,batchId,property:parsed.property},batchId,parsed.property));
+    state.baselineEntity=ent;
+    replaceApprovedBudgetBatch({
+      id:batchId,
+      property:parsed.property,
+      sourceFileName:file.name,
+      uploadedAt:approvedAt,
+      rows:batchRows
+    });
     const atlasResult=await applyApprovedBudgetDatasetToAtlasStore(parsed,entity);
     state.loading=false;
+    state.tab="baseline";
     render();
     if(atlasResult&&atlasResult.ok===false){
       window.alert(atlasResult.message||"The approved budget baseline parsed, but could not be saved back into ATLAS.");
@@ -543,12 +702,12 @@ function getApprovedBudgetRowsFor(property){
     .filter(record=>normalizeCommunityLookupName(record&&record.property||"")===normalizeCommunityLookupName(property||""));
 }
 
-function buildApprovedBudgetIndex(property,selectedPeriod){
+function buildApprovedBudgetIndex(property,selectedPeriod,rowsOverride){
   const normalizedPeriod=normalizeFinancialPeriodKey(selectedPeriod||"");
   if(!normalizedPeriod)return{map:{},matchCount:0,source:"none"};
   const year=Number(String(normalizedPeriod).slice(0,4));
   const month=Number(String(normalizedPeriod).slice(5,7));
-  const rows=getApprovedBudgetRowsFor(property);
+  const rows=Array.isArray(rowsOverride)?rowsOverride:getApprovedBudgetRowsFor(property);
   const map={};
   let matchCount=0;
   rows.forEach(record=>{
@@ -563,6 +722,21 @@ function buildApprovedBudgetIndex(property,selectedPeriod){
     }
   });
   return{map,matchCount,source:matchCount>0?"approved":"uploaded"};
+}
+
+function summarizeApprovedBudgetRowsByGl(rows){
+  const grouped=_.groupBy(Array.isArray(rows)?rows:[],row=>String(row&&row.glCode||row&&row.gl||"").trim());
+  return Object.entries(grouped).map(([gl,items])=>{
+    const first=items[0]||{};
+    const annualBudget=items.reduce((sum,row)=>sum+Number(row&&row.budget||row&&row.annualBudget||row&&row.annBud||0),0);
+    return{
+      gl,
+      name:String(first.lineItem||first.name||gl||""),
+      section:String(first.section||""),
+      annualBudget,
+      rowCount:items.length
+    };
+  }).filter(row=>row.gl);
 }
 
 function goBackToAtlas(){
@@ -606,7 +780,7 @@ return parseCSV(csvText);
 
 function getSt(a,b,inc){if(!b)return"on";if(inc)return a/b>=1?"on":a/b>=.9?"watch":"under";const r=a/b;return r<=1?"on":r<=1.1?"watch":"over";}
 
-let state={store:{},entity:"rise_corp",tab:"dash",selDs:null,cmpA:null,cmpB:null,compareMode:"report_vs_budget",compareBudgetDs:null,search:"",filterSec:"all",filterSt:"all",sortCol:null,sortDir:"desc",uploadEntity:"rise_corp",loading:false,approvedBudgets:loadStoredApprovedBudgets()};
+let state={store:{},entity:"rise_corp",tab:"dash",selDs:null,cmpA:null,cmpB:null,compareMode:"report_vs_budget",compareBudgetDs:null,compareArchivedBudgetId:null,search:"",filterSec:"all",filterSt:"all",sortCol:null,sortDir:"desc",uploadEntity:"rise_corp",baselineEntity:"rise_corp",loading:false,approvedBudgets:loadStoredApprovedBudgets()};
 {
   const storedState=loadStoredPageState();
   if(storedState&&typeof storedState==="object"){
@@ -618,12 +792,15 @@ let state={store:{},entity:"rise_corp",tab:"dash",selDs:null,cmpA:null,cmpB:null
     state.cmpB=storedState.cmpB??state.cmpB;
     state.compareMode=storedState.compareMode||state.compareMode;
     state.compareBudgetDs=storedState.compareBudgetDs??state.compareBudgetDs;
+    state.compareArchivedBudgetId=storedState.compareArchivedBudgetId??state.compareArchivedBudgetId;
     state.search=storedState.search||state.search;
     state.filterSec=storedState.filterSec||state.filterSec;
     state.filterSt=storedState.filterSt||state.filterSt;
     state.sortCol=storedState.sortCol??state.sortCol;
     state.sortDir=storedState.sortDir||state.sortDir;
     state.uploadEntity=storedState.uploadEntity||state.uploadEntity;
+    state.baselineEntity=storedState.baselineEntity||state.baselineEntity;
+    state.approvedBudgets=normalizeApprovedBudgetState(storedState.approvedBudgets||state.approvedBudgets);
   }
 }
 applyIncomingAtlasContext();
@@ -746,7 +923,7 @@ let html='<div style="max-width:1000px;margin:0 auto;padding:16px;">';
 
 /* HEADER */
 html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;border-bottom:2px solid '+L+';padding-bottom:8px;">';
-html+='<div><h1 style="margin:0;font-size:18px;font-weight:700;color:'+D+'">RISE Residential Financial Platform</h1>';
+html+='<div><h1 style="margin:0;font-size:18px;font-weight:700;color:'+D+'">ATLAS RISE Financial Accountability</h1>';
 html+='<p style="margin:0;font-size:11px;color:#64748b;">'+curEntity.label+(active?' &middot; '+(active.period||active.name):'')+'</p></div>';
 html+='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end">';
 html+='<button id="backToAtlasBtn" style="padding:8px 14px;background:'+D+';color:white;border:none;border-radius:999px;cursor:pointer;font-weight:700;font-size:12px;">Back To ATLAS</button>';
@@ -755,7 +932,7 @@ entities.forEach(e=>{const cnt=(state.store[e.id]||[]).length;html+='<option val
 html+='</select></div></div>';
 
 /* TABS */
-const tabs=[["dash","Dashboard"],["detail","Line Items"],["history","Historical"],["compare","Compare"],["recs","Recommendations"],["report","Investor Report"],["upload","Upload"]];
+const tabs=[["dash","Dashboard"],["detail","Line Items"],["history","Historical"],["baseline","Baseline Budgets"],["compare","Compare"],["recs","Recommendations"],["report","Investor Report"],["upload","Upload"]];
 html+='<div style="display:flex;gap:3px;margin-bottom:12px;flex-wrap:wrap;">';
 tabs.forEach(([k,l])=>{html+='<button class="tabBtn" data-tab="'+k+'" style="padding:5px 11px;font-size:11px;font-weight:600;border:none;border-radius:5px;cursor:pointer;background:'+(state.tab===k?D:"#e2e8f0")+';color:'+(state.tab===k?"white":"#64748b")+'">'+l+'</button>';});
 html+='</div>';
@@ -767,7 +944,7 @@ entityDS.forEach(d=>{html+='<option value="'+d.id+'"'+(state.selDs===d.id?' sele
 html+='</select></div>';
 }
 
-if(!active&&state.tab!=="upload"&&state.tab!=="history"&&state.tab!=="compare"){
+if(!active&&state.tab!=="upload"&&state.tab!=="history"&&state.tab!=="compare"&&state.tab!=="baseline"){
 html+='<div style="text-align:center;padding:40px;"><div style="font-size:32px;margin-bottom:12px;">&#128193;</div>';
 html+='<div style="font-size:14px;color:#64748b;">No data for '+curEntity.label+'. Upload a CSV to get started.</div>';
 html+='<button class="tabBtn" data-tab="upload" style="margin-top:12px;padding:8px 20px;background:'+D+';color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;">Upload Now</button></div>';
@@ -879,6 +1056,82 @@ html+='</div>';}
 html+=uploadAreaHTML(state.entity);
 }
 
+/* ===== BASELINE BUDGETS ===== */
+if(state.tab==="baseline"){
+const budgetEntity=getEntityById(state.baselineEntity||state.entity);
+const currentBudgetBatch=getApprovedBudgetCurrentBatch(budgetEntity.label);
+const archivedBudgetBatches=getApprovedBudgetArchivedBatches(budgetEntity.label);
+const currentBudgetRows=currentBudgetBatch&&Array.isArray(currentBudgetBatch.rows)?currentBudgetBatch.rows:[];
+const summaryRows=summarizeApprovedBudgetRowsByGl(currentBudgetRows);
+if(!state.baselineEntity||!entities.some(e=>e.id===state.baselineEntity))state.baselineEntity=budgetEntity.id;
+html+='<div style="font-size:14px;font-weight:700;color:'+D+';margin-bottom:10px">Baseline Budgets - '+budgetEntity.label+'</div>';
+html+='<div style="display:grid;grid-template-columns:minmax(280px,320px) 1fr;gap:12px;margin-bottom:12px;">';
+html+='<div style="background:white;border-radius:10px;border:1px solid #e2e8f0;padding:14px;">';
+html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:8px">Upload Baseline Workbook</div>';
+html+='<div style="font-size:11px;color:#64748b;margin-bottom:10px">Load the annual budget workbook for the selected entity. The active baseline becomes the comparison target for report-vs-budget and can be archived when next year is ready.</div>';
+html+='<div style="margin-bottom:10px;"><label style="font-size:11px;font-weight:600;color:#64748b;display:block;margin-bottom:4px">Entity</label>';
+html+='<select id="baselineEntSel" style="padding:6px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;width:100%;">';
+entities.forEach(e=>{html+='<option value="'+e.id+'"'+(budgetEntity.id===e.id?' selected':'')+'>'+e.label+'</option>';});
+html+='</select></div>';
+html+='<button id="budgetUploadBtn" type="button" style="padding:8px 14px;background:'+D+';color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:12px;width:100%;">Upload Approved Budget Workbook</button>';
+html+='<input id="budgetFileInput" type="file" accept=".xlsx,.xls,.xlsm" style="display:none"/>';
+html+='<div style="margin-top:10px;font-size:11px;color:#475569">'+(currentBudgetBatch?currentBudgetBatch.rowCount+' rows across '+(currentBudgetBatch.yearLabel||"current year")+' with '+f$(currentBudgetBatch.annualBudgetTotal||0)+' annual budget tracked.':'No active baseline stored yet for this entity.')+'</div>';
+html+='<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">';
+html+='<button id="archiveBudgetBtn" type="button" style="padding:7px 12px;background:#f3f4f6;color:#334155;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;font-weight:600;font-size:11px;'+(currentBudgetBatch?"":"opacity:.45;pointer-events:none;")+'">Archive Current</button>';
+html+='<button id="openBudgetCompareBtn" type="button" style="padding:7px 12px;background:'+L+';color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:11px;">Open Compare</button>';
+html+='</div>';
+html+='</div>';
+html+='<div style="background:white;border-radius:10px;border:1px solid #e2e8f0;padding:14px;">';
+html+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px;">';
+html+='<div><div style="font-size:12px;font-weight:700;color:'+D+';">Active Baseline Snapshot</div>';
+html+='<div style="font-size:11px;color:#64748b">'+(currentBudgetBatch?currentBudgetBatch.sourceFileName||"Uploaded workbook":"Waiting for the first baseline workbook")+'</div></div>';
+html+='<div style="text-align:right;">';
+html+='<div style="font-size:10px;color:#94a3b8;text-transform:uppercase;font-weight:700;letter-spacing:.03em">Archived</div>';
+html+='<div style="font-size:18px;font-weight:700;color:'+D+'">'+archivedBudgetBatches.length+'</div></div></div>';
+if(currentBudgetBatch){
+html+='<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:12px;">';
+[
+  {l:"Year Label",v:currentBudgetBatch.yearLabel||"Current"},
+  {l:"Rows",v:currentBudgetBatch.rowCount||0},
+  {l:"Annual Total",v:f$(currentBudgetBatch.annualBudgetTotal||0)},
+  {l:"Uploaded",v:currentBudgetBatch.uploadedAt?new Date(currentBudgetBatch.uploadedAt).toLocaleDateString():""}
+].forEach(card=>{
+  html+='<div style="border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;padding:8px 10px;">';
+  html+='<div style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase">'+card.l+'</div>';
+  html+='<div style="font-size:13px;font-weight:700;color:'+D+';margin-top:2px">'+card.v+'</div></div>';
+});
+html+='</div>';
+}
+html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:6px">Current Baseline by GL</div>';
+if(summaryRows.length){
+html+='<div style="max-height:320px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;"><table style="width:100%;border-collapse:collapse;font-size:10px;">';
+html+='<thead style="position:sticky;top:0;background:white;z-index:1"><tr style="border-bottom:2px solid #e2e8f0"><th style="text-align:left;padding:5px">GL</th><th style="text-align:left;padding:5px">Account</th><th style="text-align:left;padding:5px">Section</th><th style="text-align:right;padding:5px">Annual Budget</th></tr></thead><tbody>';
+summaryRows.slice(0,25).forEach(row=>{
+html+='<tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:4px 5px;font-family:monospace;">'+row.gl+'</td><td style="padding:4px 5px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+row.name+'</td><td style="padding:4px 5px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+row.section+'</td><td style="padding:4px 5px;text-align:right">'+f$(row.annualBudget||0)+'</td></tr>';
+});
+html+='</tbody></table></div>';
+html+='<div style="font-size:10px;color:#94a3b8;margin-top:6px">Showing the first '+Math.min(summaryRows.length,25)+' rows. The full annual budget remains available in Compare and Report views.</div>';
+} else {
+html+='<div style="padding:16px;color:#94a3b8;font-size:11px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:8px;">No baseline rows are loaded yet for this entity.</div>';
+}
+html+='</div>';
+html+='</div>';
+if(archivedBudgetBatches.length){
+html+='<div style="background:white;border-radius:10px;border:1px solid #e2e8f0;padding:14px;margin-top:4px;">';
+html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:8px">Archived Baselines</div>';
+html+='<div style="display:grid;gap:8px;">';
+archivedBudgetBatches.forEach(batch=>{
+html+='<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;background:#fafafa;display:flex;justify-content:space-between;gap:10px;align-items:center;">';
+html+='<div><div style="font-size:12px;font-weight:700;color:'+D+'">'+(batch.yearLabel||"Archived")+'</div>';
+html+='<div style="font-size:11px;color:#64748b">'+(batch.sourceFileName||"Archived workbook")+' &middot; '+(batch.rowCount||0)+' rows &middot; archived '+(batch.archivedAt?new Date(batch.archivedAt).toLocaleDateString():"")+'</div></div>';
+html+='<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">';
+html+='<button class="compareArchivedBudgetBtn" data-id="'+batch.id+'" style="padding:6px 10px;background:'+L+';color:white;border:none;border-radius:5px;cursor:pointer;font-size:11px;font-weight:600;">Compare YoY</button>';
+html+='</div></div>';
+});
+html+='</div></div>';
+}
+}
+
 /* ===== COMPARE ===== */
 if(state.tab==="compare"){
 html+='<div style="font-size:14px;font-weight:700;color:'+D+';margin-bottom:10px">Period Comparison - '+curEntity.label+'</div>';
@@ -887,6 +1140,8 @@ html+='<div><label style="font-size:11px;font-weight:600;color:'+D+';display:blo
 html+='<select id="compareModeSel" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;">';
 html+='<option value="report_vs_budget"'+(state.compareMode==="report_vs_budget"?' selected':'')+'>Report vs Budget</option>';
 html+='<option value="month_over_month"'+(state.compareMode==="month_over_month"?' selected':'')+'>Month over Month</option>';
+html+='<option value="actual_vs_baseline"'+(state.compareMode==="actual_vs_baseline"?' selected':'')+'>Actual vs Baseline</option>';
+html+='<option value="baseline_yoy"'+(state.compareMode==="baseline_yoy"?' selected':'')+'>Baseline YoY</option>';
 html+='</select></div>';
 if(state.compareMode==="report_vs_budget"&&!state.compareBudgetDs&&entityDS.length)state.compareBudgetDs=entityDS[entityDS.length-1].id;
 if(state.compareMode==="report_vs_budget"){
@@ -894,6 +1149,22 @@ html+='<div><label style="font-size:11px;font-weight:600;color:'+L+';display:blo
 html+='<select id="compareBudgetSel" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;"><option value="">Select...</option>';
 entityDS.forEach(d=>{html+='<option value="'+d.id+'"'+(state.compareBudgetDs===d.id?' selected':'')+'>'+d.name+' ('+d.period+')</option>';});
 html+='</select></div>';
+} else {
+if(state.compareMode==="actual_vs_baseline"&&!state.compareBudgetDs&&entityDS.length)state.compareBudgetDs=entityDS[entityDS.length-1].id;
+if(state.compareMode==="baseline_yoy"&&!state.compareArchivedBudgetId&&getApprovedBudgetArchivedBatches(curEntity.label).length)state.compareArchivedBudgetId=getApprovedBudgetArchivedBatches(curEntity.label)[0].id;
+if(state.compareMode==="actual_vs_baseline"){
+html+='<div><label style="font-size:11px;font-weight:600;color:'+L+';display:block;margin-bottom:3px">Actual Report / Month</label>';
+html+='<select id="compareBudgetSel" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;"><option value="">Select...</option>';
+entityDS.forEach(d=>{html+='<option value="'+d.id+'"'+(state.compareBudgetDs===d.id?' selected':'')+'>'+d.name+' ('+d.period+')</option>';});
+html+='</select></div>';
+html+='<div style="font-size:11px;color:#64748b;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;">Uses the active baseline workbook for '+curEntity.label+' and projects it to the selected month for true actual-vs-budget variance.</div>';
+} else if(state.compareMode==="baseline_yoy"){
+const archivedBudgetBatches=getApprovedBudgetArchivedBatches(curEntity.label);
+html+='<div><label style="font-size:11px;font-weight:600;color:'+P+';display:block;margin-bottom:3px">Archived Baseline</label>';
+html+='<select id="compareArchivedBudgetSel" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;"><option value="">Select...</option>';
+archivedBudgetBatches.forEach(batch=>{html+='<option value="'+batch.id+'"'+(state.compareArchivedBudgetId===batch.id?' selected':'')+'>'+batch.yearLabel+' ('+(batch.sourceFileName||"archived")+' )</option>';});
+html+='</select></div>';
+html+='<div style="font-size:11px;color:#64748b;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;">Compare the current active baseline against a prior archived year to see year-over-year budget movement.</div>';
 } else {
 html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">';
 html+='<div><label style="font-size:11px;font-weight:600;color:'+L+';display:block;margin-bottom:3px">Period A (Current/Newer)</label>';
@@ -904,6 +1175,7 @@ html+='<div><label style="font-size:11px;font-weight:600;color:'+P+';display:blo
 html+='<select id="cmpBSel" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;"><option value="">Select...</option>';
 entityDS.forEach(d=>{html+='<option value="'+d.id+'"'+(state.cmpB===d.id?' selected':'')+'>'+d.name+' ('+d.period+')</option>';});
 html+='</select></div></div>';
+}
 }
 html+='</div>';
 let compResults=[],compChartData=[],compareHeadingA="Actual",compareHeadingB="Budget";
@@ -918,6 +1190,34 @@ const bySec=_.groupBy(compResults,"section");
 compChartData=Object.entries(bySec).map(([sec,items])=>({section:sec,periodA:items.reduce((s,r)=>s+r.aYAct,0),periodB:items.reduce((s,r)=>s+r.bYAct,0)})).filter(r=>r.periodA||r.periodB);
 compareHeadingA=(cmpBudgetData.period||cmpBudgetData.name)+" Actual";
  compareHeadingB=approvedBudgetIndex.source==="approved"?(cmpBudgetData.period||cmpBudgetData.name)+" Approved Budget":(cmpBudgetData.period||cmpBudgetData.name)+" Budget";
+}
+} else if(state.compareMode==="actual_vs_baseline"){
+const cmpActualData=entityDS.find(d=>d.id===state.compareBudgetDs);
+const currentBudgetBatch=getApprovedBudgetCurrentBatch(curEntity.label);
+if(cmpActualData&&currentBudgetBatch){
+const budgetRows=currentBudgetBatch.rows||[];
+const budgetIndex=buildApprovedBudgetIndex(curEntity.label,cmpActualData.period,budgetRows);
+const mapA=_.keyBy(cmpActualData.rows,"gl");
+const allGLs=[...new Set([...Object.keys(mapA),...Object.keys(budgetIndex.map)])];
+compResults=allGLs.map(gl=>{const a=mapA[gl]||{yAct:0,yBud:0};const compareBudget=budgetIndex.map[gl]||0;const budgetBase=Math.abs(compareBudget||0);return{gl:gl,name:a.name||"",section:a.section||"",aYAct:a.yAct||0,bYAct:compareBudget||0,yoyChange:budgetBase?((a.yAct-compareBudget)/budgetBase)*100:0,worse:isInc(a)?(a.yAct<compareBudget):((a.yAct>compareBudget)&&budgetBase>0)};}).filter(r=>r.aYAct||r.bYAct);
+const bySec=_.groupBy(compResults,"section");
+compChartData=Object.entries(bySec).map(([sec,items])=>({section:sec,periodA:items.reduce((s,r)=>s+r.aYAct,0),periodB:items.reduce((s,r)=>s+r.bYAct,0)})).filter(r=>r.periodA||r.periodB);
+compareHeadingA=(cmpActualData.period||cmpActualData.name)+" Actual";
+compareHeadingB=(currentBudgetBatch.yearLabel||"Baseline")+" Budget";
+}
+} else if(state.compareMode==="baseline_yoy"){
+const currentBudgetBatch=getApprovedBudgetCurrentBatch(curEntity.label);
+const archivedBatch=(getApprovedBudgetArchivedBatches(curEntity.label).find(batch=>batch.id===state.compareArchivedBudgetId)||getApprovedBudgetArchivedBatches(curEntity.label)[0])||null;
+if(currentBudgetBatch&&archivedBatch){
+const currentRows=summarizeApprovedBudgetRowsByGl(currentBudgetBatch.rows);
+const archivedRows=summarizeApprovedBudgetRowsByGl(archivedBatch.rows);
+const mapA=_.keyBy(currentRows,"gl"),mapB=_.keyBy(archivedRows,"gl");
+const allGLs=[...new Set([...Object.keys(mapA),...Object.keys(mapB)])];
+compResults=allGLs.map(gl=>{const a=mapA[gl]||{annualBudget:0};const b=mapB[gl]||{annualBudget:0};const budgetBase=Math.abs(b.annualBudget||0);return{gl:gl,name:a.name||b.name||"",section:a.section||b.section||"",aYAct:a.annualBudget||0,bYAct:b.annualBudget||0,yoyChange:budgetBase?((a.annualBudget-b.annualBudget)/budgetBase)*100:0,worse:(a.annualBudget>b.annualBudget)};}).filter(r=>r.aYAct||r.bYAct);
+const bySec=_.groupBy(compResults,"section");
+compChartData=Object.entries(bySec).map(([sec,items])=>({section:sec,periodA:items.reduce((s,r)=>s+r.aYAct,0),periodB:items.reduce((s,r)=>s+r.bYAct,0)})).filter(r=>r.periodA||r.periodB);
+compareHeadingA=(currentBudgetBatch.yearLabel||"Current Baseline");
+compareHeadingB=(archivedBatch.yearLabel||"Archived Baseline");
 }
 } else {
 const cmpDataA=entityDS.find(d=>d.id===state.cmpA);
@@ -934,14 +1234,14 @@ compareHeadingB=cmpDataB.period||"B";
 }
 if(compChartData.length){
 html+='<div style="background:white;border-radius:8px;padding:12px;border:1px solid #e2e8f0;margin-bottom:12px;">';
-html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:6px">'+(state.compareMode==="report_vs_budget"?'Report vs Budget by Section':'Section-Level YTD Comparison')+'</div>';
+html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:6px">'+(state.compareMode==="report_vs_budget"?'Report vs Budget by Section':state.compareMode==="actual_vs_baseline"?'Actual vs Baseline by Section':state.compareMode==="baseline_yoy"?'Baseline Year Over Year by Section':'Section-Level YTD Comparison')+'</div>';
 html+='<canvas id="cmpChart" style="width:100%;height:220px;"></canvas></div>';
 html+='<div style="background:white;border-radius:8px;border:1px solid #e2e8f0;overflow:auto;max-height:350px;">';
 html+='<table style="width:100%;border-collapse:collapse;font-size:10px;"><thead style="position:sticky;top:0;background:white"><tr style="border-bottom:2px solid #e2e8f0">';
 html+='<th style="text-align:left;padding:5px">GL</th><th style="text-align:left;padding:5px">Account</th>';
 html+='<th style="text-align:right;padding:5px">'+compareHeadingA+'</th>';
 html+='<th style="text-align:right;padding:5px">'+compareHeadingB+'</th>';
-html+='<th style="text-align:right;padding:5px">'+(state.compareMode==="report_vs_budget"?'Var % to Budget':'MoM Chg %')+'</th></tr></thead><tbody>';
+html+='<th style="text-align:right;padding:5px">'+(state.compareMode==="report_vs_budget"||state.compareMode==="actual_vs_baseline"?'Var % to Budget':state.compareMode==="baseline_yoy"?'YoY Chg %':'MoM Chg %')+'</th></tr></thead><tbody>';
 compResults.sort((a,b)=>Math.abs(b.yoyChange)-Math.abs(a.yoyChange)).slice(0,60).forEach(r=>{
 const bad=(!r.section.toLowerCase().includes("income")&&r.yoyChange>10)||(r.section.toLowerCase().includes("income")&&r.yoyChange<-10);
 html+='<tr style="border-bottom:1px solid #f1f5f9;background:'+(bad?"#fff5f5":"white")+'">';
@@ -954,7 +1254,7 @@ html+='<td style="padding:4px;text-align:right;font-weight:600;color:'+(bad?R:Ma
 html+='</tbody></table></div>';
 window._cmpChartData=compChartData;window._cmpLabels=[compareHeadingA,compareHeadingB];
 } else {
-html+='<div style="text-align:center;padding:30px;color:#94a3b8">'+(state.compareMode==="report_vs_budget"?'Select one uploaded report above to compare its actuals to budget.':'Select two periods above to compare.')+'</div>';
+html+='<div style="text-align:center;padding:30px;color:#94a3b8">'+(state.compareMode==="report_vs_budget"?'Select one uploaded report above to compare its actuals to budget.':state.compareMode==="actual_vs_baseline"?'Select an actual report to compare against the active baseline.':state.compareMode==="baseline_yoy"?'Select an archived baseline to compare against the current one.':'Select two periods above to compare.')+'</div>';
 }
 }
 
@@ -1049,7 +1349,7 @@ return h;
 function bindEvents(summary,enriched){
 document.querySelectorAll(".tabBtn").forEach(b=>b.addEventListener("click",()=>{state.tab=b.dataset.tab;render();}));
 const entitySel=document.getElementById("entitySel");
-if(entitySel)entitySel.addEventListener("change",()=>{state.entity=entitySel.value;state.selDs=null;state.cmpA=null;state.cmpB=null;state.compareBudgetDs=null;render();});
+if(entitySel)entitySel.addEventListener("change",()=>{state.entity=entitySel.value;state.baselineEntity=entitySel.value;state.selDs=null;state.cmpA=null;state.cmpB=null;state.compareBudgetDs=null;render();});
 const backToAtlasBtn=document.getElementById("backToAtlasBtn");
 if(backToAtlasBtn)backToAtlasBtn.addEventListener("click",goBackToAtlas);
 const dsSel=document.getElementById("dsSel");
@@ -1078,6 +1378,15 @@ const cmpBSel=document.getElementById("cmpBSel");
 if(cmpBSel)cmpBSel.addEventListener("change",()=>{state.cmpB=cmpBSel.value?parseInt(cmpBSel.value):null;render();});
 const compareBudgetSel=document.getElementById("compareBudgetSel");
 if(compareBudgetSel)compareBudgetSel.addEventListener("change",()=>{state.compareBudgetDs=compareBudgetSel.value?parseInt(compareBudgetSel.value):null;render();});
+const compareArchivedBudgetSel=document.getElementById("compareArchivedBudgetSel");
+if(compareArchivedBudgetSel)compareArchivedBudgetSel.addEventListener("change",()=>{state.compareArchivedBudgetId=compareArchivedBudgetSel.value||null;render();});
+const baselineEntSel=document.getElementById("baselineEntSel");
+if(baselineEntSel)baselineEntSel.addEventListener("change",()=>{state.baselineEntity=baselineEntSel.value;render();});
+const archiveBudgetBtn=document.getElementById("archiveBudgetBtn");
+if(archiveBudgetBtn)archiveBudgetBtn.addEventListener("click",()=>{const target=getApprovedBudgetCurrentBatch((getEntityById(state.baselineEntity||state.entity)||{}).label);if(target&&archiveApprovedBudgetBatch(target.property,target.id)){render();}});
+const openBudgetCompareBtn=document.getElementById("openBudgetCompareBtn");
+if(openBudgetCompareBtn)openBudgetCompareBtn.addEventListener("click",()=>{state.compareMode="actual_vs_baseline";state.tab="compare";render();});
+document.querySelectorAll(".compareArchivedBudgetBtn").forEach(btn=>btn.addEventListener("click",()=>{state.compareMode="baseline_yoy";state.compareArchivedBudgetId=btn.dataset.id||null;state.tab="compare";render();}));
 const uploadEntSel=document.getElementById("uploadEntSel");
 if(uploadEntSel)uploadEntSel.addEventListener("change",()=>{if(state.tab==="upload")state.uploadEntity=uploadEntSel.value;else state.entity=uploadEntSel.value;render();});
 const dropZone=document.getElementById("dropZone");

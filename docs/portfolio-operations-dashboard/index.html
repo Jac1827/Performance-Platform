@@ -9142,16 +9142,101 @@ function findWorksheetRowValue(rows, patterns) {
   return null;
 }
 
+function parseYearFromValue(value, fallbackYear = new Date().getFullYear()) {
+  const raw = String(value ?? "").trim();
+  const match = raw.match(/(20\d{2})/);
+  return match ? Number(match[1]) : fallbackYear;
+}
+
+function classifyRenewalStatusValue(value) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return "undecided";
+  if (/renewed|renewal signed|signed/.test(raw)) return "signed";
+  if (/ntv|notice(?:\s+to)?\s+vacate|vacate/.test(raw)) return "ntv";
+  if (/transfer/.test(raw)) return "transfer";
+  if (/month[\s-]*to[\s-]*month|\bmtm\b|pending|undecided|not yet decided/.test(raw)) return "undecided";
+  if (/early termination|termination/.test(raw)) return "earlyTermination";
+  return "undecided";
+}
+
+function extractRenewalDetailStatusSummary(rows) {
+  const summary = {
+    expirations: 0,
+    renewalsSigned: 0,
+    ntv: 0,
+    transfers: 0,
+    undecided: 0,
+    earlyTermination: 0,
+    retentionRate: 0,
+    decidedRetentionRate: 0
+  };
+  const normalizedRows = Array.isArray(rows) ? rows : [];
+  let headerRowIdx = -1;
+  let statusColIdx = -1;
+  let nameColIdx = -1;
+  for (let idx = 0; idx < normalizedRows.length; idx++) {
+    const row = Array.isArray(normalizedRows[idx]) ? normalizedRows[idx] : [];
+    const lowered = row.map(cell => String(cell ?? "").trim().toLowerCase());
+    const statusIdx = lowered.findIndex(cell => cell === "status" || /status/.test(cell));
+    if (statusIdx === -1) continue;
+    const candidateNameIdx = lowered.findIndex(cell => /resident|tenant|lease holder|name/.test(cell));
+    headerRowIdx = idx;
+    statusColIdx = statusIdx;
+    nameColIdx = candidateNameIdx;
+    break;
+  }
+  if (headerRowIdx === -1 || statusColIdx === -1) return summary;
+
+  for (let idx = headerRowIdx + 1; idx < normalizedRows.length; idx++) {
+    const row = Array.isArray(normalizedRows[idx]) ? normalizedRows[idx] : [];
+    const firstCell = String(row[0] ?? "").trim().toLowerCase();
+    if (/retention analysis|legend|total lease expirations|renewals signed|ntv|transfers|pending|retention rate/.test(firstCell)) break;
+    const cells = row.map(cell => String(cell ?? "").trim());
+    const hasAnyContent = cells.some(Boolean);
+    if (!hasAnyContent) continue;
+    const residentName = nameColIdx >= 0 ? String(row[nameColIdx] ?? "").trim() : "";
+    const statusValue = String(row[statusColIdx] ?? "").trim();
+    if (!residentName && !statusValue) continue;
+    if (residentName && /total|renewals signed|ntv|transfer|pending|legend/i.test(residentName)) continue;
+    summary.expirations += 1;
+    switch (classifyRenewalStatusValue(statusValue)) {
+      case "signed":
+        summary.renewalsSigned += 1;
+        break;
+      case "ntv":
+        summary.ntv += 1;
+        break;
+      case "transfer":
+        summary.transfers += 1;
+        break;
+      case "earlyTermination":
+        summary.earlyTermination += 1;
+        break;
+      default:
+        summary.undecided += 1;
+        break;
+    }
+  }
+  summary.retentionRate = summary.expirations > 0 ? (summary.renewalsSigned / summary.expirations) * 100 : 0;
+  const decidedPool = summary.renewalsSigned + summary.ntv + summary.transfers;
+  summary.decidedRetentionRate = decidedPool > 0 ? (summary.renewalsSigned / decidedPool) * 100 : 0;
+  return summary;
+}
+
 function extractRenewalSheetSummary(rows) {
-  const expirations = normalizeWorkbookNumber(findWorksheetRowValue(rows, /total lease expirations/i));
+  const expirations = normalizeWorkbookNumber(findWorksheetRowValue(rows, [/total lease expirations/i, /total expirations/i]));
   const renewalsSigned = normalizeWorkbookNumber(findWorksheetRowValue(rows, /renewals signed/i));
-  const ntv = normalizeWorkbookNumber(findWorksheetRowValue(rows, /ntv'?s received/i));
+  const ntv = normalizeWorkbookNumber(findWorksheetRowValue(rows, [/ntv'?s received/i, /notice(?:\s+to)?\s+vacate/i]));
   const transfers = normalizeWorkbookNumber(findWorksheetRowValue(rows, /^transfers$/i));
   const earlyTermination = normalizeWorkbookNumber(findWorksheetRowValue(rows, /early termination/i));
-  const undecided = normalizeWorkbookNumber(findWorksheetRowValue(rows, /pending|undecided|m2m|month[\s-]*to[\s-]*month/i));
+  const undecided = normalizeWorkbookNumber(findWorksheetRowValue(rows, /pending|undecided|m2m|month[\s-]*to[\s-]*month|not yet decided/i));
   const retentionRate = normalizeWorkbookPercent(findWorksheetRowValue(rows, /retention rate.*total expirations/i));
   const decidedRetentionRate = normalizeWorkbookPercent(findWorksheetRowValue(rows, /retention rate.*renewals.*ntv/i));
-  return { expirations, renewalsSigned, ntv, transfers, undecided, earlyTermination, retentionRate, decidedRetentionRate };
+  const labeledSummary = { expirations, renewalsSigned, ntv, transfers, undecided, earlyTermination, retentionRate, decidedRetentionRate };
+  const detailSummary = extractRenewalDetailStatusSummary(rows);
+  const labeledTotal = expirations + renewalsSigned + ntv + transfers + undecided + earlyTermination;
+  const detailTotal = detailSummary.expirations + detailSummary.renewalsSigned + detailSummary.ntv + detailSummary.transfers + detailSummary.undecided + detailSummary.earlyTermination;
+  return detailSummary.expirations > 0 && detailTotal >= labeledTotal ? detailSummary : labeledSummary;
 }
 
 function applyRenewalSummaryToMonth(monthIdx, summary) {
@@ -9184,12 +9269,13 @@ async function handleRenewalWorkbook(file) {
   workbook.SheetNames.forEach(sheetName => {
     const monthIdx = parseMonthIndexValue(sheetName);
     if (monthIdx === null || monthIdx < 0 || monthIdx > 11) return;
+    const sheetYear = parseYearFromValue(sheetName);
     const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "" });
     const summary = extractRenewalSheetSummary(rows);
     if ([summary.expirations, summary.renewalsSigned, summary.ntv, summary.transfers, summary.undecided, summary.earlyTermination].every(v => v === 0)) return;
     applyRenewalSummaryToMonth(monthIdx, summary);
-    stampRenewalImportForMonth(monthIdx, file.name);
-    renewalImportLog.push(`✅ ${file.name} → ${MONTHS[monthIdx]} renewals mapped (${summary.expirations} expirations, ${summary.renewalsSigned} signed, ${summary.undecided} undecided / M2M, ${summary.earlyTermination} early termination).`);
+    stampRenewalImportForMonth(monthIdx, file.name, sheetYear);
+    renewalImportLog.push(`✅ ${file.name} → ${MONTHS[monthIdx]} ${sheetYear} renewals mapped (${summary.expirations} expirations, ${summary.renewalsSigned} signed, ${summary.ntv} NTV, ${summary.transfers} transfers, ${summary.undecided} undecided / M2M).`);
     appliedMonths++;
   });
   if (appliedMonths === 0) {

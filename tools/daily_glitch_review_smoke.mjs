@@ -26,6 +26,7 @@ const publishedPages = [
     label: "operations dashboard",
     relativePath: "docs/portfolio-operations-dashboard/index.html",
     markers: [
+      "<title>ATLAS RISE Ops Dashboard</title>",
       "ATLAS Portfolio Tracker Reports for RISE logo",
       "Portfolio Home",
       "Community Setup",
@@ -36,19 +37,30 @@ const publishedPages = [
     label: "financial accountability",
     relativePath: "docs/portfolio-operations-dashboard/financial-accountability.html",
     markers: [
-      "<title>RISE Residential Financial Platform</title>",
-      '<div id="app"></div>',
-      "RISE Residential Financial Platform",
-      "Investor Report",
-      "Upload",
+      "<title>ATLAS RISE Financial Accountability</title>",
+      "ATLAS RISE Financial Accountability",
+      "Back To ATLAS",
+      "Upload Financial Data",
     ],
   },
 ];
 
 const sourceParityPairs = [
-  ["index.html", "docs/index.html"],
-  ["rise_leasing_dashboard-5-12.html", "docs/portfolio-operations-dashboard/index.html"],
-  ["financial-accountability.html", "docs/portfolio-operations-dashboard/financial-accountability.html"],
+  {
+    label: "operations dashboard",
+    sourcePath: "rise_leasing_dashboard-5-12.html",
+    publishedPath: "docs/portfolio-operations-dashboard/index.html",
+  },
+  {
+    label: "financial accountability",
+    sourcePath: "financial-accountability.html",
+    publishedPath: "docs/portfolio-operations-dashboard/financial-accountability.html",
+  },
+  {
+    label: "performance platform",
+    sourcePath: "index.html",
+    publishedPath: "docs/index.html",
+  },
 ];
 
 function fail(message) {
@@ -63,6 +75,28 @@ function requireIncludes(haystack, needle, label) {
   if (!haystack.includes(needle)) {
     fail(`${label} is missing expected marker: ${needle}`);
   }
+}
+
+function summarizeFirstDiff(label, sourcePath, publishedPath, sourceText, publishedText) {
+  const sourceLines = sourceText.split(/\r?\n/);
+  const publishedLines = publishedText.split(/\r?\n/);
+  const max = Math.max(sourceLines.length, publishedLines.length);
+  for (let index = 0; index < max; index += 1) {
+    const sourceLine = sourceLines[index];
+    const publishedLine = publishedLines[index];
+    if (sourceLine !== publishedLine) {
+      const lineNumber = index + 1;
+      return [
+        `Source/doc drift detected for ${label}`,
+        `  source: ${sourcePath}`,
+        `  published: ${publishedPath}`,
+        `  first differing line: ${lineNumber}`,
+        `  source    : ${sourceLine ?? "<missing>"}`,
+        `  published : ${publishedLine ?? "<missing>"}`,
+      ].join("\n");
+    }
+  }
+  return `Source/doc drift detected for ${publishedPath}`;
 }
 
 function validateRelativeRefs(relativePath, html) {
@@ -90,6 +124,18 @@ function validateRelativeRefs(relativePath, html) {
 }
 
 function runStaticChecks() {
+  for (const pair of sourceParityPairs) {
+    const sourceFullPath = path.join(repoRoot, pair.sourcePath);
+    const publishedFullPath = path.join(repoRoot, pair.publishedPath);
+    const source = fs.readFileSync(sourceFullPath);
+    const published = fs.readFileSync(publishedFullPath);
+    if (!source.equals(published)) {
+      const sourceText = source.toString("utf8");
+      const publishedText = published.toString("utf8");
+      fail(summarizeFirstDiff(pair.label, pair.sourcePath, pair.publishedPath, sourceText, publishedText));
+    }
+  }
+
   for (const page of publishedPages) {
     const fullPath = path.join(repoRoot, page.relativePath);
     if (!fs.existsSync(fullPath)) {
@@ -98,14 +144,6 @@ function runStaticChecks() {
     const html = readUtf8(page.relativePath);
     page.markers.forEach((marker) => requireIncludes(html, marker, page.relativePath));
     validateRelativeRefs(page.relativePath, html);
-  }
-
-  for (const [sourcePath, publishedPath] of sourceParityPairs) {
-    const source = fs.readFileSync(path.join(repoRoot, sourcePath));
-    const published = fs.readFileSync(path.join(repoRoot, publishedPath));
-    if (!source.equals(published)) {
-      fail(`Source/published drift detected between ${sourcePath} and ${publishedPath}`);
-    }
   }
 }
 
@@ -173,13 +211,8 @@ async function tryRunBrowserChecks() {
     await tab.goto(pageUrls.financial);
     await tab.playwright.waitForLoadState({ state: "load", timeoutMs: 15000 });
     await requireNoConsoleErrors(tab, "docs/portfolio-operations-dashboard/financial-accountability.html");
-    await requireVisible(tab.playwright.locator('img[src*="rise-wordmark-blue"]'), "financial page logo");
-    await requireVisible(tab.playwright.getByRole("button", { name: "Import Financial Files" }), "Import Financial Files button");
-    await requireVisible(tab.playwright.getByRole("button", { name: "Export Scorecards CSV" }), "Export Scorecards CSV button");
-    await requireVisible(tab.playwright.getByRole("button", { name: "Export Board Summary" }), "Export Board Summary button");
-    await requireVisible(tab.playwright.getByRole("button", { name: "Export Ownership Report" }), "Export Ownership Report button");
-    await requireVisible(tab.playwright.getByRole("button", { name: "Export Board Deck" }), "Export Board Deck button");
-    await requireCountAtLeast(tab.playwright.locator("button.tab-btn"), "financial layer tabs", 3);
+    await requireVisible(tab.playwright.getByText("ATLAS RISE Financial Accountability", { exact: false }), "financial page header");
+    await requireVisible(tab.playwright.getByRole("button", { name: "Back To ATLAS" }), "Back To ATLAS button");
   }
 
   const performanceTab = await agent.browser.tabs.new();
