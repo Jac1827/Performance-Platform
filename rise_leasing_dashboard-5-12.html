@@ -1630,7 +1630,8 @@ function normalizePeriodImportMap(data) {
 function defaultImportTracking() {
   return {
     marketSurvey: {},
-    renewals: {}
+    renewals: {},
+    dlrExports: {}
   };
 }
 
@@ -1638,7 +1639,8 @@ function normalizeImportTracking(data) {
   const input = data ?? {};
   return {
     marketSurvey: normalizePeriodImportMap(input.marketSurvey),
-    renewals: normalizePeriodImportMap(input.renewals)
+    renewals: normalizePeriodImportMap(input.renewals),
+    dlrExports: normalizePeriodImportMap(input.dlrExports)
   };
 }
 
@@ -8598,6 +8600,18 @@ function updateCurrentRecordPeriodImportStamp(sectionKey, periodKey, stampInput 
   });
 }
 
+function setRecordPeriodImportStamp(record, sectionKey, periodKey, stampInput = {}) {
+  const nextTracking = normalizeImportTracking({
+    ...record.importTracking,
+    [sectionKey]: {
+      ...(record.importTracking?.[sectionKey] || {}),
+      [periodKey]: normalizePeriodImportStamp(stampInput)
+    }
+  });
+  record.importTracking = nextTracking;
+  return nextTracking;
+}
+
 function buildDlrDateInputValue(value) {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
@@ -9852,10 +9866,10 @@ function getImportReadinessStatus(record, monthIdx = getSelectedDashboardMonthIn
   const normalizedRecord = normalizeSavedCommunityRecord(record?.propertyName || getProp().name, record);
   const periodKey = buildPeriodKey(monthIdx, year);
   const isCurrentMonth = buildPeriodKey(monthIdx, year) === getCurrentCalendarPeriodKey();
-  const dailyBoxScore = normalizeDlrBoxScoreSnapshot(normalizedRecord.latestDlrSummary?.dailyBoxScore);
-  const dailyBoxScoreDate = parseDlrSpecificDate(dailyBoxScore.reportDateIso) || parseDateSafe(dailyBoxScore.importedAt);
+  const dlrStamp = getPeriodImportStamp(normalizedRecord, "dlrExports", periodKey);
+  const dlrExportDate = parseDateSafe(dlrStamp.importedAt);
   const dlrLoaded = isCurrentMonth
-    ? !!dailyBoxScoreDate && isSameLocalCalendarDay(dailyBoxScoreDate, new Date())
+    ? !!dlrExportDate && isSameLocalCalendarDay(dlrExportDate, new Date())
     : buildDlrHistoricalCoverageKey(normalizedRecord, monthIdx, year);
   const surveySnapshot = isCurrentMonth
     ? normalizeMarketSurveyData(normalizedRecord.marketSurveyData)
@@ -10080,7 +10094,7 @@ function getMonthlyPresentationScopeCommunityNames() {
   return [...new Set(details.map(detail => detail.name))];
 }
 
-function clearMarketSurveyForCommunities(names, sourceLabel = "selected scope") {
+function clearImportReadinessForCommunities(names, sourceLabel = "selected scope", options = {}) {
   const uniqueNames = [...new Set((Array.isArray(names) ? names : []).map(name => matchPropertyName(name)).filter(Boolean))];
   if (uniqueNames.length === 0) {
     marketSurveyImportLog = [`⚠️ No communities were available to clear for ${sourceLabel}.`];
@@ -10088,60 +10102,68 @@ function clearMarketSurveyForCommunities(names, sourceLabel = "selected scope") 
     renderTab();
     return;
   }
+  const shouldClearMarketSurvey = options.clearMarketSurvey !== false;
+  const shouldClearDlrReadiness = options.clearDlrReadiness !== false;
+  const periodKey = getSelectedDashboardPeriodKey();
   uniqueNames.forEach(name => {
     const record = name === getProp().name
       ? getCurrentCommunityRecord()
       : normalizeSavedCommunityRecord(name, savedData[name]);
-    const existingSurvey = normalizeMarketSurveyData(record.marketSurveyData);
-    const periodKey = getSelectedDashboardPeriodKey();
-    const nextHistory = normalizeMarketSurveyHistory(record.marketSurveyHistory);
-    delete nextHistory[periodKey];
     const nextTracking = normalizeImportTracking(record.importTracking);
-    if (nextTracking.marketSurvey?.[periodKey]) delete nextTracking.marketSurvey[periodKey];
-    savedData[name] = normalizeSavedCommunityRecord(name, {
-      ...record,
-      marketSurveyHistory: nextHistory,
-      importTracking: nextTracking,
-      marketSurveyData: {
-        ...defaultMarketSurveyData(),
-        rentAdjustmentDirection: existingSurvey.rentAdjustmentDirection,
-        rentAdjustmentAmount: existingSurvey.rentAdjustmentAmount,
-        specialsRecommendation: existingSurvey.specialsRecommendation,
-        pricingNotes: existingSurvey.pricingNotes
+    let nextRecord = { ...record, importTracking: nextTracking };
+    if (shouldClearMarketSurvey) {
+      const existingSurvey = normalizeMarketSurveyData(record.marketSurveyData);
+      const nextHistory = normalizeMarketSurveyHistory(record.marketSurveyHistory);
+      delete nextHistory[periodKey];
+      if (nextTracking.marketSurvey?.[periodKey]) delete nextTracking.marketSurvey[periodKey];
+      nextRecord = {
+        ...nextRecord,
+        marketSurveyHistory: nextHistory,
+        marketSurveyData: {
+          ...defaultMarketSurveyData(),
+          rentAdjustmentDirection: existingSurvey.rentAdjustmentDirection,
+          rentAdjustmentAmount: existingSurvey.rentAdjustmentAmount,
+          specialsRecommendation: existingSurvey.specialsRecommendation,
+          pricingNotes: existingSurvey.pricingNotes
+        }
+      };
+      if (name === getProp().name) {
+        marketSurveyHistory = nextHistory;
+        marketSurveyData = normalizeMarketSurveyData(nextRecord.marketSurveyData);
       }
-    });
+    }
+    if (shouldClearDlrReadiness && nextTracking.dlrExports?.[periodKey]) {
+      delete nextTracking.dlrExports[periodKey];
+    }
+    savedData[name] = normalizeSavedCommunityRecord(name, nextRecord);
     if (name === getProp().name) {
-      marketSurveyHistory = nextHistory;
-      importTracking = nextTracking;
-      marketSurveyData = normalizeMarketSurveyData({
-        ...defaultMarketSurveyData(),
-        rentAdjustmentDirection: existingSurvey.rentAdjustmentDirection,
-        rentAdjustmentAmount: existingSurvey.rentAdjustmentAmount,
-        specialsRecommendation: existingSurvey.specialsRecommendation,
-        pricingNotes: existingSurvey.pricingNotes
-      });
+      importTracking = normalizeImportTracking(nextTracking);
     }
   });
   persistSaved();
   renderPropGrid();
-  marketSurveyImportLog = [`🧹 Cleared market survey data for ${uniqueNames.length} communit${uniqueNames.length === 1 ? "y" : "ies"} in the ${sourceLabel}.`];
+  const clearedParts = [
+    shouldClearMarketSurvey ? "market survey data" : "",
+    shouldClearDlrReadiness ? "DLR readiness" : ""
+  ].filter(Boolean).join(" and ");
+  marketSurveyImportLog = [`🧹 Cleared ${clearedParts} for ${uniqueNames.length} communit${uniqueNames.length === 1 ? "y" : "ies"} in the ${sourceLabel}.`];
   marketSurveyImportSourceLabel = "";
   renderTab();
 }
 
 function clearScopedMarketSurveys() {
-  clearMarketSurveyForCommunities(getMonthlyPresentationScopeCommunityNames(), "current presentation scope");
+  clearImportReadinessForCommunities(getMonthlyPresentationScopeCommunityNames(), "current presentation scope");
 }
 
 function clearCurrentWorkspaceMarketSurveys() {
   const names = isPortfolioWorkspaceSelected()
     ? getWorkspaceScopedDetails(getSelectedDashboardMonthIndex()).map(detail => detail.name)
     : [getProp().name];
-  clearMarketSurveyForCommunities(names, isPortfolioWorkspaceSelected() ? "current portfolio scope" : "current community");
+  clearImportReadinessForCommunities(names, isPortfolioWorkspaceSelected() ? "current portfolio scope" : "current community");
 }
 
 function clearCurrentCommunityMarketSurvey() {
-  clearMarketSurveyForCommunities([getProp().name], "current community");
+  clearImportReadinessForCommunities([getProp().name], "current community");
 }
 
 async function processMarketSurveyFiles(files) {
@@ -17013,6 +17035,20 @@ function openDlrInvestorOverview(printImmediately = false) {
   const report = buildDashboardDlrInvestorOverview();
   const win = window.open("", "_blank");
   if (!win || !report) return;
+  const matchedCommunity = matchPropertyName(report.communityName, { fallbackToCurrent: false }) || report.communityName;
+  const record = getPropertyRecordForApply(matchedCommunity);
+  if (record) {
+    const periodKey = buildPeriodKey(report.reportMonthIdx, report.reportYear);
+    const nextTracking = setRecordPeriodImportStamp(record, "dlrExports", periodKey, {
+      importedAt: new Date().toISOString(),
+      sourceFileName: "dlr_reporting_export"
+    });
+    savedData[matchedCommunity] = normalizeSavedCommunityRecord(matchedCommunity, record);
+    if (matchedCommunity === getProp().name) importTracking = nextTracking;
+    persistSaved();
+    renderPropGrid();
+    renderTab();
+  }
   win.document.write(buildDlrInvestorOverviewDocument(report));
   win.document.close();
   if (printImmediately) {
@@ -17024,6 +17060,20 @@ function openDlrInvestorOverview(printImmediately = false) {
 function downloadDlrInvestorOverviewHtml() {
   const report = buildDashboardDlrInvestorOverview();
   if (!report) return;
+  const matchedCommunity = matchPropertyName(report.communityName, { fallbackToCurrent: false }) || report.communityName;
+  const record = getPropertyRecordForApply(matchedCommunity);
+  if (record) {
+    const periodKey = buildPeriodKey(report.reportMonthIdx, report.reportYear);
+    const nextTracking = setRecordPeriodImportStamp(record, "dlrExports", periodKey, {
+      importedAt: new Date().toISOString(),
+      sourceFileName: "dlr_html_export"
+    });
+    savedData[matchedCommunity] = normalizeSavedCommunityRecord(matchedCommunity, record);
+    if (matchedCommunity === getProp().name) importTracking = nextTracking;
+    persistSaved();
+    renderPropGrid();
+    renderTab();
+  }
   const blob = new Blob([buildDlrInvestorOverviewDocument(report)], { type: "text/html" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
