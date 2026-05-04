@@ -5158,8 +5158,22 @@ function clearFloorPlanSelection(section, propName) {
   setFloorPlanSelectionIds(section, propName, []);
 }
 
+function getAllFloorPlanSelectionIds(section, propName) {
+  const key = matchPropertyName(propName, { fallbackToCurrent: false }) || getProp().name;
+  if (section === "community") {
+    const record = getPortfolioSetupCommunityRecord(key);
+    return normalizeCommunityFloorPlans(record.communityFloorPlans).map(plan => String(plan.id || "").trim()).filter(Boolean);
+  }
+  if (section === "survey") {
+    const record = getPortfolioSetupCommunityRecord(key);
+    return normalizeMarketSurveyFloorPlanRates(record.marketSurveyData?.floorPlanRates).map(rate => String(rate.id || "").trim()).filter(Boolean);
+  }
+  return [];
+}
+
 function selectAllFloorPlans(section, propName, ids = []) {
-  setFloorPlanSelectionIds(section, propName, ids);
+  const nextIds = Array.isArray(ids) && ids.length > 0 ? ids : getAllFloorPlanSelectionIds(section, propName);
+  setFloorPlanSelectionIds(section, propName, nextIds);
 }
 
 function deleteSelectedCommunityFloorPlans(propName) {
@@ -7118,7 +7132,7 @@ function renderPortfolioScopedSetupTab() {
             <button class="btn btn-gray btn-sm" type="button" onclick="applySelectedCommunityFloorPlanField(${JSON.stringify(selectedName)})">Apply to Selected</button>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-gray btn-sm" type="button" onclick="selectAllFloorPlans('community', ${JSON.stringify(selectedName)}, ${JSON.stringify(selectedFloorPlanData.rows.map(row => row.id))})">Select All</button>
+            <button class="btn btn-gray btn-sm" type="button" onclick="selectAllFloorPlans('community', ${JSON.stringify(selectedName)})">Select All</button>
             <button class="btn btn-gray btn-sm" type="button" onclick="clearFloorPlanSelection('community', ${JSON.stringify(selectedName)})">Clear</button>
             <button class="btn btn-gray btn-sm" type="button" onclick="deleteSelectedCommunityFloorPlans(${JSON.stringify(selectedName)})" ${selectedCommunityFloorPlanIds.length === 0 ? "disabled" : ""}>Delete Selected</button>
           </div>
@@ -7700,7 +7714,7 @@ function renderSetupTab() {
             <div style="font-size:1.15rem;font-weight:700;font-family:'JetBrains Mono',monospace;color:#4493f8">${marketSurveyFloorPlanData.length}</div>
             <div style="font-size:0.64rem;color:var(--muted)">survey floor plans</div>
           </div>
-          <button class="btn btn-gray btn-sm" type="button" onclick="selectAllFloorPlans('survey', ${JSON.stringify(currentCommunityName)}, ${JSON.stringify(marketSurveyFloorPlanData.map(rate => rate.id))})">Select All</button>
+          <button class="btn btn-gray btn-sm" type="button" onclick="selectAllFloorPlans('survey', ${JSON.stringify(currentCommunityName)})">Select All</button>
           <button class="btn btn-gray btn-sm" type="button" onclick="clearFloorPlanSelection('survey', ${JSON.stringify(currentCommunityName)})">Clear</button>
           <button class="btn btn-gray btn-sm" type="button" onclick="deleteSelectedMarketSurveyFloorPlanRates(${JSON.stringify(currentCommunityName)})" ${selectedMarketSurveyFloorPlanIds.length === 0 ? "disabled" : ""}>Delete Selected</button>
           <button class="btn btn-gray btn-sm" type="button" onclick="addMarketSurveyFloorPlanRate()">＋ Add Marketed Rate</button>
