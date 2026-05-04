@@ -16,22 +16,84 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#f8fafc;color:#1a
 <div id="app"></div>
 <script>
 const D="#013e51",L="#6ba2b8",G="#059669",R="#dc2626",A="#d97706",P="#7c3aed";
-const ENTITIES=[
-{id:"rise_corp",label:"RISE Residential (Corporate)"},
-{id:"nocatee",label:"RISE at Nocatee"},
-{id:"gkp",label:"RISE at Glen Kernan Park"},
-{id:"viera",label:"RISE Viera"},
-{id:"maple_hall",label:"Maple Hall (NJIT)"},
-{id:"florence",label:"RISE Florence Villa"},
-{id:"sereno",label:"RISE Sereno"},
-{id:"doro",label:"Doro High Rise"},
-{id:"beacon",label:"Beacon East & West / Poplar Hall"},
-{id:"flagler",label:"RISE Flagler"},
-{id:"other",label:"Other Community"}
-];
+const COMMUNITY_STORAGE_KEY="rise_ops_dashboard_data_v1";
+const LEGACY_COMMUNITY_STORAGE_KEY="rise_leasing_v5";
+const OPS_PROPERTY_CATALOG_KEY="rise_ops_property_catalog_v1";
+const LEGACY_ENTITY_ID_MAP={
+  "rise company budget":"rise_corp",
+  "rise residential corporate":"rise_corp",
+  "nocatee":"nocatee",
+  "glen kernan park":"gkp",
+  "viera":"viera",
+  "florence villa":"florence",
+  "sereno":"sereno",
+  "doro":"doro",
+  "doro high rise":"doro",
+  "bartram park":"bartram_park",
+  "baymeadows":"baymeadows",
+  "st augustine":"st_augustine",
+  "sutton house":"sutton_house",
+  "citrus ridge":"citrus_ridge"
+};
+const FALLBACK_COMMUNITIES=["Bartram Park","Baymeadows","Nocatee","Doro","St Augustine","Sutton House","Viera","Florence Villa","Citrus Ridge","Sereno","Glen Kernan Park"];
 const f$=v=>{if(v==null||isNaN(v))return"\u2014";const n=v<0,a=Math.abs(v);return(n?"(":"")+"$"+a.toLocaleString("en-US",{minimumFractionDigits:0,maximumFractionDigits:0})+(n?")":"");};
 const fp=v=>v==null||isNaN(v)?"\u2014":(v>=0?"+":"")+v.toFixed(1)+"%";
 const ATLAS_DASHBOARD_HREF="./index.html";
+
+const slugifyEntityId=v=>String(v||"").toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"")||"other";
+const normalizeCommunityLookupName=v=>String(v||"").toLowerCase().replace(/rise:\s*a\s+real\s+estate\s+company/gi,"").replace(/\brise\s+real\s+estate\b/gi,"").replace(/^rise\s+at\s+/gi,"").replace(/^rise\s+/gi,"").replace(/[^\w\s]/g," ").replace(/\s+/g," ").trim();
+const prettyEntityLabel=id=>String(id||"").split("_").filter(Boolean).map(part=>part.charAt(0).toUpperCase()+part.slice(1)).join(" ");
+
+function loadAtlasCommunityNames(){
+  const names=new Map();
+  const collectName=value=>{
+    const name=String(value||"").trim();
+    if(!name)return;
+    const normalized=normalizeCommunityLookupName(name);
+    if(!normalized)return;
+    if(normalized==="atlas rise portfolio")return;
+    if(!names.has(normalized))names.set(normalized,name);
+  };
+  try{
+    const raw=window.localStorage.getItem(OPS_PROPERTY_CATALOG_KEY);
+    const parsed=raw?JSON.parse(raw):null;
+    const properties=Array.isArray(parsed&&parsed.properties)?parsed.properties:[];
+    properties.forEach(entry=>collectName(entry&&entry.name));
+  }catch(e){}
+  [COMMUNITY_STORAGE_KEY,LEGACY_COMMUNITY_STORAGE_KEY].forEach(key=>{
+    try{
+      const raw=window.localStorage.getItem(key);
+      const parsed=raw?JSON.parse(raw):null;
+      Object.keys(parsed||{}).forEach(collectName);
+    }catch(e){}
+  });
+  FALLBACK_COMMUNITIES.forEach(collectName);
+  return Array.from(names.values()).sort((a,b)=>a.localeCompare(b));
+}
+
+function getEntities(){
+  const entities=[{id:"rise_corp",label:"RISE Company Budget",kind:"corporate"}];
+  const seen=new Set(entities.map(e=>e.id));
+  loadAtlasCommunityNames().forEach(name=>{
+    const normalized=normalizeCommunityLookupName(name);
+    const id=LEGACY_ENTITY_ID_MAP[normalized]||slugifyEntityId(name);
+    if(seen.has(id))return;
+    entities.push({id,label:name,kind:"community"});
+    seen.add(id);
+  });
+  Object.keys(state&&state.store||{}).forEach(id=>{
+    if(seen.has(id))return;
+    const first=(state.store[id]||[])[0];
+    entities.push({id,label:first&&first.entityLabel?String(first.entityLabel):prettyEntityLabel(id),kind:id==="rise_corp"?"corporate":"community"});
+    seen.add(id);
+  });
+  return entities;
+}
+
+function getEntityById(id){
+  const entities=getEntities();
+  return entities.find(e=>e.id===id)||entities[0];
+}
 
 function goBackToAtlas(){
 window.location.href=ATLAS_DASHBOARD_HREF;
@@ -74,7 +136,7 @@ return parseCSV(csvText);
 
 function getSt(a,b,inc){if(!b)return"on";if(inc)return a/b>=1?"on":a/b>=.9?"watch":"under";const r=a/b;return r<=1?"on":r<=1.1?"watch":"over";}
 
-let state={store:{},entity:"rise_corp",tab:"dash",selDs:null,cmpA:null,cmpB:null,search:"",filterSec:"all",filterSt:"all",sortCol:null,sortDir:"desc",uploadEntity:"rise_corp",loading:false};
+let state={store:{},entity:"rise_corp",tab:"dash",selDs:null,cmpA:null,cmpB:null,compareMode:"report_vs_budget",compareBudgetDs:null,search:"",filterSec:"all",filterSt:"all",sortCol:null,sortDir:"desc",uploadEntity:"rise_corp",loading:false};
 
 function getEntityDS(){return state.store[state.entity]||[];}
 function getActive(){const ds=getEntityDS();return ds.find(d=>d.id===state.selDs)||ds[ds.length-1]||null;}
@@ -115,7 +177,8 @@ loader.then(rows=>{
 const nameMatch=file.name.match(/(\d{2})[.\-_](\d{2})[.\-_](\d{2,4})/);
 let period=file.name.replace(/\.\w+$/,"");
 if(nameMatch){const m=nameMatch[1],y=nameMatch[3];period=m+"/"+(y.length===2?"20"+y:y);}
-const ds={id:Date.now(),name:file.name.replace(/\.\w+$/,""),period:period,date:new Date().toLocaleDateString(),rows:rows,rowCount:rows.length};
+const entity=getEntityById(ent);
+const ds={id:Date.now(),name:file.name.replace(/\.\w+$/,""),period:period,date:new Date().toLocaleDateString(),rows:rows,rowCount:rows.length,entityLabel:entity&&entity.label||ent};
 if(!state.store[ent])state.store[ent]=[];
 state.store[ent]=[...state.store[ent],ds];
 state.entity=ent;state.selDs=ds.id;state.tab="dash";state.loading=false;render();
@@ -165,9 +228,12 @@ ctx.fillStyle=L;ctx.fillRect(margin.left+90,margin.top-16,10,10);ctx.fillText(na
 
 function render(){
 const app=document.getElementById("app");
+const entities=getEntities();
+if(!entities.some(e=>e.id===state.entity))state.entity=entities[0]&&entities[0].id||"rise_corp";
+if(!entities.some(e=>e.id===state.uploadEntity))state.uploadEntity=state.entity;
 const active=getActive();
 const entityDS=getEntityDS();
-const curEntity=ENTITIES.find(e=>e.id===state.entity);
+const curEntity=getEntityById(state.entity);
 const rows=active?active.rows:[];
 const enriched=enrich(rows);
 const sections=[...new Set(enriched.map(r=>r.section).filter(Boolean))];
@@ -190,7 +256,7 @@ html+='<p style="margin:0;font-size:11px;color:#64748b;">'+curEntity.label+(acti
 html+='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end">';
 html+='<button id="backToAtlasBtn" style="padding:8px 14px;background:'+D+';color:white;border:none;border-radius:999px;cursor:pointer;font-weight:700;font-size:12px;">Back To ATLAS</button>';
 html+='<select id="entitySel" style="padding:6px 10px;border:2px solid '+D+';border-radius:6px;font-size:12px;font-weight:600;color:'+D+';background:white;min-width:220px;">';
-ENTITIES.forEach(e=>{const cnt=(state.store[e.id]||[]).length;html+='<option value="'+e.id+'"'+(state.entity===e.id?' selected':'')+'>'+e.label+(cnt?' ('+cnt+')':'')+'</option>';});
+entities.forEach(e=>{const cnt=(state.store[e.id]||[]).length;html+='<option value="'+e.id+'"'+(state.entity===e.id?' selected':'')+'>'+e.label+(cnt?' ('+cnt+')':'')+'</option>';});
 html+='</select></div></div>';
 
 /* TABS */
@@ -321,33 +387,65 @@ html+=uploadAreaHTML(state.entity);
 /* ===== COMPARE ===== */
 if(state.tab==="compare"){
 html+='<div style="font-size:14px;font-weight:700;color:'+D+';margin-bottom:10px">Period Comparison - '+curEntity.label+'</div>';
-html+='<div style="display:flex;gap:12px;margin-bottom:14px;">';
-html+='<div style="flex:1"><label style="font-size:11px;font-weight:600;color:'+L+';display:block;margin-bottom:3px">Period A (Current/Newer)</label>';
+html+='<div style="display:grid;grid-template-columns:minmax(220px,260px) 1fr;gap:12px;align-items:end;margin-bottom:14px;">';
+html+='<div><label style="font-size:11px;font-weight:600;color:'+D+';display:block;margin-bottom:3px">Comparison Mode</label>';
+html+='<select id="compareModeSel" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;">';
+html+='<option value="report_vs_budget"'+(state.compareMode==="report_vs_budget"?' selected':'')+'>Report vs Budget</option>';
+html+='<option value="month_over_month"'+(state.compareMode==="month_over_month"?' selected':'')+'>Month over Month</option>';
+html+='</select></div>';
+if(state.compareMode==="report_vs_budget"&&!state.compareBudgetDs&&entityDS.length)state.compareBudgetDs=entityDS[entityDS.length-1].id;
+if(state.compareMode==="report_vs_budget"){
+html+='<div><label style="font-size:11px;font-weight:600;color:'+L+';display:block;margin-bottom:3px">Uploaded Report / Month</label>';
+html+='<select id="compareBudgetSel" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;"><option value="">Select...</option>';
+entityDS.forEach(d=>{html+='<option value="'+d.id+'"'+(state.compareBudgetDs===d.id?' selected':'')+'>'+d.name+' ('+d.period+')</option>';});
+html+='</select></div>';
+} else {
+html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">';
+html+='<div><label style="font-size:11px;font-weight:600;color:'+L+';display:block;margin-bottom:3px">Period A (Current/Newer)</label>';
 html+='<select id="cmpASel" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;"><option value="">Select...</option>';
 entityDS.forEach(d=>{html+='<option value="'+d.id+'"'+(state.cmpA===d.id?' selected':'')+'>'+d.name+' ('+d.period+')</option>';});
 html+='</select></div>';
-html+='<div style="flex:1"><label style="font-size:11px;font-weight:600;color:'+P+';display:block;margin-bottom:3px">Period B (Prior/Older)</label>';
+html+='<div><label style="font-size:11px;font-weight:600;color:'+P+';display:block;margin-bottom:3px">Period B (Prior/Older)</label>';
 html+='<select id="cmpBSel" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;"><option value="">Select...</option>';
 entityDS.forEach(d=>{html+='<option value="'+d.id+'"'+(state.cmpB===d.id?' selected':'')+'>'+d.name+' ('+d.period+')</option>';});
 html+='</select></div></div>';
+}
+html+='</div>';
+let compResults=[],compChartData=[],compareHeadingA="Actual",compareHeadingB="Budget";
+if(state.compareMode==="report_vs_budget"){
+const cmpBudgetData=entityDS.find(d=>d.id===state.compareBudgetDs);
+if(cmpBudgetData){
+const mapA=_.keyBy(cmpBudgetData.rows,"gl");
+const allGLs=[...new Set(Object.keys(mapA))];
+compResults=allGLs.map(gl=>{const a=mapA[gl]||{yAct:0,yBud:0};const budgetBase=Math.abs(a.yBud||0);return{gl:gl,name:a.name||"",section:a.section||"",aYAct:a.yAct||0,bYAct:a.yBud||0,yoyChange:budgetBase?((a.yAct-a.yBud)/budgetBase)*100:0,worse:isInc(a)?(a.yAct<a.yBud):((a.yAct>a.yBud)&&budgetBase>0)};}).filter(r=>r.aYAct||r.bYAct);
+const bySec=_.groupBy(compResults,"section");
+compChartData=Object.entries(bySec).map(([sec,items])=>({section:sec,periodA:items.reduce((s,r)=>s+r.aYAct,0),periodB:items.reduce((s,r)=>s+r.bYAct,0)})).filter(r=>r.periodA||r.periodB);
+compareHeadingA=(cmpBudgetData.period||cmpBudgetData.name)+" Actual";
+compareHeadingB=(cmpBudgetData.period||cmpBudgetData.name)+" Budget";
+}
+} else {
 const cmpDataA=entityDS.find(d=>d.id===state.cmpA);
 const cmpDataB=entityDS.find(d=>d.id===state.cmpB);
 if(cmpDataA&&cmpDataB){
 const mapA=_.keyBy(cmpDataA.rows,"gl"),mapB=_.keyBy(cmpDataB.rows,"gl");
 const allGLs=[...new Set([...Object.keys(mapA),...Object.keys(mapB)])];
-const compResults=allGLs.map(gl=>{const a=mapA[gl]||{yAct:0,yBud:0};const b=mapB[gl]||{yAct:0,yBud:0};return{gl:gl,name:a.name||b.name||"",section:a.section||b.section||"",aYAct:a.yAct,bYAct:b.yAct,yoyChange:a.yAct&&b.yAct?((a.yAct-b.yAct)/Math.abs(b.yAct))*100:0,worse:a.yAct>a.yBud&&b.yAct<=b.yBud};}).filter(r=>r.aYAct||r.bYAct);
+compResults=allGLs.map(gl=>{const a=mapA[gl]||{yAct:0,yBud:0};const b=mapB[gl]||{yAct:0,yBud:0};return{gl:gl,name:a.name||b.name||"",section:a.section||b.section||"",aYAct:a.yAct||0,bYAct:b.yAct||0,yoyChange:(a.yAct&&b.yAct)?((a.yAct-b.yAct)/Math.abs(b.yAct)):0,worse:a.yAct>a.yBud&&b.yAct<=b.yBud};}).filter(r=>r.aYAct||r.bYAct);
 const bySec=_.groupBy(compResults,"section");
-const compChartData=Object.entries(bySec).map(([sec,items])=>({section:sec,periodA:items.reduce((s,r)=>s+r.aYAct,0),periodB:items.reduce((s,r)=>s+r.bYAct,0)})).filter(r=>r.periodA||r.periodB);
+compChartData=Object.entries(bySec).map(([sec,items])=>({section:sec,periodA:items.reduce((s,r)=>s+r.aYAct,0),periodB:items.reduce((s,r)=>s+r.bYAct,0)})).filter(r=>r.periodA||r.periodB);
+compareHeadingA=cmpDataA.period||"A";
+compareHeadingB=cmpDataB.period||"B";
+}
+}
 if(compChartData.length){
 html+='<div style="background:white;border-radius:8px;padding:12px;border:1px solid #e2e8f0;margin-bottom:12px;">';
-html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:6px">Section-Level YTD Comparison</div>';
+html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:6px">'+(state.compareMode==="report_vs_budget"?'Report vs Budget by Section':'Section-Level YTD Comparison')+'</div>';
 html+='<canvas id="cmpChart" style="width:100%;height:220px;"></canvas></div>';
 html+='<div style="background:white;border-radius:8px;border:1px solid #e2e8f0;overflow:auto;max-height:350px;">';
 html+='<table style="width:100%;border-collapse:collapse;font-size:10px;"><thead style="position:sticky;top:0;background:white"><tr style="border-bottom:2px solid #e2e8f0">';
 html+='<th style="text-align:left;padding:5px">GL</th><th style="text-align:left;padding:5px">Account</th>';
-html+='<th style="text-align:right;padding:5px">'+(cmpDataA.period||"A")+' YTD</th>';
-html+='<th style="text-align:right;padding:5px">'+(cmpDataB.period||"B")+' YTD</th>';
-html+='<th style="text-align:right;padding:5px">YOY Chg</th></tr></thead><tbody>';
+html+='<th style="text-align:right;padding:5px">'+compareHeadingA+'</th>';
+html+='<th style="text-align:right;padding:5px">'+compareHeadingB+'</th>';
+html+='<th style="text-align:right;padding:5px">'+(state.compareMode==="report_vs_budget"?'Var % to Budget':'MoM Chg %')+'</th></tr></thead><tbody>';
 compResults.sort((a,b)=>Math.abs(b.yoyChange)-Math.abs(a.yoyChange)).slice(0,60).forEach(r=>{
 const bad=(!r.section.toLowerCase().includes("income")&&r.yoyChange>10)||(r.section.toLowerCase().includes("income")&&r.yoyChange<-10);
 html+='<tr style="border-bottom:1px solid #f1f5f9;background:'+(bad?"#fff5f5":"white")+'">';
@@ -358,10 +456,9 @@ html+='<td style="padding:4px;text-align:right">'+f$(r.bYAct)+'</td>';
 html+='<td style="padding:4px;text-align:right;font-weight:600;color:'+(bad?R:Math.abs(r.yoyChange)<5?"#64748b":G)+'">'+fp(r.yoyChange)+'</td></tr>';
 });
 html+='</tbody></table></div>';
-window._cmpChartData=compChartData;window._cmpLabels=[cmpDataA.period||"A",cmpDataB.period||"B"];
-}
+window._cmpChartData=compChartData;window._cmpLabels=[compareHeadingA,compareHeadingB];
 } else {
-html+='<div style="text-align:center;padding:30px;color:#94a3b8">Select two periods above to compare.</div>';
+html+='<div style="text-align:center;padding:30px;color:#94a3b8">'+(state.compareMode==="report_vs_budget"?'Select one uploaded report above to compare its actuals to budget.':'Select two periods above to compare.')+'</div>';
 }
 }
 
@@ -406,7 +503,7 @@ html+='<div style="font-size:14px;font-weight:700;color:'+D+';margin-bottom:10px
 html+=uploadAreaHTML(state.uploadEntity);
 if(state.loading)html+='<div style="margin-top:12px;color:'+L+';font-weight:600">Processing...</div>';
 html+='<div style="margin-top:20px;"><div style="font-size:12px;font-weight:600;color:#64748b;margin-bottom:8px">Data Library</div>';
-ENTITIES.filter(e=>(state.store[e.id]||[]).length>0).forEach(e=>{
+entities.filter(e=>(state.store[e.id]||[]).length>0).forEach(e=>{
 html+='<div style="margin-bottom:10px;"><div style="font-size:12px;font-weight:600;color:'+D+';margin-bottom:4px">'+e.label+' ('+state.store[e.id].length+' reports)</div>';
 state.store[e.id].forEach(d=>{
 html+='<div style="padding:6px 10px;background:white;border-radius:6px;border:1px solid #e2e8f0;margin-bottom:3px;display:flex;justify-content:space-between;font-size:11px;">';
@@ -430,10 +527,11 @@ setTimeout(()=>drawBarChart("cmpChart",window._cmpChartData,"periodA","periodB",
 }
 
 function uploadAreaHTML(ent){
+const entities=getEntities();
 let h='<div style="margin-top:16px;"><div style="margin-bottom:12px;">';
 h+='<label style="font-size:12px;font-weight:600;color:#64748b;display:block;margin-bottom:4px">Assign to Community/Entity:</label>';
 h+='<select id="uploadEntSel" style="padding:6px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;width:100%;">';
-ENTITIES.forEach(e=>{h+='<option value="'+e.id+'"'+(ent===e.id?' selected':'')+'>'+e.label+'</option>';});
+entities.forEach(e=>{h+='<option value="'+e.id+'"'+(ent===e.id?' selected':'')+'>'+e.label+'</option>';});
 h+='</select></div>';
 h+='<div id="dropZone" style="border:2px dashed #cbd5e1;border-radius:10px;padding:36px;text-align:center;background:white;cursor:pointer;">';
 h+='<div style="font-size:32px;margin-bottom:8px">&#128202;</div>';
@@ -447,7 +545,7 @@ return h;
 function bindEvents(summary,enriched){
 document.querySelectorAll(".tabBtn").forEach(b=>b.addEventListener("click",()=>{state.tab=b.dataset.tab;render();}));
 const entitySel=document.getElementById("entitySel");
-if(entitySel)entitySel.addEventListener("change",()=>{state.entity=entitySel.value;state.selDs=null;state.cmpA=null;state.cmpB=null;render();});
+if(entitySel)entitySel.addEventListener("change",()=>{state.entity=entitySel.value;state.selDs=null;state.cmpA=null;state.cmpB=null;state.compareBudgetDs=null;render();});
 const backToAtlasBtn=document.getElementById("backToAtlasBtn");
 if(backToAtlasBtn)backToAtlasBtn.addEventListener("click",goBackToAtlas);
 const dsSel=document.getElementById("dsSel");
@@ -465,15 +563,19 @@ if(!["name","gl","status"].includes(th.dataset.col))th.addEventListener("click",
 });
 document.querySelectorAll(".secRow").forEach(tr=>tr.addEventListener("click",()=>{state.filterSec=tr.dataset.sec;state.tab="detail";render();}));
 document.querySelectorAll(".histItem").forEach(el=>el.addEventListener("click",e=>{if(e.target.tagName==="BUTTON")return;state.selDs=parseInt(el.dataset.id);state.tab="dash";render();}));
-document.querySelectorAll(".setCmpA").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();state.cmpA=parseInt(b.dataset.id);state.tab="compare";render();}));
-document.querySelectorAll(".setCmpB").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();state.cmpB=parseInt(b.dataset.id);state.tab="compare";render();}));
+document.querySelectorAll(".setCmpA").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();state.compareMode="month_over_month";state.cmpA=parseInt(b.dataset.id);state.tab="compare";render();}));
+document.querySelectorAll(".setCmpB").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();state.compareMode="month_over_month";state.cmpB=parseInt(b.dataset.id);state.tab="compare";render();}));
 document.querySelectorAll(".delDs").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();const id=parseInt(b.dataset.id);state.store[state.entity]=(state.store[state.entity]||[]).filter(x=>x.id!==id);render();}));
+const compareModeSel=document.getElementById("compareModeSel");
+if(compareModeSel)compareModeSel.addEventListener("change",()=>{state.compareMode=compareModeSel.value||"report_vs_budget";render();});
 const cmpASel=document.getElementById("cmpASel");
 if(cmpASel)cmpASel.addEventListener("change",()=>{state.cmpA=cmpASel.value?parseInt(cmpASel.value):null;render();});
 const cmpBSel=document.getElementById("cmpBSel");
 if(cmpBSel)cmpBSel.addEventListener("change",()=>{state.cmpB=cmpBSel.value?parseInt(cmpBSel.value):null;render();});
+const compareBudgetSel=document.getElementById("compareBudgetSel");
+if(compareBudgetSel)compareBudgetSel.addEventListener("change",()=>{state.compareBudgetDs=compareBudgetSel.value?parseInt(compareBudgetSel.value):null;render();});
 const uploadEntSel=document.getElementById("uploadEntSel");
-if(uploadEntSel)uploadEntSel.addEventListener("change",()=>{if(state.tab==="upload")state.uploadEntity=uploadEntSel.value;else state.entity=uploadEntSel.value;});
+if(uploadEntSel)uploadEntSel.addEventListener("change",()=>{if(state.tab==="upload")state.uploadEntity=uploadEntSel.value;else state.entity=uploadEntSel.value;render();});
 const dropZone=document.getElementById("dropZone");
 const fileInput=document.getElementById("fileInput");
 if(dropZone&&fileInput){
@@ -485,7 +587,7 @@ fileInput.addEventListener("change",()=>{const f=fileInput.files[0];const ent=(u
 }
 const genBtn=document.getElementById("genReport");
 if(genBtn&&summary){genBtn.addEventListener("click",()=>{
-const active=getActive();const curEntity=ENTITIES.find(e=>e.id===state.entity);
+const active=getActive();const curEntity=getEntityById(state.entity);
 const recs=getRecs(enrich(active?active.rows:[]),summary);
 const h='<html><head><title>'+curEntity.label+' - Budget Report</title><style>body{font-family:system-ui;max-width:800px;margin:40px auto;color:#1a1a2e;padding:20px}h1{color:'+D+';border-bottom:3px solid '+L+';padding-bottom:8px}h2{color:'+D+';margin-top:24px}.kpi{display:flex;gap:16px;margin:16px 0}.kpi>div{flex:1;background:#f8fafc;border-radius:8px;padding:12px;text-align:center;border:1px solid #e2e8f0}.kpi .label{font-size:11px;color:#64748b;text-transform:uppercase}.kpi .val{font-size:20px;font-weight:700;margin-top:4px}table{width:100%;border-collapse:collapse;margin:12px 0;font-size:12px}th{background:#f1f5f9;padding:8px;text-align:left;border-bottom:2px solid #cbd5e1}td{padding:6px 8px;border-bottom:1px solid #f1f5f9}.pos{color:'+G+'}.neg{color:'+R+'}.footer{margin-top:32px;padding-top:16px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8}</style></head><body><h1>'+curEntity.label+'</h1><p>Financial Performance Summary - '+(active?active.period||"":"Current Period")+'</p><div class="kpi"><div><div class="label">Revenue YTD</div><div class="val">'+f$(summary.incYA)+'</div></div><div><div class="label">Expenses YTD</div><div class="val">'+f$(summary.expYA)+'</div></div><div><div class="label">NOI</div><div class="val" style="color:'+(summary.noi>=summary.noiBud?G:R)+'">'+f$(summary.noi)+'</div></div><div><div class="label">NOI vs Budget</div><div class="val" style="color:'+(summary.noi>=summary.noiBud?G:R)+'">'+f$(summary.noi-summary.noiBud)+'</div></div></div><h2>Budget Performance by Category</h2><table><tr><th>Category</th><th>YTD Actual</th><th>YTD Budget</th><th>Variance</th><th>Annual Budget</th><th>% Used</th></tr>'+summary.ss.map(s=>{const v=s.yBud-s.yAct;const pu=s.annBud?((s.yAct/s.annBud)*100).toFixed(1):0;return'<tr><td><strong>'+s.name+'</strong></td><td>'+f$(s.yAct)+'</td><td>'+f$(s.yBud)+'</td><td class="'+(s.isIncome?(v<=0?"neg":"pos"):(v>=0?"pos":"neg"))+'">'+f$(v)+'</td><td>'+f$(s.annBud)+'</td><td>'+pu+'%</td></tr>';}).join("")+'</table><h2>Key Observations</h2><ul>'+recs.slice(0,6).map(r=>'<li><strong>'+(r.n||"")+(r.gl?" (GL "+r.gl+")":"")+'</strong>: '+r.m+'</li>').join("")+'</ul><div class="footer">Generated '+new Date().toLocaleDateString()+' | RISE Residential, LLC | Confidential</div></body></html>';
 const blob=new Blob([h],{type:"text/html"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=curEntity.label.replace(/[^a-zA-Z0-9]/g,"_")+"_Budget_Report.html";a.click();URL.revokeObjectURL(url);
