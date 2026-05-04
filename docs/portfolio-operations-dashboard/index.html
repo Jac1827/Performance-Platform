@@ -1053,6 +1053,7 @@ let communityPhotoBank = [];
 let marketSurveyData = defaultMarketSurveyData();
 let marketSurveyHistory = {};
 let communityFloorPlans = [];
+let floorPlanSelectionState = { community: {}, survey: {} };
 let communityAddress = "";
 let communityWebsiteUrl = "";
 let floorPlanRatesPageUrl = "";
@@ -5027,7 +5028,13 @@ function updateCommunityFloorPlanField(index, field, value) {
 }
 
 function removeCommunityFloorPlanRow(index) {
-  communityFloorPlans = normalizeCommunityFloorPlans(communityFloorPlans).filter((_, idx) => idx !== index);
+  const nextPlans = normalizeCommunityFloorPlans(communityFloorPlans);
+  const removed = nextPlans[index];
+  communityFloorPlans = nextPlans.filter((_, idx) => idx !== index);
+  if (removed?.id) {
+    const selected = getFloorPlanSelectionIds("community", getProp().name).filter(id => String(id) !== String(removed.id));
+    floorPlanSelectionState.community[getProp().name] = selected;
+  }
   persistCurrentCommunityFloorPlans();
 }
 
@@ -5099,8 +5106,122 @@ function updatePortfolioCommunityFloorPlanField(propName, index, field, value) {
 
 function removePortfolioCommunityFloorPlanRow(propName, index) {
   const record = getPortfolioSetupCommunityRecord(propName);
-  record.communityFloorPlans = normalizeCommunityFloorPlans(record.communityFloorPlans).filter((_, idx) => idx !== index);
+  const nextPlans = normalizeCommunityFloorPlans(record.communityFloorPlans);
+  const removed = nextPlans[index];
+  record.communityFloorPlans = nextPlans.filter((_, idx) => idx !== index);
+  if (removed?.id) {
+    const key = matchPropertyName(propName, { fallbackToCurrent: false }) || getProp().name;
+    const selected = getFloorPlanSelectionIds("community", key).filter(id => String(id) !== String(removed.id));
+    floorPlanSelectionState.community[key] = selected;
+  }
   persistPortfolioSetupCommunityRecord(propName, record);
+}
+
+function getFloorPlanSelectionSection(section) {
+  if (!floorPlanSelectionState[section]) {
+    floorPlanSelectionState[section] = {};
+  }
+  return floorPlanSelectionState[section];
+}
+
+function getFloorPlanSelectionIds(section, propName) {
+  const key = matchPropertyName(propName, { fallbackToCurrent: false }) || getProp().name;
+  const bucket = getFloorPlanSelectionSection(section);
+  const selection = bucket[key];
+  return Array.isArray(selection) ? [...selection] : [];
+}
+
+function setFloorPlanSelectionIds(section, propName, ids = []) {
+  const key = matchPropertyName(propName, { fallbackToCurrent: false }) || getProp().name;
+  const bucket = getFloorPlanSelectionSection(section);
+  bucket[key] = [...new Set((Array.isArray(ids) ? ids : []).map(id => String(id || "").trim()).filter(Boolean))];
+  renderTab();
+}
+
+function toggleFloorPlanSelection(section, propName, id) {
+  const key = matchPropertyName(propName, { fallbackToCurrent: false }) || getProp().name;
+  const bucket = getFloorPlanSelectionSection(section);
+  const current = Array.isArray(bucket[key]) ? [...bucket[key]] : [];
+  const lookup = String(id || "").trim();
+  if (!lookup) return;
+  const next = current.includes(lookup) ? current.filter(entry => entry !== lookup) : [...current, lookup];
+  bucket[key] = next;
+  renderTab();
+}
+
+function clearFloorPlanSelection(section, propName) {
+  setFloorPlanSelectionIds(section, propName, []);
+}
+
+function selectAllFloorPlans(section, propName, ids = []) {
+  setFloorPlanSelectionIds(section, propName, ids);
+}
+
+function deleteSelectedCommunityFloorPlans(propName) {
+  const record = getPortfolioSetupCommunityRecord(propName);
+  const selectedIds = new Set(getFloorPlanSelectionIds("community", propName));
+  if (selectedIds.size === 0) {
+    alert("Select one or more saved floor plans first, then use Delete Selected.");
+    return false;
+  }
+  record.communityFloorPlans = normalizeCommunityFloorPlans(record.communityFloorPlans).filter(plan => !selectedIds.has(String(plan.id || "").trim()));
+  clearFloorPlanSelection("community", propName);
+  persistPortfolioSetupCommunityRecord(propName, record);
+  return true;
+}
+
+function deleteSelectedMarketSurveyFloorPlanRates(propName) {
+  const record = getPortfolioSetupCommunityRecord(propName);
+  const selectedIds = new Set(getFloorPlanSelectionIds("survey", propName));
+  if (selectedIds.size === 0) {
+    alert("Select one or more APTIQ floor-plan rows first, then use Delete Selected.");
+    return false;
+  }
+  record.marketSurveyData = normalizeMarketSurveyData({
+    ...record.marketSurveyData,
+    floorPlanRates: normalizeMarketSurveyFloorPlanRates(record.marketSurveyData?.floorPlanRates).filter(rate => !selectedIds.has(String(rate.id || "").trim()))
+  });
+  if (propName === getProp().name) {
+    marketSurveyData = record.marketSurveyData;
+  }
+  clearFloorPlanSelection("survey", propName);
+  persistPortfolioSetupCommunityRecord(propName, record);
+  return true;
+}
+
+function applySelectedCommunityFloorPlanField(propName) {
+  const selectedIds = new Set(getFloorPlanSelectionIds("community", propName));
+  if (selectedIds.size === 0) {
+    alert("Select one or more saved floor plans first, then apply the bulk edit.");
+    return false;
+  }
+  const field = String(document.getElementById("community-floor-plan-bulk-field")?.value ?? "").trim();
+  const rawValue = document.getElementById("community-floor-plan-bulk-value")?.value ?? "";
+  if (!field) {
+    alert("Choose a floor-plan field to update first.");
+    return false;
+  }
+  const record = getPortfolioSetupCommunityRecord(propName);
+  const nextPlans = normalizeCommunityFloorPlans(record.communityFloorPlans).map(plan => {
+    if (!selectedIds.has(String(plan.id || "").trim())) return plan;
+    const nextPlan = { ...plan };
+    if (field === "name" || field === "marketedRentSource") {
+      nextPlan[field] = String(rawValue ?? "").trim();
+    } else if (["sqft", "budgetRent", "marketedRent", "beds", "baths", "leasedPct"].includes(field)) {
+      const numeric = Number(rawValue);
+      if (!rawValue.toString().trim()) {
+        nextPlan[field] = null;
+      } else if (field === "leasedPct") {
+        nextPlan[field] = Number.isFinite(numeric) && numeric >= 0 ? Math.min(numeric, 100) : nextPlan[field];
+      } else {
+        nextPlan[field] = Number.isFinite(numeric) && numeric >= 0 ? numeric : nextPlan[field];
+      }
+    }
+    return nextPlan;
+  });
+  record.communityFloorPlans = nextPlans;
+  persistPortfolioSetupCommunityRecord(propName, record);
+  return true;
 }
 
 function importPortfolioCommunityFloorPlansFromSurvey(propName) {
@@ -5110,30 +5231,54 @@ function importPortfolioCommunityFloorPlansFromSurvey(propName) {
     alert("No APTIQ floor-plan rates were found for this community yet. Upload the survey workbook first, then import the floor plans.");
     return false;
   }
+  const selectedIds = new Set(getFloorPlanSelectionIds("survey", propName));
+  const selectedRates = selectedIds.size > 0
+    ? surveyRates.filter(rate => selectedIds.has(String(rate.id || "").trim()))
+    : [];
+  if (selectedIds.size > 0 && selectedRates.length === 0) {
+    alert("Your current APTIQ selection no longer matches the imported survey rows. Re-select the plans you want to import.");
+    return false;
+  }
+  if (selectedIds.size === 0) {
+    alert("Select one or more APTIQ floor-plan rows first, or click Select All before importing them into Community Setup.");
+    return false;
+  }
   const existingPlans = normalizeCommunityFloorPlans(record.communityFloorPlans);
-  const existingByName = new Map(existingPlans.map(plan => [normalizeFloorPlanLookupName(plan.name), plan]));
-  const nextPlans = [];
-  surveyRates.forEach(rate => {
-    const existing = existingByName.get(normalizeFloorPlanLookupName(rate.name));
+  const nextPlans = existingPlans.map(plan => ({ ...plan }));
+  const nextByName = new Map(nextPlans.map((plan, index) => [normalizeFloorPlanLookupName(plan.name), { plan, index }]));
+  selectedRates.forEach(rate => {
+    const existing = nextByName.get(normalizeFloorPlanLookupName(rate.name));
+    if (existing) {
+      nextPlans[existing.index] = {
+        ...existing.plan,
+        id: existing.plan.id || makeFloorPlanId(),
+        name: String(existing.plan.name || rate.name || "").trim(),
+        sqft: existing.plan.sqft ?? rate.sqft ?? null,
+        budgetRent: existing.plan.budgetRent ?? null,
+        marketedRent: existing.plan.marketedRent ?? rate.marketRent ?? null,
+        leasedPct: existing.plan.leasedPct ?? null,
+        marketedRentSource: existing.plan.marketedRentSource || String(rate.sourceSheet || "APTIQ survey").trim(),
+        beds: existing.plan.beds ?? rate.beds ?? null,
+        baths: existing.plan.baths ?? rate.baths ?? null
+      };
+      return;
+    }
     nextPlans.push({
-      id: existing?.id || makeFloorPlanId(),
-      name: String(existing?.name || rate.name || "").trim(),
-      sqft: existing?.sqft ?? rate.sqft ?? null,
-      budgetRent: existing?.budgetRent ?? null,
-      marketedRent: existing?.marketedRent ?? rate.marketRent ?? null,
-      leasedPct: existing?.leasedPct ?? null,
-      marketedRentSource: existing?.marketedRentSource || String(rate.sourceSheet || "APTIQ survey").trim(),
-      beds: existing?.beds ?? rate.beds ?? null,
-      baths: existing?.baths ?? rate.baths ?? null
+      id: makeFloorPlanId(),
+      name: String(rate.name || "").trim(),
+      sqft: rate.sqft ?? null,
+      budgetRent: null,
+      marketedRent: rate.marketRent ?? null,
+      leasedPct: null,
+      marketedRentSource: String(rate.sourceSheet || "APTIQ survey").trim(),
+      beds: rate.beds ?? null,
+      baths: rate.baths ?? null
     });
-    existingByName.delete(normalizeFloorPlanLookupName(rate.name));
-  });
-  existingByName.forEach(plan => {
-    nextPlans.push({ ...plan });
   });
   record.communityFloorPlans = normalizeCommunityFloorPlans(nextPlans);
+  clearFloorPlanSelection("survey", propName);
   persistPortfolioSetupCommunityRecord(propName, record);
-  alert(`✅ Imported ${surveyRates.length} APTIQ floor plan${surveyRates.length === 1 ? "" : "s"} into the budget setup for ${matchPropertyName(propName, { fallbackToCurrent: false }) || propName}.`);
+  alert(`✅ Imported ${selectedRates.length} selected APTIQ floor plan${selectedRates.length === 1 ? "" : "s"} into the budget setup for ${matchPropertyName(propName, { fallbackToCurrent: false }) || propName}.`);
   return true;
 }
 
@@ -6864,12 +7009,17 @@ function renderPortfolioScopedSetupTab() {
     </tr>`;
   }).join("");
   const selectedFloorPlanData = buildCommunityFloorPlanVarianceRows(selectedRecord.communityFloorPlans, selectedRecord.marketSurveyData);
+  const selectedCommunityFloorPlanIds = getFloorPlanSelectionIds("community", selectedName);
+  const selectedCommunityFloorPlanIdSet = new Set(selectedCommunityFloorPlanIds);
   const selectedFloorPlanRows = selectedFloorPlanData.rows.length > 0
     ? selectedFloorPlanData.rows.map((row, idx) => {
         const varianceColor = row.variance == null ? "var(--muted)" : row.variance >= 0 ? "#3fb950" : "#f97316";
         const displayedMarketedRent = row.marketedRent ?? row.marketRent;
         const displayedMarketSource = row.marketedRentSource || row.marketSource || "";
-        return `<div style="display:grid;grid-template-columns:minmax(150px,1.2fr) 72px 72px 88px 108px 108px 96px minmax(150px,1fr) 98px auto;gap:10px;align-items:end;padding:10px 0;border-top:${idx === 0 ? "0" : "1px solid var(--border2)"}">
+        return `<div style="display:grid;grid-template-columns:28px minmax(150px,1.2fr) 72px 72px 88px 108px 108px 96px minmax(150px,1fr) 98px auto;gap:10px;align-items:end;padding:10px 0;border-top:${idx === 0 ? "0" : "1px solid var(--border2)"}">
+          <div style="display:flex;align-items:center;justify-content:center;padding-bottom:6px">
+            <input type="checkbox" aria-label="Select ${escapeHtml(row.name || "floor plan")}" ${selectedCommunityFloorPlanIdSet.has(String(row.id || "")) ? "checked" : ""} onchange="toggleFloorPlanSelection('community', ${JSON.stringify(selectedName)}, ${JSON.stringify(row.id)})" style="width:16px;height:16px;accent-color:#4493f8">
+          </div>
           <div>
             <div style="font-size:0.66rem;color:var(--muted);margin-bottom:4px">Floor plan</div>
             <input type="text" value="${escapeHtml(row.name)}" placeholder="e.g. B1" onchange='updatePortfolioCommunityFloorPlanField(${JSON.stringify(selectedName)}, ${idx}, "name", this.value)'>
@@ -6935,18 +7085,45 @@ function renderPortfolioScopedSetupTab() {
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
         <div>
           <div style="font-size:0.76rem;font-weight:700;color:var(--text)">Floor Plan Budget Setup</div>
-          <div style="font-size:0.66rem;color:var(--muted);margin-top:4px">Add the budgeted floor plans for ${escapeHtml(selectedName)} here. The DLR export compares these saved budget rents against the current marketed rents by floor plan, using the value saved here first and imported survey matches as the fallback.</div>
+          <div style="font-size:0.66rem;color:var(--muted);margin-top:4px">Add the budgeted floor plans for ${escapeHtml(selectedName)} here. The DLR export compares these saved budget rents against the current marketed rents by floor plan, using the value saved here first and imported survey matches as the fallback. Use the checkboxes to select one or more rows for mass delete.</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <div style="text-align:right">
             <div style="font-size:1.35rem;font-weight:700;font-family:'JetBrains Mono',monospace;color:#4493f8">${selectedFloorPlanData.rows.length}</div>
             <div style="font-size:0.64rem;color:var(--muted)">saved floor plan${selectedFloorPlanData.rows.length === 1 ? "" : "s"}</div>
           </div>
+          <div style="display:grid;grid-template-columns:150px 140px auto;gap:8px;align-items:end">
+            <div>
+              <div style="font-size:0.66rem;color:var(--muted);margin-bottom:4px">Bulk field</div>
+              <select id="community-floor-plan-bulk-field">
+                <option value="marketedRent">Marketed rent</option>
+                <option value="budgetRent">Budget rent</option>
+                <option value="leasedPct">Leased %</option>
+                <option value="sqft">Sqft</option>
+                <option value="beds">Beds</option>
+                <option value="baths">Baths</option>
+                <option value="marketedRentSource">Market source</option>
+                <option value="name">Plan name</option>
+              </select>
+            </div>
+            <div>
+              <div style="font-size:0.66rem;color:var(--muted);margin-bottom:4px">Bulk value</div>
+              <input id="community-floor-plan-bulk-value" type="text" placeholder="Value to apply">
+            </div>
+            <button class="btn btn-gray btn-sm" type="button" onclick="applySelectedCommunityFloorPlanField(${JSON.stringify(selectedName)})">Apply to Selected</button>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-gray btn-sm" type="button" onclick="selectAllFloorPlans('community', ${JSON.stringify(selectedName)}, ${JSON.stringify(selectedFloorPlanData.rows.map(row => row.id))})">Select All</button>
+            <button class="btn btn-gray btn-sm" type="button" onclick="clearFloorPlanSelection('community', ${JSON.stringify(selectedName)})">Clear</button>
+            <button class="btn btn-gray btn-sm" type="button" onclick="deleteSelectedCommunityFloorPlans(${JSON.stringify(selectedName)})" ${selectedCommunityFloorPlanIds.length === 0 ? "disabled" : ""}>Delete Selected</button>
+          </div>
           <button class="btn btn-gray btn-sm" type="button" onclick='addPortfolioCommunityFloorPlanRow(${JSON.stringify(selectedName)})'>＋ Add Floor Plan</button>
-          <button class="btn btn-gray btn-sm" type="button" onclick='importPortfolioCommunityFloorPlansFromSurvey(${JSON.stringify(selectedName)})' ${normalizeMarketSurveyFloorPlanRates(selectedRecord.marketSurveyData?.floorPlanRates).length === 0 ? "disabled" : ""}>Import APTIQ Plans</button>
+          <button class="btn btn-gray btn-sm" type="button" onclick='importPortfolioCommunityFloorPlansFromSurvey(${JSON.stringify(selectedName)})' ${normalizeMarketSurveyFloorPlanRates(selectedRecord.marketSurveyData?.floorPlanRates).length === 0 ? "disabled" : ""}>Import Selected APTIQ Plans</button>
         </div>
       </div>
-      <div style="display:grid;gap:0">${selectedFloorPlanRows}</div>
+      <div style="display:grid;gap:0">
+        ${selectedFloorPlanRows}
+      </div>
       ${selectedFloorPlanData.unmatchedRates.length > 0 ? `<div style="margin-top:10px;padding:10px 12px;border:1px dashed rgba(217,153,34,0.45);border-radius:10px;background:rgba(217,153,34,0.06)">
         <div style="font-size:0.68rem;font-weight:700;color:#9d5d14;margin-bottom:6px">Unmatched APTIQ floor plans</div>
         <div style="display:flex;flex-wrap:wrap;gap:8px">${selectedFloorPlanData.unmatchedRates.map(rate => `<span style="display:inline-flex;gap:6px;align-items:center;padding:6px 8px;border-radius:999px;background:var(--bg2);border:1px solid rgba(217,153,34,0.35);font-size:0.66rem;color:var(--text)">${escapeHtml(rate.name || "Unnamed plan")}<strong style="color:#9d5d14">${rate.marketRent != null ? formatDlrCurrency(rate.marketRent) : "—"}</strong></span>`).join("")}</div>
@@ -7339,9 +7516,15 @@ function renderSetupTab() {
         <div style="display:flex;flex-wrap:wrap;gap:8px">${floorPlanVarianceData.unmatchedRates.map(rate => `<span style="display:inline-flex;gap:6px;align-items:center;padding:6px 8px;border-radius:999px;background:var(--bg2);border:1px solid rgba(217,153,34,0.35);font-size:0.66rem;color:var(--text)">${escapeHtml(rate.name || "Unnamed plan")}<strong style="color:#9d5d14">${rate.marketRent != null ? formatDlrCurrency(rate.marketRent) : "—"}</strong></span>`).join("")}</div>
       </div>`
     : "";
-  const marketSurveyFloorPlanRows = normalizeMarketSurveyFloorPlanRates(marketSurveyData.floorPlanRates).length
-    ? normalizeMarketSurveyFloorPlanRates(marketSurveyData.floorPlanRates).map((rate, idx) => `
-        <div style="display:grid;grid-template-columns:minmax(170px,1.4fr) repeat(4,minmax(90px,0.75fr)) minmax(130px,1fr) auto;gap:8px;align-items:end;padding:10px 0;border-top:${idx === 0 ? "0" : "1px solid rgba(15,23,42,0.08)"}">
+  const marketSurveyFloorPlanData = normalizeMarketSurveyFloorPlanRates(marketSurveyData.floorPlanRates);
+  const selectedMarketSurveyFloorPlanIds = getFloorPlanSelectionIds("survey", selectedName);
+  const selectedMarketSurveyFloorPlanIdSet = new Set(selectedMarketSurveyFloorPlanIds);
+  const marketSurveyFloorPlanRows = marketSurveyFloorPlanData.length
+    ? marketSurveyFloorPlanData.map((rate, idx) => `
+        <div style="display:grid;grid-template-columns:28px minmax(170px,1.4fr) repeat(4,minmax(90px,0.75fr)) minmax(130px,1fr) auto;gap:8px;align-items:end;padding:10px 0;border-top:${idx === 0 ? "0" : "1px solid rgba(15,23,42,0.08)"}">
+          <div style="display:flex;align-items:center;justify-content:center;padding-bottom:6px">
+            <input type="checkbox" aria-label="Select ${escapeHtml(rate.name || "floor plan")}" ${selectedMarketSurveyFloorPlanIdSet.has(String(rate.id || "")) ? "checked" : ""} onchange="toggleFloorPlanSelection('survey', ${JSON.stringify(selectedName)}, ${JSON.stringify(rate.id)})" style="width:16px;height:16px;accent-color:#4493f8">
+          </div>
           <div>
             <div style="font-size:0.66rem;color:var(--muted);margin-bottom:4px">Plan name</div>
             <input type="text" value="${escapeHtml(rate.name || "")}" placeholder="A1 / One Bedroom" onchange="updateMarketSurveyFloorPlanField(${idx},'name',this.value)">
@@ -7500,9 +7683,19 @@ function renderSetupTab() {
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
         <div>
           <div style="font-size:0.78rem;font-weight:700;color:var(--text)">Floor Plan Marketed Rates</div>
-          <div style="font-size:0.68rem;color:var(--muted);margin-top:4px">These rates are matched back to the Community Setup floor-plan budget table by plan name, then used in the exported DLR variance chart.</div>
+          <div style="font-size:0.68rem;color:var(--muted);margin-top:4px">These APTIQ recommendations are tied to the subject property only. Use the checkboxes to select the floor plans you want to import into Community Setup, or leave the comp rows in the survey as reference only.</div>
         </div>
-        <button class="btn btn-gray btn-sm" type="button" onclick="addMarketSurveyFloorPlanRate()">＋ Add Marketed Rate</button>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <div style="text-align:right">
+            <div style="font-size:1.15rem;font-weight:700;font-family:'JetBrains Mono',monospace;color:#4493f8">${marketSurveyFloorPlanData.length}</div>
+            <div style="font-size:0.64rem;color:var(--muted)">survey floor plans</div>
+          </div>
+          <button class="btn btn-gray btn-sm" type="button" onclick="selectAllFloorPlans('survey', ${JSON.stringify(selectedName)}, ${JSON.stringify(marketSurveyFloorPlanData.map(rate => rate.id))})">Select All</button>
+          <button class="btn btn-gray btn-sm" type="button" onclick="clearFloorPlanSelection('survey', ${JSON.stringify(selectedName)})">Clear</button>
+          <button class="btn btn-gray btn-sm" type="button" onclick="deleteSelectedMarketSurveyFloorPlanRates(${JSON.stringify(selectedName)})" ${selectedMarketSurveyFloorPlanIds.length === 0 ? "disabled" : ""}>Delete Selected</button>
+          <button class="btn btn-gray btn-sm" type="button" onclick="addMarketSurveyFloorPlanRate()">＋ Add Marketed Rate</button>
+          <button class="btn btn-gray btn-sm" type="button" onclick='importPortfolioCommunityFloorPlansFromSurvey(${JSON.stringify(selectedName)})' ${marketSurveyFloorPlanData.length === 0 ? "disabled" : ""}>Import Selected APTIQ Plans</button>
+        </div>
       </div>
       <div style="display:grid;gap:0">${marketSurveyFloorPlanRows}</div>
     </div>
@@ -7813,10 +8006,16 @@ function updateMarketSurveyFloorPlanField(index, field, value) {
 }
 
 function removeMarketSurveyFloorPlanRate(index) {
+  const nextRates = normalizeMarketSurveyFloorPlanRates(marketSurveyData.floorPlanRates);
+  const removed = nextRates[index];
   marketSurveyData = normalizeMarketSurveyData({
     ...marketSurveyData,
-    floorPlanRates: normalizeMarketSurveyFloorPlanRates(marketSurveyData.floorPlanRates).filter((_, idx) => idx !== index)
+    floorPlanRates: nextRates.filter((_, idx) => idx !== index)
   });
+  if (removed?.id) {
+    const selected = getFloorPlanSelectionIds("survey", getProp().name).filter(id => String(id) !== String(removed.id));
+    floorPlanSelectionState.survey[getProp().name] = selected;
+  }
   renderTab();
 }
 
@@ -12415,6 +12614,12 @@ function compCalcFormatSignedPoints(value, digits = 1) {
   return `${numeric >= 0 ? "+" : "-"}${abs}`;
 }
 
+function compCalcRoundRent(value, step = 5) {
+  const numeric = Number(value ?? 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+  return Math.round(numeric / step) * step;
+}
+
 function compCalcNormalizeApproach(value) {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (normalized === "aggressive" || normalized === "conservative") return normalized;
@@ -12647,13 +12852,14 @@ function buildCompCalculatorConcessionPlaybook(market, activity = {}) {
       const avgLeases30 = row.count > 0 ? row.leases30Total / row.count : 0;
       const avgApps30 = row.count > 0 ? row.apps30Total / row.count : 0;
       const avgMonthly = row.count > 0 ? row.monthlyTotal / row.count : 0;
-      const marketRead = avgLeasedPct >= subjectOccPct + 1.0 || avgLeases30 >= subjectLeases
-        ? "Performing better than us"
-        : avgApps30 >= subjectApps
-          ? "Above our app pace"
-          : avgLeasedPct >= Number(market.compAverageLeasedPct ?? 0)
-            ? "Above comp average"
-            : "Middle of pack";
+      const leaseDelta = Math.round(avgLeases30 - subjectLeases);
+      const appDelta = Math.round(avgApps30 - subjectApps);
+      const liftParts = [];
+      if (leaseDelta !== 0) liftParts.push(`Leases ${leaseDelta > 0 ? "+" : ""}${leaseDelta} vs subject`);
+      if (appDelta !== 0) liftParts.push(`Apps ${appDelta > 0 ? "+" : ""}${appDelta} vs subject`);
+      const marketRead = liftParts.length > 0
+        ? liftParts.join(" · ")
+        : "No app/lease lift vs subject";
       return {
         type: row.type,
         count: row.count,
@@ -12661,13 +12867,15 @@ function buildCompCalculatorConcessionPlaybook(market, activity = {}) {
         avgLeases30,
         avgApps30,
         avgMonthly,
+        leaseDelta,
+        appDelta,
         marketRead,
         examples: [...new Set(row.examples)].slice(0, 2)
       };
     })
     .sort((a, b) => (b.count - a.count) || (b.avgLeases30 - a.avgLeases30) || a.type.localeCompare(b.type));
   const strongest = rows[0] ?? null;
-  const marketLeader = rows.find(row => row.marketRead === "Performing better than us") ?? strongest;
+  const marketLeader = rows.find(row => row.leaseDelta > 0 || row.appDelta > 0) ?? strongest;
   const buildLabel = row => row ? `${row.type}${row.avgMonthly > 0 ? ` (${formatDlrCurrency(row.avgMonthly)} / mo)` : ""}` : "";
   return {
     rows,
@@ -12808,47 +13016,92 @@ function compLowMonthly(playbook, market) {
 function buildCompCalculatorFloorPlanRows(detail, market) {
   const subjectPlans = normalizeCommunityFloorPlans(detail?.record?.communityFloorPlans);
   const surveyRates = normalizeMarketSurveyFloorPlanRates(market?.floorPlanRates);
-  const availableRates = [...surveyRates];
   const rows = subjectPlans.map(plan => {
     const planKey = normalizeFloorPlanLookupName(plan.name);
-    const matchedIdx = availableRates.findIndex(rate => {
+    const matchedRate = surveyRates.find(rate => {
       const sameName = planKey && normalizeFloorPlanLookupName(rate.name) === planKey;
       const sameBeds = plan.beds !== null && plan.beds !== undefined && rate.beds === plan.beds;
       return sameName || sameBeds;
     });
-    const rate = matchedIdx > -1 ? availableRates.splice(matchedIdx, 1)[0] : null;
-    const marketRent = Number(rate?.marketRent ?? 0) || null;
+    const marketRent = Number(matchedRate?.marketRent ?? 0) || null;
     const marketedRent = Number(plan.marketedRent ?? 0) || null;
+    const gap = marketedRent != null && marketRent != null ? marketedRent - marketRent : null;
+    const gapPct = gap != null && marketRent > 0 ? (gap / marketRent) * 100 : null;
+    let rateAction = "hold";
+    let rateTone = "hold";
+    let rateRead = marketRent > 0 ? "At market" : "No market rate saved";
+    let suggestedRent = marketedRent || marketRent || null;
+    if (marketRent > 0 && marketedRent > 0) {
+      const reduceThreshold = Math.max(75, marketRent * 0.04);
+      const trimThreshold = Math.max(25, marketRent * 0.015);
+      const pushThreshold = Math.max(50, marketRent * 0.03);
+      if (gap > reduceThreshold) {
+        rateAction = "reduce";
+        rateTone = "down";
+        rateRead = `Reduce ${formatDlrCurrency(gap)} to market`;
+        suggestedRent = compCalcRoundRent(marketRent);
+      } else if (gap > trimThreshold) {
+        rateAction = "trim";
+        rateTone = "down";
+        rateRead = `Trim ${formatDlrCurrency(gap)} to stay competitive`;
+        suggestedRent = compCalcRoundRent(marketRent);
+      } else if (gap < -pushThreshold) {
+        rateAction = "push";
+        rateTone = "up";
+        rateRead = `Room to raise ${formatDlrCurrency(Math.abs(gap))}`;
+        suggestedRent = compCalcRoundRent(Math.max(marketedRent, marketRent * 1.02));
+      } else {
+        rateAction = "hold";
+        rateTone = "hold";
+        rateRead = "Hold at market";
+        suggestedRent = compCalcRoundRent(marketedRent);
+      }
+    } else if (marketRent > 0 && !marketedRent) {
+      rateAction = "review";
+      rateTone = "hold";
+      rateRead = "Add subject rent to compare";
+      suggestedRent = compCalcRoundRent(marketRent);
+    }
     return {
-      name: plan.name || rate?.name || "Unnamed Plan",
-      beds: plan.beds ?? rate?.beds ?? null,
-      baths: plan.baths ?? rate?.baths ?? null,
-      sqft: plan.sqft ?? rate?.sqft ?? null,
+      name: plan.name || matchedRate?.name || "Unnamed Plan",
+      beds: plan.beds ?? matchedRate?.beds ?? null,
+      baths: plan.baths ?? matchedRate?.baths ?? null,
+      sqft: plan.sqft ?? matchedRate?.sqft ?? null,
       marketedRent,
       marketRent,
-      gap: marketedRent && marketRent ? marketedRent - marketRent : null,
-      source: rate?.sourceSheet || plan.marketedRentSource || ""
+      gap,
+      gapPct,
+      rateAction,
+      rateTone,
+      rateRead,
+      suggestedRent,
+      source: matchedRate?.sourceSheet || plan.marketedRentSource || ""
     };
   });
-  availableRates.forEach(rate => {
-    rows.push({
-      name: rate.name || "Market Plan",
-      beds: rate.beds ?? null,
-      baths: rate.baths ?? null,
-      sqft: rate.sqft ?? null,
-      marketedRent: null,
-      marketRent: rate.marketRent ?? null,
-      gap: null,
-      source: rate.sourceSheet || ""
-    });
-  });
-  return rows.sort((a, b) => (Number(a.beds ?? 99) - Number(b.beds ?? 99)) || String(a.name).localeCompare(String(b.name)));
+  const actionOrder = { reduce: 0, trim: 1, hold: 2, push: 3, review: 4 };
+  return rows.sort((a, b) => (actionOrder[a.rateAction] - actionOrder[b.rateAction]) || (Number(a.beds ?? 99) - Number(b.beds ?? 99)) || String(a.name).localeCompare(String(b.name)));
+}
+
+function buildCompCalculatorFloorPlanSummary(rows = []) {
+  return rows.reduce((summary, row) => {
+    summary.total += 1;
+    const action = String(row?.rateAction ?? "hold");
+    if (action === "reduce" || action === "trim") summary.reduce += 1;
+    else if (action === "push") summary.push += 1;
+    else summary.hold += 1;
+    if (Number.isFinite(Number(row?.gap ?? null))) {
+      summary.gapTotal += Number(row.gap);
+      summary.gapCount += 1;
+    }
+    return summary;
+  }, { total: 0, reduce: 0, hold: 0, push: 0, gapTotal: 0, gapCount: 0 });
 }
 
 function buildCompCalculatorSnapshotData(detail, market, monthIdx = getSelectedDashboardMonthIndex()) {
   const meta = getCompCalculatorScopeMeta(detail, market);
   const activity = getCompCalculatorSubjectActivity(detail, market, monthIdx);
   const floorPlanRows = buildCompCalculatorFloorPlanRows(detail, market);
+  const floorPlanSummary = buildCompCalculatorFloorPlanSummary(floorPlanRows);
   const subjectSqft = compCalcAverage(floorPlanRows.map(row => row.marketedRent ? Number(row.sqft ?? 0) : 0).filter(Boolean));
   const compSqft = compCalcAverage((market.floorPlanRates ?? []).map(rate => Number(rate.sqft ?? 0)).filter(Boolean));
   const floorPlanContext = {
@@ -12888,6 +13141,7 @@ function buildCompCalculatorSnapshotData(detail, market, monthIdx = getSelectedD
     meta,
     activity,
     floorPlanRows,
+    floorPlanSummary,
     floorPlanContext,
     recommendation,
     playbook,
@@ -13048,7 +13302,7 @@ function renderCompCalculatorPortfolioView(rows, monthIdx) {
 
 function buildCompCalculatorInvestorSnapshotDocument(data) {
   const logoSrc = resolveExportBrandLogoSrc();
-  const { detail, market, activity, recommendation, playbook, pricingRows, floorPlanRows, landscapeRows, meta, monthIdx } = data;
+  const { detail, market, activity, recommendation, playbook, pricingRows, floorPlanRows, floorPlanSummary, landscapeRows, meta, monthIdx } = data;
   const title = `${detail.name} Investor Snapshot`;
   const subjectLabel = recommendation.mode === "aggressive"
     ? "AGGRESSIVE"
@@ -13096,6 +13350,8 @@ function buildCompCalculatorInvestorSnapshotDocument(data) {
         .muted { font-size:10px; color:#64748b; }
         .pricing-grid { display:grid; gap:12px; }
         .pricing-title { font-size:14px; font-weight:700; color:#0f172a; margin:0 0 8px; }
+        .chip-row { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 0; }
+        .chip { display:inline-flex; align-items:center; gap:6px; padding:5px 9px; border-radius:999px; background:#eef5fb; border:1px solid #d6dee8; color:#0f172a; font-size:10px; font-weight:700; }
         .footer { padding:0 16px 16px; font-size:10px; color:#64748b; }
       </style>
     </head>
@@ -13148,6 +13404,44 @@ function buildCompCalculatorInvestorSnapshotDocument(data) {
                   <td>${escapeHtml(row.concessionDetails || "—")}</td>
                   <td><span class="badge ${row.isSubject ? "you" : String(row.threat || "").toLowerCase()}">${escapeHtml(row.threat || (row.isSubject ? "YOU" : "LOW"))}</span></td>
                 </tr>`).join("")}
+              </tbody>
+            </table>
+          </div>
+          <div class="section">
+            <div class="section-title">Floor Plan Drilldown</div>
+            <div class="chip-row">
+              <div class="chip">${floorPlanSummary.total} plan${floorPlanSummary.total === 1 ? "" : "s"}</div>
+              <div class="chip">${floorPlanSummary.reduce} reduce / ${floorPlanSummary.hold} hold / ${floorPlanSummary.push} push</div>
+              <div class="chip">${floorPlanSummary.gapCount > 0 ? compCalcFormatSignedCurrency(floorPlanSummary.gapTotal / floorPlanSummary.gapCount) : "—"} avg gap</div>
+            </div>
+            <table style="margin-top:10px">
+              <thead>
+                <tr>
+                  <th>Plan</th>
+                  <th>Type</th>
+                  <th>Sq Ft</th>
+                  <th>Current Rent</th>
+                  <th>Market Rent</th>
+                  <th>Gap</th>
+                  <th>Gap %</th>
+                  <th>Read</th>
+                  <th>Suggested Move</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${floorPlanRows.length > 0
+                  ? floorPlanRows.map(row => `<tr class="${row.rateTone === "down" ? "you" : ""}">
+                      <td><strong>${escapeHtml(row.name)}</strong></td>
+                      <td>${row.beds !== null && row.baths !== null ? `${row.beds} / ${row.baths}` : row.beds !== null ? `${row.beds} bd` : "—"}</td>
+                      <td>${row.sqft ? Math.round(row.sqft).toLocaleString() : "—"}</td>
+                      <td>${row.marketedRent ? formatDlrCurrency(row.marketedRent) : "—"}</td>
+                      <td>${row.marketRent ? formatDlrCurrency(row.marketRent) : "—"}</td>
+                      <td>${row.gap == null ? "—" : compCalcFormatSignedCurrency(row.gap)}</td>
+                      <td>${row.gapPct == null ? "—" : `${row.gapPct.toFixed(1)}%`}</td>
+                      <td><span class="badge ${row.rateTone === "down" ? "medium" : row.rateTone === "up" ? "low" : "you"}">${escapeHtml(row.rateRead || "Hold")}</span></td>
+                      <td>${row.suggestedRent ? formatDlrCurrency(row.suggestedRent) : "—"}</td>
+                    </tr>`).join("")
+                  : `<tr><td colspan="9">No subject floor plans were saved for this community yet.</td></tr>`}
               </tbody>
             </table>
           </div>
@@ -13244,7 +13538,7 @@ function openCompCalculatorInvestorSnapshot(detailName, monthIdx = getSelectedDa
 
 function renderCompCalculatorCommunityView(detail, market, monthIdx) {
   const snapshot = buildCompCalculatorSnapshotData(detail, market, monthIdx);
-  const { activity, recommendation, playbook, pricingRows, floorPlanRows, landscapeRows, meta } = snapshot;
+  const { activity, recommendation, playbook, pricingRows, floorPlanRows, floorPlanSummary, landscapeRows, meta } = snapshot;
   const controls = [
     {
       key: "targetOccupancyPct",
@@ -13370,7 +13664,7 @@ function renderCompCalculatorCommunityView(detail, market, monthIdx) {
         <div class="comp-calc-section-title">
           <div>
             <h3>Your Property</h3>
-            <div class="comp-calc-sub">The floor-plan table compares the budget setup for the RISE subject property against the imported market rates and only shows the subject plans saved on this property.</div>
+            <div class="comp-calc-sub">The floor-plan table compares each subject plan against the survey rate, then flags whether we should reduce, hold, or push the rent like a revenue manager would.</div>
           </div>
           <div class="comp-calc-section-badge">${landscapeRows.length} comps</div>
         </div>
@@ -13444,7 +13738,7 @@ function renderCompCalculatorCommunityView(detail, market, monthIdx) {
         <div class="comp-calc-section-title">
           <div>
             <h3>Concession Playbook</h3>
-            <div class="comp-calc-sub">These concession types are grouped by how often they appear in the uploaded comp set and whether they appear to outperform the subject property's pace.</div>
+            <div class="comp-calc-sub">These concession types are grouped by how often they appear in the uploaded comp set and how many more apps or leases they are pulling versus the subject property.</div>
           </div>
           <div class="comp-calc-section-badge">Playbook</div>
         </div>
@@ -13521,10 +13815,16 @@ function renderCompCalculatorCommunityView(detail, market, monthIdx) {
     <section class="comp-calc-card">
       <div class="comp-calc-section-title">
         <div>
-          <h3>Floor-plan comparison</h3>
-          <div class="comp-calc-sub">Only the floor plans that belong to the selected RISE subject property are imported here, then compared against the matching market rates.</div>
+          <h3>Floor-plan drilldown</h3>
+          <div class="comp-calc-sub">Only the subject-property floor plans are loaded here, and each row shows the rate gap, gap percentage, and the move we should consider next.</div>
         </div>
         <div class="comp-calc-section-badge">${floorPlanRows.length} plans</div>
+      </div>
+      <div class="comp-calc-chip-row" style="margin-bottom:12px">
+        <div class="comp-calc-chip">Reduce / Trim: ${floorPlanSummary.reduce}</div>
+        <div class="comp-calc-chip">Hold: ${floorPlanSummary.hold}</div>
+        <div class="comp-calc-chip">Push: ${floorPlanSummary.push}</div>
+        <div class="comp-calc-chip">Avg gap: ${floorPlanSummary.gapCount > 0 ? compCalcFormatSignedCurrency(floorPlanSummary.gapTotal / floorPlanSummary.gapCount) : "—"}</div>
       </div>
       ${floorPlanRows.length === 0 ? `<div class="comp-calc-empty">No floor-plan rate rows are saved yet for this community. Upload an APTIQ market survey workbook with subject-property floor-plan data, then this comparison will populate automatically.</div>` : `<div class="comp-calc-table-wrap">
         <table class="comp-calc-table">
@@ -13533,9 +13833,12 @@ function renderCompCalculatorCommunityView(detail, market, monthIdx) {
               <th>Plan</th>
               <th>Type</th>
               <th>Sq Ft</th>
-              <th>Subject Rent</th>
+              <th>Current Rent</th>
               <th>Market Rent</th>
               <th>Gap</th>
+              <th>Gap %</th>
+              <th>Read</th>
+              <th>Suggested Move</th>
               <th>Source</th>
             </tr>
           </thead>
@@ -13547,6 +13850,9 @@ function renderCompCalculatorCommunityView(detail, market, monthIdx) {
               <td>${row.marketedRent ? formatDlrCurrency(row.marketedRent) : "—"}</td>
               <td>${row.marketRent ? formatDlrCurrency(row.marketRent) : "—"}</td>
               <td>${row.gap === null ? "—" : compCalcFormatSignedCurrency(row.gap)}</td>
+              <td>${row.gapPct == null ? "—" : `${row.gapPct.toFixed(1)}%`}</td>
+              <td><span class="comp-calc-tonal ${escapeHtml(row.rateTone || "hold")}">${escapeHtml(row.rateRead || "Hold")}</span></td>
+              <td>${row.suggestedRent ? formatDlrCurrency(row.suggestedRent) : "—"}</td>
               <td>${escapeHtml(row.source || "Saved plan")}</td>
             </tr>`).join("")}
           </tbody>
