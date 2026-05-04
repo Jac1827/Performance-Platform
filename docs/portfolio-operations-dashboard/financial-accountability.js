@@ -6,6 +6,7 @@
   const COMMUNITY_STORAGE_KEYS = [COMMUNITY_STORAGE_KEY, LEGACY_COMMUNITY_STORAGE_KEY];
   const OPS_WORKSPACE_CONTEXT_KEY = "rise_ops_workspace_context_v1";
   const OPS_PROPERTY_CATALOG_KEY = "rise_ops_property_catalog_v1";
+  const PORTFOLIO_SCOPE_LABEL = "ATLAS RISE Portfolio";
   const FINANCIAL_HISTORY_STORAGE_KEY = "rise_financial_history_v1";
   const AUTO_IMPORT_SCOPE = "__AUTO__";
   const APPROVED_BUDGET_STORAGE_KEY = "rise_financial_accountability_approved_budgets_v1";
@@ -524,6 +525,10 @@
       return "";
     }
 
+    if (/^atlas rise portfolio$/i.test(cleaned) || /^__rise_portfolio__$/i.test(cleaned)) {
+      return PORTFOLIO_SCOPE_LABEL;
+    }
+
     const normalized = normalizeCommunityLookupName(cleaned);
     if (normalized === "corporate" || normalized === "risecorporate" || normalized === "rise corporate") {
       return "RISE Corporate";
@@ -581,14 +586,30 @@
       return null;
     }
     const matchedCommunity = normalized.community ? matchCommunityName(normalized.community) : "";
+    const isPortfolioScope = matchedCommunity === PORTFOLIO_SCOPE_LABEL;
+    if (isPortfolioScope) {
+      state.snapshotScope.mode = "all";
+      state.snapshotScope.selectedEntities = [];
+      if (forceSelection) {
+        state.selectedProperty = null;
+      }
+      if (updateImportScope && (forceSelection || !state.financialImport.scope)) {
+        state.financialImport.scope = AUTO_IMPORT_SCOPE;
+      }
+    }
     if (matchedCommunity && (forceSelection || !state.selectedProperty)) {
-      state.selectedProperty = matchedCommunity;
+      state.selectedProperty = isPortfolioScope ? null : matchedCommunity;
     }
     if (normalized.period && (forceSelection || !state.selectedPeriod)) {
       state.selectedPeriod = normalized.period;
       setManualPeriodValue(normalized.period, false);
     }
-    if (matchedCommunity && updateImportScope && (forceSelection || !state.financialImport.scope || state.financialImport.scope === AUTO_IMPORT_SCOPE)) {
+    if (
+      matchedCommunity &&
+      !isPortfolioScope &&
+      updateImportScope &&
+      (forceSelection || !state.financialImport.scope || state.financialImport.scope === AUTO_IMPORT_SCOPE)
+    ) {
       state.financialImport.scope = matchedCommunity;
     }
     return {
@@ -6593,6 +6614,9 @@
       return;
     }
     if (event.key === OPS_WORKSPACE_CONTEXT_KEY) {
+      applyWorkspaceContext(loadWorkspaceContextFromStorage(), { forceSelection: true, updateImportScope: true });
+      persistState();
+      render();
       renderWorkspaceBridge();
     }
   }

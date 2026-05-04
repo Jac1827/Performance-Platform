@@ -2449,6 +2449,8 @@ async function loadCompanyRosterFromAsset(options){
   if(settings.clearRelated){
     STATE.plans = [];
     if(Array.isArray(STATE.writeups)) STATE.writeups = [];
+    STATE.correspondence = makeCorrespondenceLog();
+    STATE.employeeEvents = makeEmployeeEventLog();
     UI.selectedWeeklyPlanId = null;
   }
   saveState();

@@ -30,4 +30,5 @@ This repo carries two separate static HTML experiences:
 - The published site serves `docs/index.html` for the performance platform and `docs/portfolio-operations-dashboard/index.html` for the operations dashboard.
 - Daily Glitch Review smoke check:
   - `node tools/daily_glitch_review_smoke.mjs`
-  - Verifies `index.html` and `financial-accountability.html` load cleanly, render logos, initialize tabs, and expose import/export controls.
+  - Always validates `docs/index.html`, `docs/portfolio-operations-dashboard/index.html`, and `docs/portfolio-operations-dashboard/financial-accountability.html` for source/publish parity, expected UI markers, and local asset references.
+  - When run inside the Codex in-app browser session, it also verifies the published dashboard pages render cleanly without console errors and expose the expected tabs and export/import controls.

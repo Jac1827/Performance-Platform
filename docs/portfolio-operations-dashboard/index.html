@@ -875,10 +875,8 @@ let csvLog = [];
 let csvError = "";
 let importMonthOverride = currentMonth;
 let importRoutingMode = "file_first";
-let monthlyTemplateImportTarget = {
-  month: currentMonth,
-  year: new Date().getFullYear()
-};
+let monthlyTemplateImportTargetTouched = false;
+let monthlyTemplateImportTarget = buildDefaultMonthlyTemplateImportTarget();
 let extractedDashboardRows = [];
 let extractedSourceLabel = "";
 let renewalImportLog = [];
@@ -2142,8 +2140,7 @@ function normalizeOpsGlobalData(data) {
     salarySecurity: normalizeSalarySecurity(input.salarySecurity),
     monthlyPresentationCommunities: normalizeMonthlyPresentationCommunities(input.monthlyPresentationCommunities),
     weeklyExecutiveEmail: normalizeWeeklyExecutiveEmailSettings(input.weeklyExecutiveEmail),
-    windowshadeState: normalizeWindowshadeState(input.windowshadeState),
-    monthlyTemplateImportTarget: normalizeMonthlyTemplateImportTarget(input.monthlyTemplateImportTarget)
+    windowshadeState: normalizeWindowshadeState(input.windowshadeState)
   };
 }
 
@@ -2157,8 +2154,7 @@ function getLegacyOpsGlobalSeed() {
     regionalAssignments: legacy.regionalAssignments,
     salarySecurity: legacy.salarySecurity,
     weeklyExecutiveEmail: legacy.weeklyExecutiveEmail,
-    windowshadeState: legacy.windowshadeState,
-    monthlyTemplateImportTarget: legacy.monthlyTemplateImportTarget
+    windowshadeState: legacy.windowshadeState
   } : {};
 }
 
@@ -2172,7 +2168,8 @@ function applyOpsGlobalData(data) {
   monthlyPresentationCommunities = normalized.monthlyPresentationCommunities;
   weeklyExecutiveEmail = normalized.weeklyExecutiveEmail;
   windowshadeState = normalized.windowshadeState;
-  monthlyTemplateImportTarget = normalized.monthlyTemplateImportTarget;
+  monthlyTemplateImportTargetTouched = false;
+  syncMonthlyTemplateImportTarget({ force: true });
   if (!salarySecurity.enabled) salaryUnlocked = false;
   opsGlobalData = normalized;
 }
@@ -2215,8 +2212,7 @@ function persistOpsGlobalData() {
     salarySecurity,
     monthlyPresentationCommunities,
     weeklyExecutiveEmail,
-    windowshadeState,
-    monthlyTemplateImportTarget
+    windowshadeState
   });
   return persistJsonToLocalStorage(OPS_GLOBAL_STORAGE_KEY, opsGlobalData, "Bonus and presentation settings");
 }
@@ -2779,6 +2775,7 @@ function applyIncomingWorkspaceNavigation() {
       currentMonth = incomingMonthIdx;
       workspaceMonthOverride = incomingMonthIdx;
       importMonthOverride = incomingMonthIdx;
+      syncMonthlyTemplateImportTarget();
     }
   } catch {}
 }
@@ -3297,6 +3294,7 @@ function loadPropertyData(propName) {
   occupancyGoal = d.occupancyGoal;
   leasedGoal = d.leasedGoal;
   currentMonth = Number.isInteger(workspaceMonthOverride) ? workspaceMonthOverride : DEFAULT_CURRENT_MONTH;
+  syncMonthlyTemplateImportTarget();
   conversionRate = d.conversionRate;
   monthlyData = d.monthlyData;
   savedBudgetTargets = d.savedBudgetTargets;
@@ -6127,6 +6125,7 @@ function attachEventListeners() {
           occupiedUnits: currentOccupied,
           leasedUnits: currentLeased
         });
+        syncMonthlyTemplateImportTarget();
       }
       else if (field === "importMonthOverride") { importMonthOverride = Number(el.value); }
       else if (field === "importRoutingMode") { importRoutingMode = el.value === "force_override" ? "force_override" : "file_first"; }
@@ -12099,8 +12098,10 @@ function renderReportingTab() {
 // ─── CSV Tab ───────────────────────────────────────────────────────────────────
 function parseMonthIndexValue(value) {
   if (value === null || value === undefined) return null;
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 11) return value;
   const raw = String(value).trim();
   if (!raw) return null;
+  if (/^(?:0|[1-9]|1[01])$/.test(raw)) return Number(raw);
   const shortMonth = MONTHS.findIndex(month => raw.toLowerCase().startsWith(month.toLowerCase()));
   if (shortMonth !== -1) return shortMonth;
   const fullMonthNames = ["january","february","march","april","may","june","july","august","september","october","november","december"];
@@ -12119,6 +12120,24 @@ function buildHistoricalMonthLabel(monthIdx, year = new Date().getFullYear()) {
   const safeMonth = MONTHS[Math.max(0, Math.min(11, Number(monthIdx) || 0))] || MONTHS[DEFAULT_CURRENT_MONTH];
   const safeYear = Number.isFinite(Number(year)) ? Number(year) : new Date().getFullYear();
   return `${safeMonth}-${String(safeYear).slice(-2)}`;
+}
+
+function buildDefaultMonthlyTemplateImportTarget() {
+  const baseMonth = Number.isInteger(workspaceMonthOverride) ? workspaceMonthOverride : currentMonth;
+  return {
+    month: clampNumber(baseMonth, 0, 11),
+    year: new Date().getFullYear()
+  };
+}
+
+function syncMonthlyTemplateImportTarget({ force = false } = {}) {
+  if (monthlyTemplateImportTargetTouched && !force) return;
+  const nextTarget = buildDefaultMonthlyTemplateImportTarget();
+  const nextYear = Number(monthlyTemplateImportTarget?.year);
+  monthlyTemplateImportTarget = normalizeMonthlyTemplateImportTarget({
+    ...nextTarget,
+    year: Number.isFinite(nextYear) && nextYear > 2000 ? nextYear : nextTarget.year
+  });
 }
 
 function getHistoricalImportCommunityName() {
@@ -17768,8 +17787,8 @@ function normalizeMonthlyTemplateImportTarget(input = {}) {
 
 function updateMonthlyTemplateImportTargetField(field, value) {
   if (!Object.prototype.hasOwnProperty.call(monthlyTemplateImportTarget, field)) return;
+  monthlyTemplateImportTargetTouched = true;
   monthlyTemplateImportTarget = normalizeMonthlyTemplateImportTarget({ ...monthlyTemplateImportTarget, [field]: value });
-  persistOpsGlobalData();
   renderTab();
 }
 
