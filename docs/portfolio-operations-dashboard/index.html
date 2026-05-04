@@ -850,6 +850,7 @@ let activeTab = 0;
 let reputationData = defaultReputationData();
 let communityPhotoBank = [];
 let marketSurveyData = defaultMarketSurveyData();
+let marketSurveyHistory = {};
 let communityFloorPlans = [];
 let communityAddress = "";
 let communityWebsiteUrl = "";
@@ -885,6 +886,7 @@ let marketSurveyImportLog = [];
 let marketSurveyImportSourceLabel = "";
 let historicalImportTarget = defaultHistoricalImportTarget();
 let latestDlrSummary = defaultDlrSummary();
+let importTracking = defaultImportTracking();
 let atlasPortfolioMap = null;
 let atlasPortfolioMapMarkers = [];
 let portfolioReportMode = "owner";
@@ -1588,6 +1590,55 @@ function normalizeMarketSurveyData(data) {
       }))
       .filter(item => item.name),
     floorPlanRates: normalizeMarketSurveyFloorPlanRates(input.floorPlanRates)
+  };
+}
+
+function normalizeMarketSurveyHistory(data) {
+  const input = (data && typeof data === "object") ? data : {};
+  return Object.fromEntries(
+    Object.entries(input)
+      .filter(([key]) => String(key || "").trim())
+      .map(([key, value]) => [String(key).trim(), normalizeMarketSurveyData(value)])
+  );
+}
+
+function defaultPeriodImportStamp() {
+  return {
+    importedAt: "",
+    sourceFileName: ""
+  };
+}
+
+function normalizePeriodImportStamp(data) {
+  const input = data ?? {};
+  const defaults = defaultPeriodImportStamp();
+  return {
+    importedAt: String(input.importedAt ?? defaults.importedAt).trim(),
+    sourceFileName: String(input.sourceFileName ?? defaults.sourceFileName).trim()
+  };
+}
+
+function normalizePeriodImportMap(data) {
+  const input = (data && typeof data === "object") ? data : {};
+  return Object.fromEntries(
+    Object.entries(input)
+      .filter(([key]) => String(key || "").trim())
+      .map(([key, value]) => [String(key).trim(), normalizePeriodImportStamp(value)])
+  );
+}
+
+function defaultImportTracking() {
+  return {
+    marketSurvey: {},
+    renewals: {}
+  };
+}
+
+function normalizeImportTracking(data) {
+  const input = data ?? {};
+  return {
+    marketSurvey: normalizePeriodImportMap(input.marketSurvey),
+    renewals: normalizePeriodImportMap(input.renewals)
   };
 }
 
@@ -2481,6 +2532,8 @@ function defaultSavedCommunityRecord(propName = getProp().name) {
     reputationData: defaultReputationData(),
     marketSurveyData: defaultMarketSurveyData(),
     latestDlrSummary: defaultDlrSummary(),
+    marketSurveyHistory: {},
+    importTracking: defaultImportTracking(),
     propertyName: prop.name
   };
 }
@@ -2539,6 +2592,8 @@ function normalizeSavedCommunityRecord(propName, data) {
     reputationData: normalizeReputationData(input.reputationData),
     marketSurveyData: normalizeMarketSurveyData(input.marketSurveyData),
     latestDlrSummary: normalizeDlrSummary(input.latestDlrSummary),
+    marketSurveyHistory: normalizeMarketSurveyHistory(input.marketSurveyHistory),
+    importTracking: normalizeImportTracking(input.importTracking),
     financialLedger: (input.financialLedger && typeof input.financialLedger === "object") ? input.financialLedger : {},
     financialUpdatedAt: String(input.financialUpdatedAt ?? ""),
     propertyName: propName
@@ -2580,6 +2635,8 @@ function getCurrentCommunityRecord() {
     reputationData,
     marketSurveyData,
     latestDlrSummary,
+    marketSurveyHistory,
+    importTracking,
     financialLedger,
     financialUpdatedAt
   });
@@ -3323,6 +3380,8 @@ function loadPropertyData(propName) {
   reputationData = d.reputationData;
   marketSurveyData = d.marketSurveyData;
   latestDlrSummary = d.latestDlrSummary;
+  marketSurveyHistory = normalizeMarketSurveyHistory(d.marketSurveyHistory);
+  importTracking = normalizeImportTracking(d.importTracking);
   financialLedger = d.financialLedger;
   financialUpdatedAt = d.financialUpdatedAt;
   renewalImportLog = [];
@@ -6520,9 +6579,13 @@ function renderDashboardDataMigrationPanel() {
 
 function renderPortfolioScopedImportTab() {
   const { details } = getWorkspaceScopedAggregate(getSelectedDashboardMonthIndex());
-  const dlrLoaded = details.filter(detail => hasDlrBoxScoreSnapshot(normalizeDlrBoxScoreSnapshot(detail.record?.latestDlrSummary?.dailyBoxScore))).length;
-  const surveyLoaded = details.filter(detail => hasMarketSurveyData(normalizeMarketSurveyData(detail.record?.marketSurveyData))).length;
-  const renewalLoaded = details.filter(detail => details && detail.record?.monthlyData?.some(entry => Number(entry?.renewalExpirations ?? 0) > 0 || Number(entry?.renewalSigned ?? 0) > 0)).length;
+  const readinessDetails = details.map(detail => ({
+    ...detail,
+    readiness: getImportReadinessStatus(detail.record, getSelectedDashboardMonthIndex())
+  }));
+  const dlrLoaded = readinessDetails.filter(detail => detail.readiness.dlrLoaded).length;
+  const surveyLoaded = readinessDetails.filter(detail => detail.readiness.surveyLoaded).length;
+  const renewalLoaded = readinessDetails.filter(detail => detail.readiness.renewalLoaded).length;
   const marketSurveyLogHTML = marketSurveyImportLog.length > 0
     ? `<div class="alert-green" style="margin-top:12px">${marketSurveyImportLog.map((line, idx) => `<div style="${idx===0?"color:#3fb950;font-weight:600":"color:var(--muted)"}">${escapeHtml(line)}</div>`).join("")}</div>`
     : "";
@@ -6576,10 +6639,10 @@ function renderPortfolioScopedImportTab() {
     <div class="tbl-header"><h2>Import readiness by community</h2><p>APTIQ workbooks can be uploaded in portfolio mode, while DLR box scores and renewal files still open through each community import workspace.</p></div>
     <table>
       <thead><tr><th class="l">Community</th><th>DLR Box Score</th><th>Market Survey</th><th>Renewals</th><th>Action</th></tr></thead>
-      <tbody>${details.map(detail => {
-        const hasDlr = hasDlrBoxScoreSnapshot(normalizeDlrBoxScoreSnapshot(detail.record?.latestDlrSummary?.dailyBoxScore));
-        const hasSurvey = hasMarketSurveyData(normalizeMarketSurveyData(detail.record?.marketSurveyData));
-        const hasRenewal = (detail.record?.monthlyData ?? []).some(entry => Number(entry?.renewalExpirations ?? 0) > 0 || Number(entry?.renewalSigned ?? 0) > 0);
+      <tbody>${readinessDetails.map(detail => {
+        const hasDlr = detail.readiness.dlrLoaded;
+        const hasSurvey = detail.readiness.surveyLoaded;
+        const hasRenewal = detail.readiness.renewalLoaded;
         return `<tr>
           <td class="l" style="font-weight:700">${escapeHtml(detail.name)}</td>
           <td>${hasDlr ? "Loaded" : "Pending"}</td>
@@ -6591,9 +6654,9 @@ function renderPortfolioScopedImportTab() {
     </table>
   </div>`;
   const cardsHtml = `<div class="grid-4">
-    ${statBox("DLR Coverage", `${dlrLoaded}/${details.length}`, "Communities with a saved daily box score", "#4493f8")}
-    ${statBox("Survey Coverage", `${surveyLoaded}/${details.length}`, "Communities with market survey data", "#3fb950")}
-    ${statBox("Renewal Coverage", `${renewalLoaded}/${details.length}`, "Communities with renewal data loaded", "#d29922")}
+    ${statBox("DLR Coverage", `${dlrLoaded}/${details.length}`, isSelectedDashboardMonthCurrentCalendarMonth() ? "Communities refreshed with today's DLR box score" : "Communities with historical DLR support for the selected month", "#4493f8")}
+    ${statBox("Survey Coverage", `${surveyLoaded}/${details.length}`, isSelectedDashboardMonthCurrentCalendarMonth() ? "Communities refreshed this week with market survey data" : "Communities with historical market survey snapshots for the selected month", "#3fb950")}
+    ${statBox("Renewal Coverage", `${renewalLoaded}/${details.length}`, isSelectedDashboardMonthCurrentCalendarMonth() ? "Communities refreshed this week with renewal data" : "Communities with historical renewal data for the selected month", "#d29922")}
     ${statBox("Contacts Loaded", details.filter(detail => normalizeInvestorEmailContacts(detail.record?.investorEmailContacts).length > 0).length, "Communities with report recipients saved", "#a371f7")}
   </div>`;
   return renderPortfolioScopePanel("Portfolio Import Coverage", "A portfolio-level read on data readiness before you export reporting.", cardsHtml, bodyHtml);
@@ -8318,6 +8381,13 @@ function applyRenewalSummaryToMonth(monthIdx, summary) {
   };
 }
 
+function stampRenewalImportForMonth(monthIdx, fileName = "", year = new Date().getFullYear()) {
+  updateCurrentRecordPeriodImportStamp("renewals", buildPeriodKey(monthIdx, year), {
+    importedAt: new Date().toISOString(),
+    sourceFileName: fileName
+  });
+}
+
 async function handleRenewalWorkbook(file) {
   if (typeof XLSX === "undefined") {
     renewalImportLog.push("❌ Renewal workbook parser is unavailable because the XLSX library did not load.");
@@ -8332,6 +8402,7 @@ async function handleRenewalWorkbook(file) {
     const summary = extractRenewalSheetSummary(rows);
     if ([summary.expirations, summary.renewalsSigned, summary.ntv, summary.transfers, summary.undecided, summary.earlyTermination].every(v => v === 0)) return;
     applyRenewalSummaryToMonth(monthIdx, summary);
+    stampRenewalImportForMonth(monthIdx, file.name);
     renewalImportLog.push(`✅ ${file.name} → ${MONTHS[monthIdx]} renewals mapped (${summary.expirations} expirations, ${summary.renewalsSigned} signed, ${summary.undecided} undecided / M2M, ${summary.earlyTermination} early termination).`);
     appliedMonths++;
   });
@@ -8373,6 +8444,7 @@ async function handleRenewalCsv(file) {
       decidedRetentionRate: normalizeWorkbookPercent(headerValue(cols, ["decided_retention_rate"]))
     };
     applyRenewalSummaryToMonth(monthIdx, summary);
+    stampRenewalImportForMonth(monthIdx, file.name);
     appliedMonths++;
   });
   if (appliedMonths === 0) {
@@ -8451,6 +8523,73 @@ function formatSavedTimestampLabel(value) {
     year: "numeric",
     hour: "numeric",
     minute: "2-digit"
+  });
+}
+
+function buildPeriodKey(monthIdx, year = new Date().getFullYear()) {
+  const safeMonth = Math.max(0, Math.min(11, Number(monthIdx) || 0));
+  const safeYear = Number.isFinite(Number(year)) ? Number(year) : new Date().getFullYear();
+  return `${safeYear}-${String(safeMonth + 1).padStart(2, "0")}`;
+}
+
+function getCurrentCalendarPeriodKey() {
+  const now = new Date();
+  return buildPeriodKey(now.getMonth(), now.getFullYear());
+}
+
+function getSelectedDashboardPeriodKey() {
+  return buildPeriodKey(getSelectedDashboardMonthIndex(), new Date().getFullYear());
+}
+
+function parseDateSafe(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isSameLocalCalendarDay(left, right) {
+  return left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth()
+    && left.getDate() === right.getDate();
+}
+
+function startOfBusinessWeek(date) {
+  const base = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const day = base.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  base.setDate(base.getDate() + diff);
+  base.setHours(0, 0, 0, 0);
+  return base;
+}
+
+function isTimestampInCurrentBusinessWeek(value, now = new Date()) {
+  const parsed = parseDateSafe(value);
+  if (!parsed) return false;
+  const weekStart = startOfBusinessWeek(now);
+  const nextWeekStart = new Date(weekStart);
+  nextWeekStart.setDate(nextWeekStart.getDate() + 7);
+  return parsed >= weekStart && parsed < nextWeekStart;
+}
+
+function isSelectedDashboardMonthCurrentCalendarMonth() {
+  const now = new Date();
+  return getSelectedDashboardMonthIndex() === now.getMonth();
+}
+
+function getPeriodImportStamp(record, sectionKey, periodKey) {
+  const tracking = normalizeImportTracking(record?.importTracking);
+  const section = tracking[sectionKey] || {};
+  return normalizePeriodImportStamp(section[periodKey]);
+}
+
+function updateCurrentRecordPeriodImportStamp(sectionKey, periodKey, stampInput = {}) {
+  importTracking = normalizeImportTracking({
+    ...importTracking,
+    [sectionKey]: {
+      ...(importTracking?.[sectionKey] || {}),
+      [periodKey]: normalizePeriodImportStamp(stampInput)
+    }
   });
 }
 
@@ -9675,6 +9814,64 @@ function hasMarketSurveyData(data) {
   );
 }
 
+function buildDlrHistoricalCoverageKey(record, monthIdx, year = new Date().getFullYear()) {
+  const monthEntry = record?.monthlyData?.[monthIdx] ?? {};
+  const summary = normalizeDlrSummary(record?.latestDlrSummary);
+  const boxScore = normalizeDlrBoxScoreSnapshot(summary.dailyBoxScore);
+  const summaryDate = parseDlrSpecificDate(boxScore.reportDateIso || summary.reportDateIso);
+  const summaryMatchesPeriod = !!summaryDate && summaryDate.getMonth() === monthIdx && summaryDate.getFullYear() === year;
+  return Boolean(
+    summaryMatchesPeriod ||
+    Number(monthEntry.occupiedSnapshot ?? 0) > 0 ||
+    Number(monthEntry.leasedSnapshot ?? 0) > 0 ||
+    Number(monthEntry.guestCards ?? 0) > 0 ||
+    Number(monthEntry.tours ?? 0) > 0 ||
+    Number(monthEntry.applications ?? 0) > 0 ||
+    Number(monthEntry.moveIns ?? 0) > 0 ||
+    Number(monthEntry.moveOuts ?? 0) > 0
+  );
+}
+
+function hasRenewalMonthData(entry = {}) {
+  return [
+    entry.renewalExpirations,
+    entry.renewalSigned,
+    entry.renewalNTV,
+    entry.renewalTransfers,
+    entry.renewalUndecided,
+    entry.renewalEarlyTermination
+  ].some(value => Number(value ?? 0) > 0);
+}
+
+function getImportReadinessStatus(record, monthIdx = getSelectedDashboardMonthIndex(), year = new Date().getFullYear()) {
+  const normalizedRecord = normalizeSavedCommunityRecord(record?.propertyName || getProp().name, record);
+  const periodKey = buildPeriodKey(monthIdx, year);
+  const isCurrentMonth = buildPeriodKey(monthIdx, year) === getCurrentCalendarPeriodKey();
+  const dailyBoxScore = normalizeDlrBoxScoreSnapshot(normalizedRecord.latestDlrSummary?.dailyBoxScore);
+  const dailyBoxScoreDate = parseDlrSpecificDate(dailyBoxScore.reportDateIso) || parseDateSafe(dailyBoxScore.importedAt);
+  const dlrLoaded = isCurrentMonth
+    ? !!dailyBoxScoreDate && isSameLocalCalendarDay(dailyBoxScoreDate, new Date())
+    : buildDlrHistoricalCoverageKey(normalizedRecord, monthIdx, year);
+  const surveySnapshot = isCurrentMonth
+    ? normalizeMarketSurveyData(normalizedRecord.marketSurveyData)
+    : normalizeMarketSurveyData(normalizedRecord.marketSurveyHistory?.[periodKey]);
+  const surveyStamp = isCurrentMonth
+    ? normalizePeriodImportStamp({
+        importedAt: surveySnapshot.uploadedAt,
+        sourceFileName: surveySnapshot.sourceFileName
+      })
+    : getPeriodImportStamp(normalizedRecord, "marketSurvey", periodKey);
+  const surveyLoaded = hasMarketSurveyData(surveySnapshot) && (isCurrentMonth ? isTimestampInCurrentBusinessWeek(surveyStamp.importedAt) : !!surveyStamp.importedAt);
+  const renewalEntry = normalizedRecord.monthlyData?.[monthIdx] ?? {};
+  const renewalStamp = getPeriodImportStamp(normalizedRecord, "renewals", periodKey);
+  const renewalLoaded = hasRenewalMonthData(renewalEntry) && (isCurrentMonth ? isTimestampInCurrentBusinessWeek(renewalStamp.importedAt) : true);
+  return {
+    dlrLoaded,
+    surveyLoaded,
+    renewalLoaded
+  };
+}
+
 function applyMarketSurveyDataToProperty(propName, surveyInput) {
   const matchedName = matchPropertyName(propName);
   const known = getAllCommunityNames();
@@ -9716,13 +9913,32 @@ function applyMarketSurveyDataToProperty(propName, surveyInput) {
       ? surveyInput.floorPlanRates
       : existingSurvey.floorPlanRates
   });
+  const periodKey = getSelectedDashboardPeriodKey();
+  const nextHistory = normalizeMarketSurveyHistory({
+    ...record.marketSurveyHistory,
+    [periodKey]: nextSurvey
+  });
+  const nextTracking = normalizeImportTracking({
+    ...record.importTracking,
+    marketSurvey: {
+      ...(record.importTracking?.marketSurvey || {}),
+      [periodKey]: {
+        importedAt: nextSurvey.uploadedAt || new Date().toISOString(),
+        sourceFileName: nextSurvey.sourceFileName || surveyInput.sourceFileName || ""
+      }
+    }
+  });
   const nextRecord = normalizeSavedCommunityRecord(matchedName, {
     ...record,
-    marketSurveyData: nextSurvey
+    marketSurveyData: nextSurvey,
+    marketSurveyHistory: nextHistory,
+    importTracking: nextTracking
   });
   savedData[matchedName] = nextRecord;
   if (matchedName === getProp().name) {
     marketSurveyData = nextSurvey;
+    marketSurveyHistory = nextHistory;
+    importTracking = nextTracking;
   }
   return { matchedName, survey: nextSurvey };
 }
@@ -9872,8 +10088,15 @@ function clearMarketSurveyForCommunities(names, sourceLabel = "selected scope") 
       ? getCurrentCommunityRecord()
       : normalizeSavedCommunityRecord(name, savedData[name]);
     const existingSurvey = normalizeMarketSurveyData(record.marketSurveyData);
+    const periodKey = getSelectedDashboardPeriodKey();
+    const nextHistory = normalizeMarketSurveyHistory(record.marketSurveyHistory);
+    delete nextHistory[periodKey];
+    const nextTracking = normalizeImportTracking(record.importTracking);
+    if (nextTracking.marketSurvey?.[periodKey]) delete nextTracking.marketSurvey[periodKey];
     savedData[name] = normalizeSavedCommunityRecord(name, {
       ...record,
+      marketSurveyHistory: nextHistory,
+      importTracking: nextTracking,
       marketSurveyData: {
         ...defaultMarketSurveyData(),
         rentAdjustmentDirection: existingSurvey.rentAdjustmentDirection,
@@ -9883,6 +10106,8 @@ function clearMarketSurveyForCommunities(names, sourceLabel = "selected scope") 
       }
     });
     if (name === getProp().name) {
+      marketSurveyHistory = nextHistory;
+      importTracking = nextTracking;
       marketSurveyData = normalizeMarketSurveyData({
         ...defaultMarketSurveyData(),
         rentAdjustmentDirection: existingSurvey.rentAdjustmentDirection,
@@ -18246,6 +18471,21 @@ async function processRonaldoFloorPlanSnapshotRows(workbook, fileName = "", opti
       updatedOn: new Date().toISOString(),
       floorPlanRates: row.floorPlanRates
     });
+    const periodKey = buildPeriodKey(targetMonthIdx, forcedTarget.year || new Date().getFullYear());
+    const nextHistory = normalizeMarketSurveyHistory({
+      ...record.marketSurveyHistory,
+      [periodKey]: nextSurvey
+    });
+    const nextTracking = normalizeImportTracking({
+      ...record.importTracking,
+      marketSurvey: {
+        ...(record.importTracking?.marketSurvey || {}),
+        [periodKey]: {
+          importedAt: nextSurvey.uploadedAt || new Date().toISOString(),
+          sourceFileName: nextSurvey.sourceFileName || fileName
+        }
+      }
+    });
     const existingPlans = normalizeCommunityFloorPlans(record.communityFloorPlans);
     const existingByName = new Map(existingPlans.map(plan => [normalizeFloorPlanLookupName(plan.name), plan]));
     const nextPlans = [];
@@ -18266,8 +18506,15 @@ async function processRonaldoFloorPlanSnapshotRows(workbook, fileName = "", opti
     });
     existingByName.forEach(plan => nextPlans.push({ ...plan }));
     record.marketSurveyData = nextSurvey;
+    record.marketSurveyHistory = nextHistory;
+    record.importTracking = nextTracking;
     record.communityFloorPlans = normalizeCommunityFloorPlans(nextPlans);
     savedData[row.property] = normalizeSavedCommunityRecord(row.property, record);
+    if (row.property === getProp().name) {
+      marketSurveyData = nextSurvey;
+      marketSurveyHistory = nextHistory;
+      importTracking = nextTracking;
+    }
   });
   const saveResult = persistSaved();
   if (saveResult?.ok === false) return { rows: [], notes: [`⚠️ ${saveResult.message}`] };
