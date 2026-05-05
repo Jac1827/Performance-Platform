@@ -1284,6 +1284,17 @@ function makeFloorPlanId() {
   return `floorplan_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function makeStableFloorPlanId(prefix, parts = []) {
+  const text = `${prefix}:${parts.map(part => String(part ?? "").trim().toLowerCase()).join("|")}`;
+  let hash = 0;
+  for (let idx = 0; idx < text.length; idx += 1) {
+    hash = ((hash << 5) - hash) + text.charCodeAt(idx);
+    hash |= 0;
+  }
+  const normalizedHash = Math.abs(hash).toString(36);
+  return `${prefix}_${normalizedHash}`;
+}
+
 function defaultCommunityFloorPlans() {
   return [];
 }
@@ -1327,7 +1338,7 @@ function normalizeMarketSurveyFloorPlanRates(data) {
     const beds = Number(row?.beds);
     const baths = Number(row?.baths);
     return {
-      id: String(row?.id || makeFloorPlanId()),
+      id: String(row?.id || makeStableFloorPlanId("survey", [row?.propertyName ?? row?.property ?? "", row?.name ?? row?.planName ?? "", row?.marketRent ?? "", row?.budgetRent ?? "", row?.sqft ?? "", row?.beds ?? "", row?.baths ?? "", row?.sourceSheet ?? ""])),
       name: String(row?.name ?? row?.planName ?? "").trim(),
       marketRent: Number.isFinite(marketRent) && marketRent > 0 ? marketRent : null,
       budgetRent: Number.isFinite(budgetRent) && budgetRent > 0 ? budgetRent : null,
