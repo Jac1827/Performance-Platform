@@ -1340,6 +1340,7 @@ function normalizeCommunityFloorPlans(data) {
     const leasedPct = Number(row?.leasedPct);
     const beds = Number(row?.beds);
     const baths = Number(row?.baths);
+    const units = Number(row?.units);
     return {
       id: getOrCreateFloorPlanRowId(row),
       name: String(row?.name ?? "").trim(),
@@ -1349,7 +1350,8 @@ function normalizeCommunityFloorPlans(data) {
       leasedPct: Number.isFinite(leasedPct) && leasedPct >= 0 ? Math.min(leasedPct, 100) : null,
       marketedRentSource: String(row?.marketedRentSource ?? "").trim(),
       beds: Number.isFinite(beds) && beds >= 0 ? beds : null,
-      baths: Number.isFinite(baths) && baths >= 0 ? baths : null
+      baths: Number.isFinite(baths) && baths >= 0 ? baths : null,
+      units: Number.isFinite(units) && units > 0 ? units : null
     };
   });
 }
@@ -1362,6 +1364,7 @@ function normalizeMarketSurveyFloorPlanRates(data) {
     const sqft = Number(row?.sqft);
     const beds = Number(row?.beds);
     const baths = Number(row?.baths);
+    const units = Number(row?.units);
     return {
       id: buildSurveyFloorPlanRowId(row, index),
       name: String(row?.name ?? row?.planName ?? "").trim(),
@@ -1370,6 +1373,7 @@ function normalizeMarketSurveyFloorPlanRates(data) {
       sqft: Number.isFinite(sqft) && sqft > 0 ? sqft : null,
       beds: Number.isFinite(beds) && beds >= 0 ? beds : null,
       baths: Number.isFinite(baths) && baths >= 0 ? baths : null,
+      units: Number.isFinite(units) && units > 0 ? units : null,
       sourceSheet: String(row?.sourceSheet ?? "").trim()
     };
   });
@@ -1378,6 +1382,49 @@ function normalizeMarketSurveyFloorPlanRates(data) {
 function getCommunityFloorPlanAverageRent(floorPlans = [], field = "budgetRent") {
   const rates = normalizeCommunityFloorPlans(floorPlans);
   return compCalcAverage(rates.map(plan => Number(plan?.[field] ?? 0)));
+}
+
+function getFloorPlanUnitWeight(row = {}) {
+  const units = Number(row?.units);
+  return Number.isFinite(units) && units > 0 ? units : 1;
+}
+
+function calculateWeightedFloorPlanAverage(rows = [], valueAccessor = row => row.marketRent) {
+  let weightedTotal = 0;
+  let weightTotal = 0;
+  (Array.isArray(rows) ? rows : []).forEach(row => {
+    const value = Number(typeof valueAccessor === "function" ? valueAccessor(row) : row?.[valueAccessor]);
+    const weight = getFloorPlanUnitWeight(row);
+    if (!Number.isFinite(value) || value <= 0 || weight <= 0) return;
+    weightedTotal += value * weight;
+    weightTotal += weight;
+  });
+  return weightTotal > 0 ? weightedTotal / weightTotal : 0;
+}
+
+function getCommunityFloorPlanRentMetrics(record = {}, surveyData = null) {
+  const varianceData = buildCommunityFloorPlanVarianceRows(record?.communityFloorPlans, surveyData ?? record?.marketSurveyData);
+  return {
+    rows: varianceData.rows,
+    marketRent: calculateWeightedFloorPlanAverage(varianceData.rows, row => row.marketRent),
+    budgetRent: calculateWeightedFloorPlanAverage(varianceData.rows, row => row.budgetRent)
+  };
+}
+
+function syncCommunityFloorPlanRentMetrics(record = {}, monthIdx = null) {
+  const targetMonth = Number.isInteger(monthIdx)
+    ? Math.max(0, Math.min(11, monthIdx))
+    : Math.max(0, Math.min(11, Number(record?.currentMonth) || getSelectedDashboardMonthIndex()));
+  const metrics = getCommunityFloorPlanRentMetrics(record, record?.marketSurveyData);
+  if (!Array.isArray(record.monthlyData)) record.monthlyData = defaultMonthly();
+  if (!record.monthlyData[targetMonth]) record.monthlyData[targetMonth] = defaultMonthly()[targetMonth];
+  if (metrics.marketRent > 0) {
+    record.monthlyData[targetMonth].marketRent = metrics.marketRent;
+  }
+  if (metrics.budgetRent > 0) {
+    record.monthlyData[targetMonth].proformaRent = metrics.budgetRent;
+  }
+  return metrics;
 }
 
 function getAptiqFloorPlanSourceLabel(record = {}, fallback = "") {
@@ -1439,7 +1486,8 @@ function createEmptyCommunityFloorPlanRow() {
     leasedPct: null,
     marketedRentSource: "",
     beds: null,
-    baths: null
+    baths: null,
+    units: null
   };
 }
 
@@ -1452,6 +1500,11 @@ function persistCurrentCommunityFloorPlans() {
       floorPlanRatesPageUrl
     }, marketSurveyData.floorPlanRates)
   });
+  const currentRecord = getCurrentCommunityRecord();
+  syncCommunityFloorPlanRentMetrics(currentRecord, currentRecord.currentMonth);
+  communityFloorPlans = normalizeCommunityFloorPlans(currentRecord.communityFloorPlans);
+  monthlyData = currentRecord.monthlyData;
+  marketSurveyData = normalizeMarketSurveyData(currentRecord.marketSurveyData);
   savedData[getProp().name] = getCurrentCommunityRecord();
   const savedResult = persistSaved();
   if (savedResult?.ok === false) {
@@ -5115,7 +5168,7 @@ function addCommunityFloorPlanRow() {
 function updateCommunityFloorPlanField(index, field, value) {
   const nextPlans = normalizeCommunityFloorPlans(communityFloorPlans).map(entry => ({ ...entry }));
   while (nextPlans.length <= index) {
-    nextPlans.push({ id: makeFloorPlanId(), name: "", sqft: null, budgetRent: null, marketedRent: null, leasedPct: null, marketedRentSource: "", beds: null, baths: null });
+    nextPlans.push({ id: makeFloorPlanId(), name: "", sqft: null, budgetRent: null, marketedRent: null, leasedPct: null, marketedRentSource: "", beds: null, baths: null, units: null });
   }
   const target = nextPlans[index];
   if (!target) return;
@@ -5123,15 +5176,20 @@ function updateCommunityFloorPlanField(index, field, value) {
     target.name = String(value ?? "").trim();
   } else if (field === "marketedRentSource") {
     target.marketedRentSource = String(value ?? "").trim();
-  } else if (["sqft", "budgetRent", "marketedRent", "beds", "baths", "leasedPct"].includes(field)) {
+  } else if (["sqft", "budgetRent", "marketedRent", "beds", "baths", "leasedPct", "units"].includes(field)) {
     const numeric = Number(value);
     if (field === "leasedPct") {
       target[field] = Number.isFinite(numeric) && numeric >= 0 ? Math.min(numeric, 100) : null;
+    } else if (field === "units") {
+      target[field] = Number.isFinite(numeric) && numeric > 0 ? numeric : null;
     } else {
       target[field] = Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
     }
   }
   communityFloorPlans = nextPlans;
+  const currentRecord = getCurrentCommunityRecord();
+  syncCommunityFloorPlanRentMetrics(currentRecord, currentRecord.currentMonth);
+  monthlyData = currentRecord.monthlyData;
   persistCurrentCommunityFloorPlans();
 }
 
@@ -5143,6 +5201,9 @@ function removeCommunityFloorPlanRow(index) {
     const selected = getFloorPlanSelectionIds("community", getProp().name).filter(id => String(id) !== String(removed.id));
     floorPlanSelectionState.community[getProp().name] = selected;
   }
+  const currentRecord = getCurrentCommunityRecord();
+  syncCommunityFloorPlanRentMetrics(currentRecord, currentRecord.currentMonth);
+  monthlyData = currentRecord.monthlyData;
   persistCurrentCommunityFloorPlans();
 }
 
@@ -5340,6 +5401,7 @@ function deleteSelectedCommunityFloorPlans(propName) {
     return false;
   }
   record.communityFloorPlans = normalizeCommunityFloorPlans(record.communityFloorPlans).filter(plan => !selectedIds.has(String(plan.id || "").trim()));
+  syncCommunityFloorPlanRentMetrics(record, record.currentMonth);
   clearFloorPlanSelection("community", propName);
   persistPortfolioSetupCommunityRecord(propName, record);
   return true;
@@ -5363,6 +5425,7 @@ function deleteSelectedMarketSurveyFloorPlanRates(propName) {
   if (propName === getProp().name) {
     marketSurveyData = record.marketSurveyData;
   }
+  syncCommunityFloorPlanRentMetrics(record, record.currentMonth);
   clearFloorPlanSelection("survey", propName);
   persistPortfolioSetupCommunityRecord(propName, record);
   return true;
@@ -5399,6 +5462,7 @@ function applySelectedCommunityFloorPlanField(propName) {
     return nextPlan;
   });
   record.communityFloorPlans = nextPlans;
+  syncCommunityFloorPlanRentMetrics(record, record.currentMonth);
   persistPortfolioSetupCommunityRecord(propName, record);
   return true;
 }
@@ -5425,9 +5489,13 @@ function applySelectedMarketSurveyFloorPlanField(propName) {
     const nextRate = { ...rate };
     if (field === "name" || field === "sourceSheet") {
       nextRate[field] = String(rawValue ?? "").trim();
-    } else if (["marketRent", "budgetRent", "sqft", "beds", "baths"].includes(field)) {
+    } else if (["marketRent", "budgetRent", "sqft", "beds", "baths", "units"].includes(field)) {
       const numeric = Number(rawValue);
-      nextRate[field] = rawValue.toString().trim() && Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+      if (field === "units") {
+        nextRate[field] = rawValue.toString().trim() && Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+      } else {
+        nextRate[field] = rawValue.toString().trim() && Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+      }
     }
     return nextRate;
   });
@@ -5438,6 +5506,7 @@ function applySelectedMarketSurveyFloorPlanField(propName) {
   if (propName === getProp().name) {
     marketSurveyData = record.marketSurveyData;
   }
+  syncCommunityFloorPlanRentMetrics(record, record.currentMonth);
   persistPortfolioSetupCommunityRecord(propName, record);
   return true;
 }
@@ -5477,7 +5546,8 @@ function importPortfolioCommunityFloorPlansFromSurvey(propName) {
         leasedPct: existing.plan.leasedPct ?? null,
         marketedRentSource: existing.plan.marketedRentSource || String(rate.sourceSheet || "APTIQ survey").trim(),
         beds: existing.plan.beds ?? rate.beds ?? null,
-        baths: existing.plan.baths ?? rate.baths ?? null
+        baths: existing.plan.baths ?? rate.baths ?? null,
+        units: existing.plan.units ?? rate.units ?? null
       };
       return;
     }
@@ -5490,10 +5560,12 @@ function importPortfolioCommunityFloorPlansFromSurvey(propName) {
       leasedPct: null,
       marketedRentSource: String(rate.sourceSheet || "APTIQ survey").trim(),
       beds: rate.beds ?? null,
-      baths: rate.baths ?? null
+      baths: rate.baths ?? null,
+      units: rate.units ?? null
     });
   });
   record.communityFloorPlans = normalizeCommunityFloorPlans(nextPlans);
+  syncCommunityFloorPlanRentMetrics(record, record.currentMonth);
   clearFloorPlanSelection("survey", propName);
   persistPortfolioSetupCommunityRecord(propName, record);
   alert(`✅ Imported ${selectedRates.length} selected APTIQ floor plan${selectedRates.length === 1 ? "" : "s"} into the budget setup for ${matchPropertyName(propName, { fallbackToCurrent: false }) || propName}.`);
@@ -8251,7 +8323,7 @@ function addMarketSurveyFloorPlanRate() {
     ...marketSurveyData,
     floorPlanRates: [
       ...normalizeMarketSurveyFloorPlanRates(marketSurveyData.floorPlanRates),
-      { id: makeFloorPlanId(), name: "", marketRent: null, budgetRent: null, sqft: null, beds: null, baths: null, sourceSheet: "" }
+      { id: makeFloorPlanId(), name: "", marketRent: null, budgetRent: null, sqft: null, beds: null, baths: null, units: null, sourceSheet: "" }
     ]
   });
   renderTab();
@@ -8260,20 +8332,27 @@ function addMarketSurveyFloorPlanRate() {
 function updateMarketSurveyFloorPlanField(index, field, value) {
   const nextRates = normalizeMarketSurveyFloorPlanRates(marketSurveyData.floorPlanRates).map(entry => ({ ...entry }));
   while (nextRates.length <= index) {
-    nextRates.push({ id: makeFloorPlanId(), name: "", marketRent: null, budgetRent: null, sqft: null, beds: null, baths: null, sourceSheet: "" });
+    nextRates.push({ id: makeFloorPlanId(), name: "", marketRent: null, budgetRent: null, sqft: null, beds: null, baths: null, units: null, sourceSheet: "" });
   }
   const target = nextRates[index];
   if (!target) return;
   if (field === "name" || field === "sourceSheet") {
     target[field] = String(value ?? "").trim();
-  } else if (["marketRent", "budgetRent", "sqft", "beds", "baths"].includes(field)) {
+  } else if (["marketRent", "budgetRent", "sqft", "beds", "baths", "units"].includes(field)) {
     const numeric = Number(value);
-    target[field] = Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+    if (field === "units") {
+      target[field] = Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+    } else {
+      target[field] = Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+    }
   }
   marketSurveyData = normalizeMarketSurveyData({
     ...marketSurveyData,
     floorPlanRates: nextRates
   });
+  const currentRecord = getCurrentCommunityRecord();
+  syncCommunityFloorPlanRentMetrics(currentRecord, currentRecord.currentMonth);
+  monthlyData = currentRecord.monthlyData;
   renderTab();
 }
 
@@ -8288,6 +8367,9 @@ function removeMarketSurveyFloorPlanRate(index) {
     const selected = getFloorPlanSelectionIds("survey", getProp().name).filter(id => String(id) !== String(removed.id));
     floorPlanSelectionState.survey[getProp().name] = selected;
   }
+  const currentRecord = getCurrentCommunityRecord();
+  syncCommunityFloorPlanRentMetrics(currentRecord, currentRecord.currentMonth);
+  monthlyData = currentRecord.monthlyData;
   renderTab();
 }
 
@@ -8339,6 +8421,9 @@ function buildCommunityFloorPlanVarianceRows(floorPlans = communityFloorPlans, s
     return {
       ...plan,
       marketRate: match?.rate || null,
+      units: Number.isFinite(Number(plan.units)) && Number(plan.units) > 0
+        ? Number(plan.units)
+        : (Number.isFinite(Number(match?.rate?.units)) && Number(match.rate.units) > 0 ? Number(match.rate.units) : null),
       marketRent: resolvedMarketRent,
       marketSource: resolvedMarketSource,
       variance: Number.isFinite(budgetRent) && budgetRent > 0 && Number.isFinite(resolvedMarketRent) && resolvedMarketRent > 0
@@ -8703,9 +8788,11 @@ function renderOverviewTab() {
   }
 
   // ── NER / Rent roll section ─────────────────────────────────────────────────
-  const floorPlanBudgetAverageRent = getCommunityFloorPlanAverageRent(communityFloorPlans, "budgetRent");
-  const cmMR       = floorPlanBudgetAverageRent > 0 ? floorPlanBudgetAverageRent : (cm.marketRent ?? 0);
-  const cmPFRent   = cm.proformaRent  ?? 0;
+  const floorPlanRentMetrics = getCommunityFloorPlanRentMetrics(getCurrentCommunityRecord(), marketSurveyData);
+  const floorPlanMarketAverageRent = floorPlanRentMetrics.marketRent;
+  const floorPlanBudgetAverageRent = floorPlanRentMetrics.budgetRent;
+  const cmMR       = Number(cm.marketRent) || floorPlanRentMetrics.marketRent || 0;
+  const cmPFRent   = Number(cm.proformaRent) || floorPlanRentMetrics.budgetRent || 0;
   const cmRRTotal  = cm.rentRollTotal ?? 0;
   // nerActual: if a total rent roll $ is entered, derive per-unit NER from it;
   // otherwise fall back to the manually entered per-unit value
@@ -8730,9 +8817,9 @@ function renderOverviewTab() {
     <div class="ner-grid">
       <div style="background:var(--bg3);border:1px solid rgba(68,147,248,0.3);border-radius:8px;padding:12px">
         <div style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.08em;color:#4493f8;font-weight:700;margin-bottom:8px">📊 Market vs Budget Rent</div>
-        <div class="label">Avg Market Rent ($) <span style="font-size:0.62rem;color:var(--muted);font-weight:400">${floorPlanBudgetAverageRent > 0 ? "from floor-plan budget average" : "manual month value"}</span></div>
+        <div class="label">Avg Market Rent ($) <span style="font-size:0.62rem;color:var(--muted);font-weight:400">${floorPlanMarketAverageRent > 0 ? "from floor-plan market average" : "manual month value"}</span></div>
         ${numInp("marketRent", cmMR, `data-idx="${currentMonth}"`, 0, 9999999)}
-        <div class="label">Budget Rent ($)</div>
+        <div class="label">Budget Rent ($) <span style="font-size:0.62rem;color:var(--muted);font-weight:400">${floorPlanBudgetAverageRent > 0 ? "from saved floor-plan budget average" : "manual month value"}</span></div>
         ${numInp("proformaRent", cmPFRent, `data-idx="${currentMonth}"`, 0, 9999999)}
         ${floorPlanBudgetAverageRent > 0 ? `<div style="margin-top:6px;font-size:0.66rem;color:var(--muted)">Auto-pulled from ${communityFloorPlans.filter(plan => Number(plan.budgetRent ?? 0) > 0).length} saved floor-plan budget${communityFloorPlans.filter(plan => Number(plan.budgetRent ?? 0) > 0).length === 1 ? "" : "s"} in Community Setup.</div>` : ""}
         <div style="margin-top:8px;font-size:0.7rem;color:var(--muted)">
@@ -10471,7 +10558,7 @@ function findMarketSurveyFloorPlanHeader(rows) {
     beds: ["beds", "bed", "bedrooms", "bedroom"],
     baths: ["baths", "bath", "bathrooms", "bathroom"]
   };
-  const normalizeHeader = value => String(value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  const normalizeHeader = value => String(value ?? "").toLowerCase().replace(/[_\s]+/g, " ").trim();
   for (let rowIdx = 0; rowIdx < Math.min(rows.length, 80); rowIdx += 1) {
     const row = Array.isArray(rows[rowIdx]) ? rows[rowIdx] : [];
     const headerMap = {};
@@ -10500,6 +10587,7 @@ function findFloorPlanDataHeader(rows = []) {
     const bedsIdx = row.findIndex(cell => cell === "bed count");
     const bathsIdx = row.findIndex(cell => cell === "bath count");
     const sqftIdx = row.findIndex(cell => cell === "sq ft" || cell === "sqft");
+    const unitsIdx = row.findIndex(cell => cell === "total units" || cell === "units" || cell === "rentable units");
     const availableRentIdx = row.findIndex(cell => cell.includes("available asking rent"));
     const leasedRentIdx = row.findIndex(cell => cell.includes("leased asking rent"));
     if (propertyIdx !== -1 && planIdx !== -1 && (availableRentIdx !== -1 || leasedRentIdx !== -1)) {
@@ -10511,6 +10599,7 @@ function findFloorPlanDataHeader(rows = []) {
           beds: bedsIdx !== -1 ? bedsIdx : null,
           baths: bathsIdx !== -1 ? bathsIdx : null,
           sqft: sqftIdx !== -1 ? sqftIdx : null,
+          units: unitsIdx !== -1 ? unitsIdx : null,
           availableMarketRent: availableRentIdx !== -1 ? availableRentIdx : null,
           leasedMarketRent: leasedRentIdx !== -1 ? leasedRentIdx : null
         }
@@ -10539,8 +10628,9 @@ function extractFloorPlanRatesFromFloorPlanDataSheet(rows = [], targetCommunity 
     const sqft = headerInfo.headerMap.sqft != null ? normalizeWorkbookNumber(row[headerInfo.headerMap.sqft]) : null;
     const beds = headerInfo.headerMap.beds != null ? normalizeWorkbookNumber(row[headerInfo.headerMap.beds]) : null;
     const baths = headerInfo.headerMap.baths != null ? normalizeWorkbookNumber(row[headerInfo.headerMap.baths]) : null;
+    const units = headerInfo.headerMap.units != null ? normalizeWorkbookNumber(row[headerInfo.headerMap.units]) : null;
     const marketRent = availableMarketRent || leasedMarketRent || null;
-    const isBlank = !propertyName && !planName && !marketRent && !sqft && !beds && !baths;
+    const isBlank = !propertyName && !planName && !marketRent && !sqft && !beds && !baths && !units;
     if (isBlank) {
       blankRun += 1;
       if (blankRun >= 4 && extracted.length > 0) break;
@@ -10559,6 +10649,7 @@ function extractFloorPlanRatesFromFloorPlanDataSheet(rows = [], targetCommunity 
       sqft: sqft || null,
       beds: beds || null,
       baths: baths || null,
+      units: units || null,
       sourceSheet: "Floor Plan Data"
     });
   }
@@ -10593,6 +10684,9 @@ function findBudgetWorkbookSetUpHeader(rows = []) {
       }
       if (headerMap.displayName == null && (text === "name" || text === "plan name")) {
         headerMap.displayName = colIdx;
+      }
+      if (headerMap.units == null && (text === "# of units" || text === "number of units" || text === "total units" || text === "units")) {
+        headerMap.units = colIdx;
       }
     });
     if (headerMap.unitDescription != null && headerMap.proformaRent != null && headerMap.currentRent != null) {
@@ -10650,7 +10744,8 @@ function extractBudgetWorkbookFloorPlanRates(workbook, fileName = "") {
         const sqft = headerInfo.headerMap.sqft != null ? normalizeWorkbookNumber(row[headerInfo.headerMap.sqft]) : null;
         const beds = headerInfo.headerMap.beds != null ? normalizeWorkbookNumber(row[headerInfo.headerMap.beds]) : null;
         const baths = headerInfo.headerMap.baths != null ? normalizeWorkbookNumber(row[headerInfo.headerMap.baths]) : null;
-        const isBlank = !unitDescription && !displayName && !proformaRent && !currentRent && !sqft && !beds && !baths;
+        const units = headerInfo.headerMap.units != null ? normalizeWorkbookNumber(row[headerInfo.headerMap.units]) : null;
+        const isBlank = !unitDescription && !displayName && !proformaRent && !currentRent && !sqft && !beds && !baths && !units;
         if (isBlank) {
           blankRun += 1;
           if (blankRun >= 4 && nextByKey.size > 0) break;
@@ -10669,6 +10764,7 @@ function extractBudgetWorkbookFloorPlanRates(workbook, fileName = "") {
           sqft: Number.isFinite(sqft) && sqft > 0 ? sqft : null,
           beds: Number.isFinite(beds) && beds >= 0 ? beds : null,
           baths: Number.isFinite(baths) && baths >= 0 ? baths : null,
+          units: Number.isFinite(units) && units > 0 ? units : null,
           sourceSheet: `Set-Up${propertyName ? ` · ${propertyName}` : ""}`
         });
       }
@@ -10682,7 +10778,8 @@ function extractBudgetWorkbookFloorPlanRates(workbook, fileName = "") {
         const row = rateRows[idx] ?? [];
         const unitType = String(row[headerInfo.headerMap.unitType] ?? "").trim();
         const baseRent = headerInfo.headerMap.baseRent != null ? normalizeWorkbookNumber(row[headerInfo.headerMap.baseRent]) : null;
-        const isBlank = !unitType && !baseRent;
+        const units = headerInfo.headerMap.units != null ? normalizeWorkbookNumber(row[headerInfo.headerMap.units]) : null;
+        const isBlank = !unitType && !baseRent && !units;
         if (isBlank) {
           blankRun += 1;
           if (blankRun >= 4 && nextByKey.size > 0) break;
@@ -10695,6 +10792,9 @@ function extractBudgetWorkbookFloorPlanRates(workbook, fileName = "") {
         if (existing) {
           if ((existing.budgetRent == null || existing.budgetRent <= 0) && Number.isFinite(baseRent) && baseRent > 0) {
             existing.budgetRent = baseRent;
+          }
+          if ((existing.units == null || existing.units <= 0) && Number.isFinite(units) && units > 0) {
+            existing.units = units;
           }
           if (!String(existing.sourceSheet || "").includes("Rate Schedule")) {
             existing.sourceSheet = `${existing.sourceSheet || "Set-Up"} / Rate Schedule`;
@@ -10709,6 +10809,7 @@ function extractBudgetWorkbookFloorPlanRates(workbook, fileName = "") {
           sqft: null,
           beds: null,
           baths: null,
+          units: Number.isFinite(units) && units > 0 ? units : null,
           sourceSheet: `Rate Schedule${propertyName ? ` · ${propertyName}` : ""}`
         });
       }
@@ -10756,12 +10857,13 @@ function extractMarketSurveyFloorPlanRates(workbook, targetCommunity = "") {
     let blankRun = 0;
     for (let idx = rowIdx + 1; idx < sheetRows.length; idx += 1) {
       const row = sheetRows[idx] ?? [];
-      const name = String(row[headerMap.name] ?? "").trim();
-      const marketRent = normalizeWorkbookNumber(row[headerMap.marketRent]);
-      const sqft = headerMap.sqft != null ? normalizeWorkbookNumber(row[headerMap.sqft]) : 0;
-      const beds = headerMap.beds != null ? normalizeWorkbookNumber(row[headerMap.beds]) : 0;
-      const baths = headerMap.baths != null ? normalizeWorkbookNumber(row[headerMap.baths]) : 0;
-      const isBlank = !name && !marketRent && !sqft && !beds && !baths;
+    const name = String(row[headerMap.name] ?? "").trim();
+    const marketRent = normalizeWorkbookNumber(row[headerMap.marketRent]);
+    const sqft = headerMap.sqft != null ? normalizeWorkbookNumber(row[headerMap.sqft]) : 0;
+    const beds = headerMap.beds != null ? normalizeWorkbookNumber(row[headerMap.beds]) : 0;
+    const baths = headerMap.baths != null ? normalizeWorkbookNumber(row[headerMap.baths]) : 0;
+    const units = headerMap.units != null ? normalizeWorkbookNumber(row[headerMap.units]) : 0;
+    const isBlank = !name && !marketRent && !sqft && !beds && !baths && !units;
       if (isBlank) {
         blankRun += 1;
         if (blankRun >= 4 && rows.length > 0) break;
@@ -10776,6 +10878,7 @@ function extractMarketSurveyFloorPlanRates(workbook, targetCommunity = "") {
         sqft: sqft || null,
         beds: beds || null,
         baths: baths || null,
+        units: units || null,
         sourceSheet: sheetName
       });
     }
@@ -11231,6 +11334,8 @@ function applyMarketSurveyDataToProperty(propName, surveyInput) {
       : existingSurvey.floorPlanRates
   });
   nextSurvey.floorPlanRates = seedAptiqFloorPlanRatesFromCommunity(record, nextSurvey.floorPlanRates);
+  record.marketSurveyData = nextSurvey;
+  syncCommunityFloorPlanRentMetrics(record, record.currentMonth);
   const periodKey = getSelectedDashboardPeriodKey();
   const nextHistory = normalizeMarketSurveyHistory({
     ...record.marketSurveyHistory,
@@ -11326,6 +11431,7 @@ function applyBudgetWorkbookFloorPlanRatesToProperty(propName, budgetInput, file
   const timestamp = new Date().toISOString();
   record.communityFloorPlans = normalizeCommunityFloorPlans(nextPlans);
   record.marketSurveyData = nextSurvey;
+  syncCommunityFloorPlanRentMetrics(record, record.currentMonth);
   record.financialBudgetLedger = {
     ...(record.financialBudgetLedger && typeof record.financialBudgetLedger === "object" ? record.financialBudgetLedger : {}),
     sourceFileName: String(fileName ?? "").trim(),
@@ -19651,8 +19757,9 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   const currentNer = (Number(monthEntry.rentRollTotal) || 0) > 0 && occupiedUnits > 0
     ? Number(monthEntry.rentRollTotal) / occupiedUnits
     : (Number(monthEntry.nerActual) || 0);
-  const resolvedAvgInPlaceRent = Number(monthEntry.marketRent) || Number(dlrSummary.pricing?.avgInPlaceRent) || 0;
-  const resolvedAvgBudgetRent = Number(monthEntry.proformaRent) || Number(dlrSummary.pricing?.avgBudgetRent) || 0;
+  const floorPlanRentMetrics = getCommunityFloorPlanRentMetrics(record, surveyData);
+  const resolvedAvgInPlaceRent = Number(monthEntry.marketRent) || floorPlanRentMetrics.marketRent || Number(dlrSummary.pricing?.avgInPlaceRent) || 0;
+  const resolvedAvgBudgetRent = Number(monthEntry.proformaRent) || floorPlanRentMetrics.budgetRent || Number(dlrSummary.pricing?.avgBudgetRent) || 0;
   const status = occupancyPct + 0.5 >= budgetOccPct
     ? "On Track"
     : occupancyPct + 2 >= budgetOccPct
