@@ -120,6 +120,15 @@ function getEntityById(id){
   return entities.find(e=>e.id===id)||entities[0];
 }
 
+function getEntityByLabel(label){
+  const normalized=normalizeCommunityLookupName(label||"");
+  if(!normalized)return null;
+  const entities=getEntities();
+  return entities.find(entity=>normalizeCommunityLookupName(entity&&entity.label||"")===normalized)
+    || entities.find(entity=>normalized.includes(normalizeCommunityLookupName(entity&&entity.label||"")) || normalizeCommunityLookupName(entity&&entity.label||"").includes(normalized))
+    || null;
+}
+
 function loadStoredPageState(){
   try{
     const raw=window.localStorage.getItem(STORAGE_KEY);
@@ -644,7 +653,7 @@ function findApprovedBudgetSourceSheetName(workbook){
 
 function buildAnnualBudgetRecordsFromWorkbook(workbook,fileName,entity){
   const meta=extractWorkbookBudgetMeta(workbook);
-  const property=String(entity&&entity.label||meta.property||"").trim();
+  const property=String(meta.property||entity&&entity.label||"").trim();
   if(!property)throw new Error("Could not determine which community this approved budget workbook belongs to.");
   const sourceSheetName=findApprovedBudgetSourceSheetName(workbook);
   if(!sourceSheetName)throw new Error("No budget detail tab was found. Expected a Monthly Budget Detail, Monthly Budget Rpt, Budget Summary Rpt, or Import Sheet tab.");
@@ -731,12 +740,15 @@ async function loadApprovedBudgetFile(file,ent){
     if(typeof XLSX==="undefined")throw new Error("Excel parser is not available on this page.");
     const buffer=await file.arrayBuffer();
     const workbook=XLSX.read(buffer,{type:"array"});
-    const entity=getEntityById(ent);
-    const parsed=buildAnnualBudgetRecordsFromWorkbook(workbook,file.name,entity);
+    const selectedEntity=getEntityById(ent);
+    const parsed=buildAnnualBudgetRecordsFromWorkbook(workbook,file.name,selectedEntity);
+    const workbookEntity=getEntityByLabel(parsed.property)||selectedEntity;
     const approvedAt=new Date().toISOString();
     const batchId=`budget_${Date.now()}`;
     const batchRows=parsed.records.map(record=>normalizeApprovedBudgetRecord({...record,batchId,property:parsed.property},batchId,parsed.property));
-    state.baselineEntity=ent;
+    state.entity=workbookEntity.id;
+    state.uploadEntity=workbookEntity.id;
+    state.baselineEntity=workbookEntity.id;
     replaceApprovedBudgetBatch({
       id:batchId,
       property:parsed.property,
@@ -746,7 +758,7 @@ async function loadApprovedBudgetFile(file,ent){
       uploadedAt:approvedAt,
       rows:batchRows
     });
-    const atlasResult=await applyApprovedBudgetDatasetToAtlasStore(parsed,entity);
+    const atlasResult=await applyApprovedBudgetDatasetToAtlasStore(parsed,workbookEntity);
     state.loading=false;
     state.tab="baseline";
     render();
