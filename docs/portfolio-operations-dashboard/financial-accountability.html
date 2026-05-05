@@ -596,6 +596,16 @@ function readWorkbookSheetPreview(workbook,sheetName,rowLimit=8){
   return XLSX.utils.sheet_to_json(sheet,{header:1,raw:false,defval:""}).slice(0,rowLimit);
 }
 
+function findWorkbookSheetByPriority(workbook,patterns){
+  const sheetNames=Array.isArray(workbook&&workbook.SheetNames)?workbook.SheetNames:[];
+  for(const pattern of Array.isArray(patterns)?patterns:[]){
+    const regex=pattern instanceof RegExp?pattern:new RegExp(String(pattern),"i");
+    const match=sheetNames.find(name=>regex.test(String(name||"")));
+    if(match)return match;
+  }
+  return "";
+}
+
 function sheetLooksLikeApprovedBudget(rows,sheetName){
   const preview=Array.isArray(rows)?rows:[];
   const flattened=preview.flat().map(cell=>String(cell||"").trim()).filter(Boolean);
@@ -617,7 +627,12 @@ function sheetLooksLikeApprovedBudget(rows,sheetName){
 function findApprovedBudgetSourceSheetName(workbook){
   const sheetNames=Array.isArray(workbook&&workbook.SheetNames)?workbook.SheetNames:[];
   if(!sheetNames.length)return"";
-  const preferred=sheetNames.find(name=>/monthly budget detail|monthly budget rpt|budget summary rpt|import sheet/i.test(String(name||"")));
+  const preferred=findWorkbookSheetByPriority(workbook,[
+    /monthly budget detail/i,
+    /monthly budget rpt/i,
+    /budget summary rpt/i,
+    /import sheet/i
+  ]);
   if(preferred)return preferred;
   if(sheetNames.length===1)return sheetNames[0];
   for(const sheetName of sheetNames){
@@ -906,12 +921,17 @@ function parseWorkbook(file){
 if(typeof XLSX==="undefined")throw new Error("Excel parser is not available on this page.");
 return file.arrayBuffer().then(buffer=>{
 const workbook=XLSX.read(buffer,{type:"array"});
-const sheetName=(workbook.SheetNames||[]).find(name=>{
-const sheet=workbook.Sheets[name];
-if(!sheet)return false;
-const rows=XLSX.utils.sheet_to_json(sheet,{header:1,raw:false,defval:""});
-return Array.isArray(rows)&&rows.some(row=>Array.isArray(row)&&row.some(cell=>String(cell||"").trim()!==""));
-})||(workbook.SheetNames||[])[0];
+const sheetName=findWorkbookSheetByPriority(workbook,[
+  /monthly budget detail/i,
+  /monthly budget rpt/i,
+  /budget summary rpt/i,
+  /import sheet/i
+])||((workbook.SheetNames||[]).find(name=>{
+  const sheet=workbook.Sheets[name];
+  if(!sheet)return false;
+  const rows=XLSX.utils.sheet_to_json(sheet,{header:1,raw:false,defval:""});
+  return Array.isArray(rows)&&rows.some(row=>Array.isArray(row)&&row.some(cell=>String(cell||"").trim()!==""));
+})||(workbook.SheetNames||[])[0]);
 if(!sheetName)throw new Error("Workbook has no readable sheets.");
 const rows=XLSX.utils.sheet_to_json(workbook.Sheets[sheetName],{header:1,raw:false,defval:""});
 const csvText=(Array.isArray(rows)?rows:[]).map(row=>(Array.isArray(row)?row:[]).map(cell=>String(cell??""))).map(row=>row.map(cell=>/[,"\n]/.test(cell)?`"${cell.replace(/"/g,'""')}"`:cell).join(",")).join("\n");
