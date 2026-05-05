@@ -10642,6 +10642,7 @@ function extractBudgetWorkbookFloorPlanRates(workbook, fileName = "") {
       let blankRun = 0;
       for (let idx = headerInfo.rowIdx + 1; idx < setupRows.length; idx += 1) {
         const row = setupRows[idx] ?? [];
+        const rowLabel = String(row[0] ?? "").trim();
         const unitDescription = String(row[headerInfo.headerMap.unitDescription] ?? "").trim();
         const displayName = String(row[headerInfo.headerMap.displayName] ?? "").trim();
         const proformaRent = headerInfo.headerMap.proformaRent != null ? normalizeWorkbookNumber(row[headerInfo.headerMap.proformaRent]) : null;
@@ -10656,9 +10657,10 @@ function extractBudgetWorkbookFloorPlanRates(workbook, fileName = "") {
           continue;
         }
         blankRun = 0;
+        if (/^example$/i.test(rowLabel) || /^example$/i.test(unitDescription) || /^example$/i.test(displayName)) continue;
         if (!unitDescription && !displayName) continue;
-        const resolvedName = displayName || unitDescription;
-        const key = normalizeFloorPlanLookupName(resolvedName);
+        const resolvedName = displayName ? `${unitDescription} • ${displayName}` : unitDescription;
+        const key = normalizeFloorPlanLookupName(unitDescription || displayName);
         nextByKey.set(key, {
           id: makeFloorPlanId(),
           name: resolvedName,
