@@ -644,6 +644,7 @@ function normalizeEmployee(employee){
 function normalizePlan(plan){
   return {
     ...plan,
+    updatedAt: String(plan && (plan.updatedAt || plan.createdAt) || today()),
     actionItems: Array.isArray(plan && plan.actionItems) ? plan.actionItems : [],
     linkedWriteupIds: Array.isArray(plan && plan.linkedWriteupIds) ? plan.linkedWriteupIds : [],
     linkedCallReviewIds: Array.isArray(plan && plan.linkedCallReviewIds) ? plan.linkedCallReviewIds : [],
@@ -679,6 +680,7 @@ function normalizeWriteup(writeup){
     id: String(writeup && writeup.id || fallbackId('wu')),
     employeeId: String(writeup && writeup.employeeId || ''),
     createdAt: String(writeup && writeup.createdAt || today()),
+    updatedAt: String(writeup && (writeup.updatedAt || writeup.createdAt || writeup.date) || today()),
     date: String(writeup && writeup.date || today()),
     incidentDate: String(writeup && writeup.incidentDate || ''),
     level: String(writeup && writeup.level || 'documented_conversation'),
@@ -919,6 +921,120 @@ async function verifyPerformanceSharedSyncConnection(){
   }
 }
 
+function safeJsonParse(value, fallback){
+  try{
+    return JSON.parse(value);
+  }catch(err){
+    return fallback;
+  }
+}
+
+function localPlatformDataLooksEmpty(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(!raw) return true;
+    const parsed = safeJsonParse(raw, null);
+    if(!parsed || typeof parsed !== 'object') return true;
+    const plans = Array.isArray(parsed.plans) ? parsed.plans : [];
+    const employees = Array.isArray(parsed.employees) ? parsed.employees : [];
+    const writeups = Array.isArray(parsed.writeups) ? parsed.writeups : [];
+    return plans.length === 0 && employees.length === 0 && writeups.length === 0;
+  }catch(err){
+    return true;
+  }
+}
+
+function bestRecordTimestamp(record, fallbackValue){
+  const candidates = [
+    record && record.updatedAt,
+    record && record.createdAt,
+    record && record.date,
+    record && record.incidentDate
+  ].filter(Boolean);
+  const parsed = candidates.map(value => Date.parse(String(value) || '')).filter(ts => Number.isFinite(ts));
+  if(parsed.length) return Math.max(...parsed);
+  const fallback = Date.parse(String(fallbackValue || '')) || 0;
+  return Number.isFinite(fallback) ? fallback : 0;
+}
+
+function mergeById(localItems, remoteItems, fallbackDate){
+  const merged = new Map();
+  (Array.isArray(remoteItems) ? remoteItems : []).forEach(item => {
+    if(!item || !item.id) return;
+    merged.set(String(item.id), item);
+  });
+  (Array.isArray(localItems) ? localItems : []).forEach(item => {
+    if(!item || !item.id) return;
+    const id = String(item.id);
+    const existing = merged.get(id);
+    if(!existing){
+      merged.set(id, item);
+      return;
+    }
+    const nextTs = bestRecordTimestamp(item, fallbackDate);
+    const existingTs = bestRecordTimestamp(existing, fallbackDate);
+    merged.set(id, nextTs >= existingTs ? item : existing);
+  });
+  return [...merged.values()];
+}
+
+function mergePerformancePlatformPayload(localRaw, remoteRaw){
+  const localParsed = safeJsonParse(localRaw, {});
+  const remoteParsed = safeJsonParse(remoteRaw, {});
+  const baseDate = new Date().toISOString();
+
+  const localUsers = Array.isArray(localParsed.users) ? localParsed.users.map(normalizeUser) : [];
+  const remoteUsers = Array.isArray(remoteParsed.users) ? remoteParsed.users.map(normalizeUser) : [];
+  const users = ensureAdminAccess(mergeById(localUsers, remoteUsers, baseDate));
+
+  const employees = mergeById(
+    Array.isArray(localParsed.employees) ? localParsed.employees.map(normalizeEmployee) : [],
+    Array.isArray(remoteParsed.employees) ? remoteParsed.employees.map(normalizeEmployee) : [],
+    baseDate
+  );
+
+  const plans = mergeById(
+    Array.isArray(localParsed.plans) ? localParsed.plans.map(normalizePlan) : [],
+    Array.isArray(remoteParsed.plans) ? remoteParsed.plans.map(normalizePlan) : [],
+    baseDate
+  );
+
+  const writeups = mergeById(
+    Array.isArray(localParsed.writeups) ? localParsed.writeups.map(normalizeWriteup) : [],
+    Array.isArray(remoteParsed.writeups) ? remoteParsed.writeups.map(normalizeWriteup) : [],
+    baseDate
+  );
+
+  const correspondence = mergeById(
+    Array.isArray(localParsed.correspondence) ? localParsed.correspondence.map(normalizeCorrespondence) : [],
+    Array.isArray(remoteParsed.correspondence) ? remoteParsed.correspondence.map(normalizeCorrespondence) : [],
+    baseDate
+  );
+
+  const employeeEvents = mergeById(
+    Array.isArray(localParsed.employeeEvents) ? localParsed.employeeEvents.map(normalizeEmployeeEvent) : [],
+    Array.isArray(remoteParsed.employeeEvents) ? remoteParsed.employeeEvents.map(normalizeEmployeeEvent) : [],
+    baseDate
+  );
+
+  // Settings and rosterVersion are treated as last-writer-wins; prefer local if present.
+  const settings = normalizeSettings(localParsed.settings || remoteParsed.settings || {});
+  const rosterVersion = String(localParsed.rosterVersion || remoteParsed.rosterVersion || '');
+  const currentView = String(localParsed.currentView || remoteParsed.currentView || 'dashboard');
+
+  return JSON.stringify({
+    users,
+    settings,
+    employees,
+    plans,
+    writeups,
+    correspondence,
+    employeeEvents,
+    rosterVersion,
+    currentView
+  });
+}
+
 async function pullPerformanceSharedState({ silent = false, applyRemoteIfNewer = true } = {}){
   try{
     const response = await fetch(`${PERFORMANCE_SHARED_SYNC_ENDPOINT}?scope=${encodeURIComponent(PERFORMANCE_SHARED_SYNC_SCOPE)}`, { method:'GET' });
@@ -935,7 +1051,8 @@ async function pullPerformanceSharedState({ silent = false, applyRemoteIfNewer =
     const incomingUpdatedAt = String(record.updatedAt || '');
     const incomingTs = Date.parse(incomingUpdatedAt) || 0;
     const appliedTs = Date.parse(performanceSharedSyncMeta.lastAppliedAt || '') || 0;
-    if(applyRemoteIfNewer && incomingTs > appliedTs){
+    const localEmpty = localPlatformDataLooksEmpty();
+    if(applyRemoteIfNewer && (incomingTs > appliedTs || localEmpty)){
       Object.entries(record.payload.keys).forEach(([key, rawValue]) => {
         try{
           localStorage.setItem(String(key), typeof rawValue === 'string' ? rawValue : JSON.stringify(rawValue));
@@ -960,7 +1077,27 @@ async function pullPerformanceSharedState({ silent = false, applyRemoteIfNewer =
 
 async function pushPerformanceSharedState({ silent = false, source = 'manual' } = {}){
   try{
-    const bundle = buildPerformancePlatformStorageBundle();
+    // To avoid overwriting other users' work, pull the latest remote snapshot and merge it with
+    // the local browser state before pushing an updated combined dataset back to the cloud.
+    const localBundle = buildPerformancePlatformStorageBundle();
+    let mergedKeys = {...(localBundle && localBundle.keys ? localBundle.keys : {})};
+    try{
+      const response = await fetch(`${PERFORMANCE_SHARED_SYNC_ENDPOINT}?scope=${encodeURIComponent(PERFORMANCE_SHARED_SYNC_SCOPE)}`, { method:'GET' });
+      if(response.ok){
+        const payload = await response.json().catch(() => ({}));
+        const record = payload?.record || null;
+        const remoteKeys = record && record.payload && record.payload.keys ? record.payload.keys : null;
+        if(remoteKeys && typeof remoteKeys === 'object'){
+          const remotePlatformRaw = typeof remoteKeys[STORAGE_KEY] === 'string' ? remoteKeys[STORAGE_KEY] : JSON.stringify(remoteKeys[STORAGE_KEY] || {});
+          const localPlatformRaw = typeof mergedKeys[STORAGE_KEY] === 'string' ? mergedKeys[STORAGE_KEY] : JSON.stringify(mergedKeys[STORAGE_KEY] || {});
+          const mergedPlatformRaw = mergePerformancePlatformPayload(localPlatformRaw, remotePlatformRaw);
+          mergedKeys = {...remoteKeys, ...mergedKeys, [STORAGE_KEY]: mergedPlatformRaw};
+        }
+      }
+    }catch(err){
+      // If remote merge fails, we still attempt a push with local state rather than silently dropping saves.
+    }
+    const bundle = {...localBundle, keys: mergedKeys};
     const response = await fetch(PERFORMANCE_SHARED_SYNC_ENDPOINT, {
       method:'POST',
       body: JSON.stringify({
@@ -3922,6 +4059,7 @@ function buildPlanFromForm(){
     shopDate: isCallReview ? '' : document.getElementById('np-shop-date').value,
     reviewDate,
     createdAt: today(),
+    updatedAt: today(),
     manager: document.getElementById('np-manager').value.trim() || (employee ? managerDisplayName(employee) : '') || 'Manager Name',
     notes: document.getElementById('np-notes').value.trim(),
     overallScore: isCallReview ? null : numberOrNull('np-overall'),
@@ -6225,6 +6363,7 @@ function buildWriteupFromForm(){
     id: genId(),
     employeeId,
     createdAt: today(),
+    updatedAt: today(),
     date: document.getElementById('wu-date').value || today(),
     incidentDate: document.getElementById('wu-incident-date').value || '',
     level: document.getElementById('wu-level').value,
@@ -6425,6 +6564,7 @@ function saveEditedWriteup(writeupId){
   writeup.expectations = String(document.getElementById('edit-wu-expectations').value || '').trim();
   writeup.correctiveAction = String(document.getElementById('edit-wu-corrective-action').value || '').trim();
   writeup.consequences = String(document.getElementById('edit-wu-consequences').value || '').trim();
+  writeup.updatedAt = today();
   saveState();
   closeModal();
   render();
@@ -6445,6 +6585,7 @@ async function handleSavedWriteupAcknowledgementUpload(writeupId, event){
     writeup.acknowledgementData = await readFileAsDataUrl(file);
     writeup.acknowledgementName = file.name;
     writeup.acknowledgementDate = today();
+    writeup.updatedAt = today();
     saveState();
     if(status) status.innerHTML = `<div class="alert alert-success">${escapeHtml(file.name)} saved to the write-up record.</div>`;
     setTimeout(() => {
@@ -7857,6 +7998,7 @@ function approvePlanByHr(planId){
   const approvalDateField = document.getElementById('hr-approve-date');
   plan.hrApprovedAt = approvalDateField ? (approvalDateField.value || today()) : today();
   plan.hrApprovedBy = STATE.currentUser.name;
+  plan.updatedAt = today();
 
   const correspondence = logCorrespondence({
     employeeId: employee ? employee.id : '',
@@ -8224,6 +8366,7 @@ function saveEditedPlan(planId){
   }else{
     plan.consequences = true;
   }
+  plan.updatedAt = today();
 
   saveState();
   closeModal();
@@ -8295,6 +8438,7 @@ function confirmPresentation(planId){
     return;
   }
   plan.presentedAt = value;
+  plan.updatedAt = today();
   if(!plan.meetings) plan.meetings = [];
   const initialMeeting = {
     schedIdx: 0,
@@ -8368,6 +8512,7 @@ function handleSignedUpload(planId, event){
     plan.signedDocData = loadEvent.target.result;
     plan.signedDocName = file.name;
     plan.signedDocDate = today();
+    plan.updatedAt = today();
     saveState();
     const status = document.getElementById('signed-upload-status');
     if(status) status.innerHTML = '<div class="alert alert-success">Signed document saved: <strong>' + escapeHtml(file.name) + '</strong></div>';
@@ -8411,12 +8556,14 @@ function markComplete(planId){
     plan.status = 'shop_ordered';
     plan.completedAt = today();
     plan.shopOrderedAt = today();
+    plan.updatedAt = today();
     saveState();
     openTeaShopOrderEmail(plan);
   }else{
     if(!confirm('Mark this plan as completed?')) return;
     plan.status = 'completed';
     plan.completedAt = today();
+    plan.updatedAt = today();
     saveState();
   }
   render();
