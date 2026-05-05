@@ -3337,11 +3337,14 @@ function getLeadSourceBreakdown(monthEntry = {}) {
 
 function getLeadSourceTotal(monthEntry = {}) {
   const explicitGuestCards = Math.max(0, Number(monthEntry.guestCards) || 0);
-  if (explicitGuestCards > 0) return explicitGuestCards;
   const sources = getLeadSourceBreakdown(monthEntry);
   const sourceTotal = Object.values(sources).reduce((sum, value) => sum + value, 0);
-  if (sourceTotal > 0) return sourceTotal;
-  return explicitGuestCards;
+  // Prefer the fuller rollup when Ronaldo source buckets are present so the
+  // monthly guest-card total does not undercount a partial explicit value.
+  if (sourceTotal > 0 || explicitGuestCards > 0) {
+    return Math.max(explicitGuestCards, sourceTotal);
+  }
+  return 0;
 }
 
 function getApplicationDecisionMetrics(monthEntry = {}) {
