@@ -3827,7 +3827,7 @@ function loadPropertyData(propName) {
   renewalImportLog = [];
   renewalImportSourceLabel = "";
   historicalImportTarget = normalizeHistoricalImportTarget({
-    community: historicalImportTarget.community || propName,
+    community: propName,
     month: importMonthOverride,
     year: historicalImportTarget.year
   });
@@ -14838,6 +14838,15 @@ function getHistoricalImportCommunityName() {
   return matched || getProp().name;
 }
 
+function getDlrReportCommunityName() {
+  const workspaceCommunity = isPortfolioWorkspaceSelected() ? "" : getProp().name;
+  const matchedWorkspace = matchPropertyName(workspaceCommunity, { fallbackToCurrent: false });
+  if (matchedWorkspace) return matchedWorkspace;
+  const matchedHistorical = matchPropertyName(historicalImportTarget.community, { fallbackToCurrent: false });
+  if (matchedHistorical) return matchedHistorical;
+  return getProp().name;
+}
+
 function getHistoricalImportMonthIndex() {
   return Number.isInteger(historicalImportTarget.month) ? historicalImportTarget.month : Number(historicalImportTarget.month ?? importMonthOverride ?? DEFAULT_CURRENT_MONTH);
 }
@@ -18990,7 +18999,7 @@ function resolveDlrSummaryUnits(summary, totalUnits, metric = "occupied") {
   return null;
 }
 
-function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommunityName(), monthIdx = getHistoricalImportMonthIndex(), year = getHistoricalImportYear()) {
+function buildDashboardDlrInvestorOverview(propName = getDlrReportCommunityName(), monthIdx = getHistoricalImportMonthIndex(), year = getHistoricalImportYear()) {
   const communityName = matchPropertyName(propName, { fallbackToCurrent: false }) || getProp().name;
   const record = getCommunityRecordForScope(communityName);
   const surveyData = normalizeMarketSurveyData(record.marketSurveyData);
