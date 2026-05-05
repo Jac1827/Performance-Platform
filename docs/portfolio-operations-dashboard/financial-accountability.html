@@ -23,6 +23,7 @@ const OPS_PROPERTY_CATALOG_KEY="rise_ops_property_catalog_v1";
 const ATLAS_STATE_DB_NAME="atlas_rise_state_v1";
 const ATLAS_STATE_STORE_NAME="records";
 const ATLAS_STATE_COMMUNITY_KEY="community_data";
+const ATLAS_STATE_APPROVED_BUDGET_KEY="approved_budget_data";
 const APPROVED_BUDGET_STORAGE_KEY="rise_financial_accountability_approved_budgets_v1";
 const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const FULL_MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -173,10 +174,21 @@ function persistPageState(){
   }catch(_error){}
 }
 
-function persistApprovedBudgetState(){
+async function loadAtlasApprovedBudgetState(){
+  try{
+    const stored=await atlasStateGetValue(ATLAS_STATE_APPROVED_BUDGET_KEY);
+    if(stored&&typeof stored==="object")return normalizeApprovedBudgetState(stored);
+  }catch(_error){}
+  return normalizeApprovedBudgetState(null);
+}
+
+async function persistApprovedBudgetState(){
   try{
     state.approvedBudgets=normalizeApprovedBudgetState(state.approvedBudgets);
     window.localStorage.setItem(APPROVED_BUDGET_STORAGE_KEY,JSON.stringify(state.approvedBudgets));
+  }catch(_error){}
+  try{
+    await atlasStateSetValue(ATLAS_STATE_APPROVED_BUDGET_KEY,state.approvedBudgets);
   }catch(_error){}
 }
 
@@ -350,7 +362,7 @@ function getApprovedBudgetRowsForBatch(batchId){
   return archivedBatch&&Array.isArray(archivedBatch.rows)?archivedBatch.rows:[];
 }
 
-function archiveApprovedBudgetBatch(property,batchId){
+async function archiveApprovedBudgetBatch(property,batchId){
   state.approvedBudgets=normalizeApprovedBudgetState(state.approvedBudgets);
   const propertyKey=normalizeCommunityLookupName(property||"");
   const batches=Array.isArray(state.approvedBudgets.batches)?state.approvedBudgets.batches:[];
@@ -363,17 +375,17 @@ function archiveApprovedBudgetBatch(property,batchId){
   state.approvedBudgets.batches=batches.filter(batch=>String(batch&&batch.id||"")!==String(target.id));
   state.approvedBudgets.records=(state.approvedBudgets.records||[]).filter(row=>String(row&&row.batchId||"")!==String(target.id));
   state.approvedBudgets.updatedAt=new Date().toISOString();
-  persistApprovedBudgetState();
+  await persistApprovedBudgetState();
   return true;
 }
 
-function replaceApprovedBudgetBatch(batch){
+async function replaceApprovedBudgetBatch(batch){
   state.approvedBudgets=normalizeApprovedBudgetState(state.approvedBudgets);
   const normalizedBatch=buildApprovedBudgetBatchSummary(batch);
   const propertyKey=normalizeCommunityLookupName(normalizedBatch.property||"");
   const existing=getApprovedBudgetCurrentBatch(normalizedBatch.property);
   if(existing){
-    archiveApprovedBudgetBatch(existing.property,existing.id);
+    await archiveApprovedBudgetBatch(existing.property,existing.id);
     state.approvedBudgets=normalizeApprovedBudgetState(state.approvedBudgets);
   }
   state.approvedBudgets.records=[
@@ -385,7 +397,7 @@ function replaceApprovedBudgetBatch(batch){
     normalizedBatch
   ];
   state.approvedBudgets.updatedAt=new Date().toISOString();
-  persistApprovedBudgetState();
+  await persistApprovedBudgetState();
   return normalizedBatch;
 }
 
@@ -531,10 +543,16 @@ function applyIncomingAtlasContext(){
 
 async function hydrateApprovedBudgetsFromAtlas(){
   try{
+    const storedAtlas=await loadAtlasApprovedBudgetState();
+    if((storedAtlas.records&&storedAtlas.records.length)||(storedAtlas.batches&&storedAtlas.batches.length)||(storedAtlas.archivedBatches&&storedAtlas.archivedBatches.length)){
+      state.approvedBudgets=storedAtlas;
+      await persistApprovedBudgetState();
+      return;
+    }
     const storedLocal=normalizeApprovedBudgetState(loadStoredApprovedBudgets());
     if((storedLocal.records&&storedLocal.records.length)||(storedLocal.batches&&storedLocal.batches.length)||(storedLocal.archivedBatches&&storedLocal.archivedBatches.length)){
       state.approvedBudgets=storedLocal;
-      persistApprovedBudgetState();
+      await persistApprovedBudgetState();
       return;
     }
     const store=await loadAtlasCommunityStore();
@@ -558,7 +576,7 @@ async function hydrateApprovedBudgetsFromAtlas(){
     });
     if(records.length){
       state.approvedBudgets=normalizeApprovedBudgetState({records,updatedAt:new Date().toISOString()});
-      persistApprovedBudgetState();
+      await persistApprovedBudgetState();
       return;
     }
   }catch(_error){}
@@ -749,7 +767,7 @@ async function loadApprovedBudgetFile(file,ent){
     state.entity=workbookEntity.id;
     state.uploadEntity=workbookEntity.id;
     state.baselineEntity=workbookEntity.id;
-    replaceApprovedBudgetBatch({
+    await replaceApprovedBudgetBatch({
       id:batchId,
       property:parsed.property,
       sourceFileName:file.name,
@@ -1954,7 +1972,7 @@ if(compareFileInput)compareFileInput.click();
 const baselineEntSel=document.getElementById("baselineEntSel");
 if(baselineEntSel)baselineEntSel.addEventListener("change",()=>{state.baselineEntity=baselineEntSel.value;render();});
 const archiveBudgetBtn=document.getElementById("archiveBudgetBtn");
-if(archiveBudgetBtn)archiveBudgetBtn.addEventListener("click",()=>{const target=getApprovedBudgetCurrentBatch((getEntityById(state.baselineEntity||state.entity)||{}).label);if(target&&archiveApprovedBudgetBatch(target.property,target.id)){render();}});
+if(archiveBudgetBtn)archiveBudgetBtn.addEventListener("click",async()=>{const target=getApprovedBudgetCurrentBatch((getEntityById(state.baselineEntity||state.entity)||{}).label);if(target&&await archiveApprovedBudgetBatch(target.property,target.id)){render();}});
 const openBudgetCompareBtn=document.getElementById("openBudgetCompareBtn");
 if(openBudgetCompareBtn)openBudgetCompareBtn.addEventListener("click",()=>{state.compareMode="actual_vs_baseline";state.tab="compare";render();});
 document.querySelectorAll(".compareArchivedBudgetBtn").forEach(btn=>btn.addEventListener("click",()=>{state.compareMode="baseline_yoy";state.compareArchivedBudgetId=btn.dataset.id||null;state.tab="compare";render();}));
