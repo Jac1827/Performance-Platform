@@ -878,17 +878,24 @@ function renameDatasetInState(entityId,datasetId,newName){
 function getCommunityBudgetWatchItems(entityId){
   const ds=getLatestDatasetForEntity(entityId);
   if(!ds||!Array.isArray(ds.rows)||!ds.rows.length)return null;
-  const enrichedRows=enrich(ds.rows);
+  const enrichedRows=enrich(ds.rows,ds);
   const summary=getSummary(enrichedRows);
   if(!summary)return null;
+  const actionRows=[
+    ...enrichedRows.filter(row=>!row.isIncome&&row.status==="over"),
+    ...enrichedRows.filter(row=>row.isIncome&&row.status==="under")
+  ]
+    .sort((a,b)=>Math.abs(b.yVar||0)-Math.abs(a.yVar||0))
+    .slice(0,4)
+    .map(row=>buildManagerAlert(row,ds));
   const overRows=enrichedRows
     .filter(row=>!row.isIncome&&row.status==="over")
     .sort((a,b)=>(b.yVar||0)-(a.yVar||0))
-    .slice(0,2);
+    .slice(0,3);
   const underRows=enrichedRows
     .filter(row=>row.isIncome&&row.status==="under")
     .sort((a,b)=>(a.yVar||0)-(b.yVar||0))
-    .slice(0,2);
+    .slice(0,3);
   const overSections=(summary.ss||[])
     .filter(section=>section.overCount>0)
     .sort((a,b)=>b.overCount-a.overCount)
@@ -898,7 +905,8 @@ function getCommunityBudgetWatchItems(entityId){
     summary,
     overRows,
     underRows,
-    overSections
+    overSections,
+    actionRows
   };
 }
 
@@ -953,6 +961,112 @@ return parseCSV(csvText);
 
 function getSt(a,b,inc){if(!b)return"on";if(inc)return a/b>=1?"on":a/b>=.9?"watch":"under";const r=a/b;return r<=1?"on":r<=1.1?"watch":"over";}
 
+function getDatasetPeriodKey(dataset){
+  return normalizeFinancialPeriodKey(dataset&&dataset.period||dataset&&dataset.name||"");
+}
+
+function getElapsedMonthsForDataset(dataset){
+  const periodKey=getDatasetPeriodKey(dataset);
+  const month=Number(String(periodKey).slice(5,7));
+  return month&&month>=1&&month<=12?month:12;
+}
+
+function getExpectedBudgetUsagePct(dataset){
+  return (getElapsedMonthsForDataset(dataset)/12)*100;
+}
+
+function getAlertProfile(row){
+  const token=`${row&&row.section||""} ${row&&row.name||""} ${row&&row.gl||""}`.toLowerCase();
+  if(row&&row.isIncome){
+    if(/rent|rental|lease/.test(token))return{category:"Revenue",action:"Protect rate, collections, and occupancy conversion this month.",watchFactor:.98,criticalFactor:.95,recoveryPct:.75};
+    if(/concession/.test(token))return{category:"Pricing",action:"Tighten concession approvals and reset quote discipline.",watchFactor:.97,criticalFactor:.94,recoveryPct:.6};
+    if(/bad debt|delin/.test(token))return{category:"Collections",action:"Escalate collections, payment plans, and skip-risk follow up immediately.",watchFactor:.98,criticalFactor:.94,recoveryPct:.7};
+    return{category:"Revenue",action:"Recover revenue leakage before next close.",watchFactor:.98,criticalFactor:.95,recoveryPct:.55};
+  }
+  if(/payroll|overtime|bonus|temp|contract labor/.test(token))return{category:"Labor",action:"Reset staffing/overtime approvals and require weekly labor variance review.",watchFactor:1.03,criticalFactor:1.08,clawbackPct:.5};
+  if(/repair|maintenance|turn|make ready|suppl/.test(token))return{category:"R&M",action:"Gate high-cost work orders and tighten make-ready scope approval.",watchFactor:1.04,criticalFactor:1.1,clawbackPct:.45};
+  if(/utilit|water|electric|gas|trash|sewer/.test(token))return{category:"Utilities",action:"Audit site consumption, leaks, and vacant-unit utility controls.",watchFactor:1.04,criticalFactor:1.08,clawbackPct:.2};
+  if(/marketing|advertis|resident retention|locator/.test(token))return{category:"Marketing",action:"Reallocate spend to channels converting to signed leases.",watchFactor:1.03,criticalFactor:1.08,clawbackPct:.35};
+  if(/admin|office|travel|training/.test(token))return{category:"G&A",action:"Freeze discretionary spend until the variance normalizes.",watchFactor:1.02,criticalFactor:1.06,clawbackPct:.4};
+  return{category:"Expense",action:"Require variance approval before month-end close.",watchFactor:1.04,criticalFactor:1.08,clawbackPct:.25};
+}
+
+function buildManagerAlert(row,dataset){
+  const profile=getAlertProfile(row);
+  const expectedPct=getExpectedBudgetUsagePct(dataset);
+  const paceGap=(row&&row.budgetPctUsed||0)-expectedPct;
+  const variance=Math.abs(Number(row&&row.yVar||0));
+  const severity=row&&row.isIncome
+    ? ((row&&row.status)==="under"&&variance>Math.max(5000,Math.abs(Number(row&&row.yBud||0))*.12)?"danger":"warning")
+    : ((row&&row.status)==="over"&&paceGap>10?"danger":(row&&row.status)==="over"?"warning":"info");
+  const reason=row&&row.isIncome
+    ? `Revenue is ${f$(variance)} below budget and pacing ${(row&&row.budgetPctUsed||0).toFixed(1)}% of annual target through ${getElapsedMonthsForDataset(dataset)}/12 months.`
+    : `Spend is ${f$(variance)} over budget and pacing ${(row&&row.budgetPctUsed||0).toFixed(1)}% of annual plan versus ${(expectedPct).toFixed(1)}% expected.`;
+  const recovery=row&&row.isIncome
+    ? `Need ${f$(Math.max(0,Number(row&&row.yBud||0)-Number(row&&row.yAct||0)))} of recovered revenue to get back on plan.`
+    : `Projected year-end run rate is ${f$(row&&row.projEOY||0)} versus ${f$(row&&row.annBud||0)} annual plan.`;
+  return{
+    severity,
+    gl:row&&row.gl||"",
+    name:row&&row.name||"",
+    category:profile.category,
+    action:profile.action,
+    reason,
+    recovery
+  };
+}
+
+function buildThresholdPlanRows(entityId){
+  const dataset=getLatestDatasetForEntity(entityId);
+  if(!dataset||!Array.isArray(dataset.rows)||!dataset.rows.length)return[];
+  const elapsedMonths=getElapsedMonthsForDataset(dataset);
+  return enrich(dataset.rows,dataset)
+    .filter(row=>Math.abs(Number(row&&row.annBud||0))>2500||Math.abs(Number(row&&row.yAct||0))>2500)
+    .map(row=>{
+      const profile=getAlertProfile(row);
+      const projected=Math.max(0,Number(row&&row.projEOY||0));
+      const annualBudget=Math.max(0,Number(row&&row.annBud||0));
+      const gap=row.isIncome?Math.max(0,annualBudget-projected):Math.max(0,projected-annualBudget);
+      const recommendedAnnual=row.isIncome
+        ? projected + gap*profile.recoveryPct
+        : projected - gap*profile.clawbackPct;
+      const recommendedMonthly=recommendedAnnual/12;
+      const watchMonthly=row.isIncome?recommendedMonthly*profile.watchFactor:recommendedMonthly*profile.watchFactor;
+      const criticalMonthly=row.isIncome?recommendedMonthly*profile.criticalFactor:recommendedMonthly*profile.criticalFactor;
+      const stance=row.isIncome
+        ? (row.status==="under"?"Raise collections/revenue threshold":"Hold / modestly grow top-line threshold")
+        : (row.status==="over"?"Reset downward with active clawback":"Hold near projected run-rate");
+      return{
+        ...row,
+        category:profile.category,
+        action:profile.action,
+        stance,
+        elapsedMonths,
+        recommendedAnnual,
+        recommendedMonthly,
+        watchMonthly,
+        criticalMonthly
+      };
+    })
+    .sort((a,b)=>Math.abs(b.recommendedAnnual-a.annBud)-Math.abs(a.recommendedAnnual-a.annBud));
+}
+
+function buildPortfolioThresholdHighlights(){
+  return getEntities()
+    .filter(entity=>Array.isArray(state.store[entity.id])&&state.store[entity.id].length)
+    .map(entity=>{
+      const rows=buildThresholdPlanRows(entity.id);
+      const topReset=rows
+        .filter(row=>!row.isIncome&&row.status==="over")
+        .sort((a,b)=>(b.projEOY-b.recommendedAnnual)-(a.projEOY-a.recommendedAnnual))[0]||null;
+      const topRecovery=rows
+        .filter(row=>row.isIncome&&row.status==="under")
+        .sort((a,b)=>(b.recommendedAnnual-b.projEOY)-(a.recommendedAnnual-a.projEOY))[0]||null;
+      return rows.length?{entity,rows,topReset,topRecovery}:null;
+    })
+    .filter(Boolean);
+}
+
 let state={store:{},entity:"rise_corp",tab:"dash",selDs:null,cmpA:null,cmpB:null,compareMode:"report_vs_budget",compareBudgetDs:null,compareArchivedBudgetId:null,compareUploadTarget:"a",search:"",filterSec:"all",filterSt:"all",sortCol:null,sortDir:"desc",uploadEntity:"rise_corp",baselineEntity:"rise_corp",loading:false,approvedBudgets:loadStoredApprovedBudgets()};
 {
   const storedState=loadStoredPageState();
@@ -983,7 +1097,7 @@ function getEntityDS(){return state.store[state.entity]||[];}
 function getActive(){const ds=getEntityDS();return ds.find(d=>d.id===state.selDs)||ds[ds.length-1]||null;}
 function isInc(r){return(r.section&&r.section.toLowerCase().includes("income"))||parseInt(r.gl)<5000;}
 
-function enrich(rows){return rows.map(r=>{const inc=isInc(r);const st=getSt(r.yAct,r.yBud,inc);const rr=2>0?r.yAct/2:0;const pe=rr*12;const rem=r.annBud-r.yAct;const pu=r.annBud?(r.yAct/r.annBud)*100:0;return Object.assign({},r,{isIncome:inc,status:st,runRate:rr,projEOY:pe,remaining:rem,budgetPctUsed:pu});});}
+function enrich(rows,dataset){const elapsed=getElapsedMonthsForDataset(dataset);const expectedPct=getExpectedBudgetUsagePct(dataset);return rows.map(r=>{const inc=isInc(r);const st=getSt(r.yAct,r.yBud,inc);const rr=elapsed>0?r.yAct/elapsed:0;const pe=rr*12;const rem=r.annBud-r.yAct;const pu=r.annBud?(r.yAct/r.annBud)*100:0;return Object.assign({},r,{isIncome:inc,status:st,runRate:rr,projEOY:pe,remaining:rem,budgetPctUsed:pu,elapsedMonths:elapsed,expectedBudgetPct:expectedPct,paceGapPct:pu-expectedPct});});}
 
 function getSummary(enriched){
 if(!enriched.length)return null;
@@ -991,22 +1105,102 @@ const inc=enriched.filter(r=>r.isIncome),exp=enriched.filter(r=>!r.isIncome);
 const t=(a,k)=>a.reduce((s,r)=>s+r[k],0);
 const sg=_.groupBy(enriched,"section");
 const ss=Object.entries(sg).map(([n,items])=>({name:n,count:items.length,yAct:t(items,"yAct"),yBud:t(items,"yBud"),annBud:t(items,"annBud"),overCount:items.filter(r=>r.status==="over").length,watchCount:items.filter(r=>r.status==="watch").length,isIncome:items[0]&&items[0].isIncome}));
-return{incYA:t(inc,"yAct"),incYB:t(inc,"yBud"),incAnn:t(inc,"annBud"),expYA:t(exp,"yAct"),expYB:t(exp,"yBud"),expAnn:t(exp,"annBud"),totalOver:enriched.filter(r=>r.status==="over").length,totalWatch:enriched.filter(r=>r.status==="watch").length,totalOn:enriched.filter(r=>r.status==="on").length,ss:ss,noi:t(inc,"yAct")-t(exp,"yAct"),noiBud:t(inc,"yBud")-t(exp,"yBud")};
+const projectedRevenue=t(inc,"projEOY"),projectedExpense=t(exp,"projEOY"),elapsedMonths=enriched[0]&&enriched[0].elapsedMonths||12;
+return{incYA:t(inc,"yAct"),incYB:t(inc,"yBud"),incAnn:t(inc,"annBud"),expYA:t(exp,"yAct"),expYB:t(exp,"yBud"),expAnn:t(exp,"annBud"),totalOver:enriched.filter(r=>r.status==="over").length,totalUnder:enriched.filter(r=>r.status==="under").length,totalWatch:enriched.filter(r=>r.status==="watch").length,totalOn:enriched.filter(r=>r.status==="on").length,ss:ss,noi:t(inc,"yAct")-t(exp,"yAct"),noiBud:t(inc,"yBud")-t(exp,"yBud"),projectedNoi:projectedRevenue-projectedExpense,elapsedMonths,expectedBudgetPct:enriched[0]&&enriched[0].expectedBudgetPct||100};
 }
 
 function getRecs(enriched,summary){
 if(!enriched.length)return[];const r=[];
-const ov=enriched.filter(x=>!x.isIncome&&x.status==="over").sort((a,b)=>a.yVar-b.yVar);
-ov.slice(0,5).forEach(x=>r.push({t:"danger",gl:x.gl,n:x.name,m:"Over YTD budget by "+f$(Math.abs(x.yVar))+". Run rate projects "+f$(x.projEOY)+" vs "+f$(x.annBud)+" annual."+(x.comment?" Comment: "+x.comment:"")}));
-const ui=enriched.filter(x=>x.isIncome&&x.yAct<x.yBud*.9&&x.yBud>5000);
-ui.slice(0,3).forEach(x=>r.push({t:"warning",gl:x.gl,n:x.name,m:"Income "+f$(x.yBud-x.yAct)+" below target."}));
-const bs=enriched.filter(x=>!x.isIncome&&x.yBud>0&&x.yAct<x.yBud*.7&&x.yBud>5000).sort((a,b)=>(b.yBud-b.yAct)-(a.yBud-a.yAct));
-if(bs.length)r.push({t:"info",gl:"",n:"Offsets",m:bs.length+" lines under budget. Top: "+bs.slice(0,3).map(x=>x.name+" ("+f$(x.yBud-x.yAct)+")").join("; ")});
-if(summary){const nv=summary.noi-summary.noiBud;r.push({t:nv>=0?"success":"danger",gl:"",n:"NOI",m:"NOI "+f$(Math.abs(nv))+" "+(nv>=0?"above":"below")+" budget. YTD: "+f$(summary.noi)+" vs "+f$(summary.noiBud)});}
-return r;
+const overExpense=enriched.filter(x=>!x.isIncome&&x.status==="over").sort((a,b)=>(Math.abs(b.yVar)-Math.abs(a.yVar)));
+const underIncome=enriched.filter(x=>x.isIncome&&x.status==="under").sort((a,b)=>(Math.abs(b.yVar)-Math.abs(a.yVar)));
+overExpense.slice(0,4).forEach(x=>{const alert=buildManagerAlert(x,{period:`2026-${String(x.elapsedMonths).padStart(2,"0")}`});r.push({t:alert.severity,gl:x.gl,n:`${alert.category}: ${x.name}`,m:`${alert.reason} ${alert.recovery} Action: ${alert.action}`});});
+underIncome.slice(0,3).forEach(x=>{const alert=buildManagerAlert(x,{period:`2026-${String(x.elapsedMonths).padStart(2,"0")}`});r.push({t:alert.severity,gl:x.gl,n:`${alert.category}: ${x.name}`,m:`${alert.reason} ${alert.recovery} Action: ${alert.action}`});});
+const offsets=enriched.filter(x=>!x.isIncome&&x.yBud>0&&x.yAct<x.yBud*.85&&x.yBud>5000).sort((a,b)=>(b.yBud-b.yAct)-(a.yBud-a.yAct));
+if(offsets.length)r.push({t:"info",gl:"",n:"Available Offsets",m:"Use under-running controllable lines to fund recovery. Best offsets: "+offsets.slice(0,3).map(x=>x.name+" ("+f$(x.yBud-x.yAct)+")").join("; ")});
+if(summary){const nv=summary.noi-summary.noiBud;const projectedGap=(summary.projectedNoi||0)-(summary.noiBud/Math.max(summary.elapsedMonths,1)*12);r.push({t:nv>=0?"success":"danger",gl:"",n:"NOI Recovery",m:"NOI is "+f$(Math.abs(nv))+" "+(nv>=0?"above":"below")+" budget. Projected full-year NOI is "+f$(summary.projectedNoi||0)+" versus current pace-adjusted plan. "+(projectedGap<0?"Close the gap by attacking labor, R&M, and revenue leakage before next close.":"Current run-rate supports the plan.")});}
+return r.slice(0,8);
 }
 
 function statusBadge(s){const m={on:{l:"On Track",c:G,b:"#ecfdf5"},watch:{l:"Watch",c:A,b:"#fffbeb"},over:{l:"Over",c:R,b:"#fef2f2"},under:{l:"Under",c:A,b:"#fffbeb"}};const x=m[s]||m.on;return '<span style="display:inline-block;padding:2px 7px;border-radius:10px;font-size:9px;font-weight:600;color:'+x.c+';background:'+x.b+'">'+x.l+'</span>';}
+
+function buildPortfolioAlertHighlights(){
+  return getEntities()
+    .filter(entity=>Array.isArray(state.store[entity.id])&&state.store[entity.id].length)
+    .map(entity=>{
+      const watch=getCommunityBudgetWatchItems(entity.id);
+      if(!watch)return null;
+      return{
+        entity,
+        watch,
+        topAlert:(watch.actionRows||[])[0]||null
+      };
+    })
+    .filter(Boolean)
+    .sort((a,b)=>{
+      const rank={danger:0,warning:1,info:2,success:3};
+      return (rank[a.topAlert&&a.topAlert.severity||"success"]??3)-(rank[b.topAlert&&b.topAlert.severity||"success"]??3);
+    });
+}
+
+function buildThresholdPlanHtml(entityId){
+  const entity=getEntityById(entityId);
+  const dataset=getLatestDatasetForEntity(entityId);
+  const rows=buildThresholdPlanRows(entityId);
+  const portfolioRows=buildPortfolioThresholdHighlights();
+  if(!dataset||!rows.length){
+    return '<div style="text-align:center;padding:30px;color:#94a3b8">Upload a 2026 income statement first. Threshold planning uses the latest actual spend run-rate.</div>';
+  }
+  const year=Number(String(getDatasetPeriodKey(dataset)).slice(0,4))||new Date().getFullYear();
+  const nextYear=year+1;
+  const topRows=rows.slice(0,24);
+  let html='';
+  html+='<div style="font-size:14px;font-weight:700;color:'+D+';margin-bottom:10px">Next-Year Budget Threshold Plan</div>';
+  html+='<div style="background:white;border-radius:8px;padding:12px;border:1px solid #e2e8f0;margin-bottom:12px;">';
+  html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:4px">'+entity.label+' · '+nextYear+' threshold view</div>';
+  html+='<div style="font-size:11px;color:#64748b;line-height:1.45">Recommended thresholds are built from projected '+year+' run-rate actuals. For over-spent controllable GLs, the plan claws back part of the overrun instead of simply rolling the spend forward. For under-performing income GLs, the target recovers part of the missed revenue gap.</div>';
+  html+='</div>';
+  if(portfolioRows.length>1){
+    html+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:12px;">';
+    portfolioRows.forEach(item=>{
+      html+='<div style="background:white;border-radius:8px;padding:10px;border:1px solid #e2e8f0;">';
+      html+='<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">';
+      html+='<div><div style="font-size:11px;font-weight:700;color:'+D+'">'+item.entity.label+'</div><div style="font-size:10px;color:#94a3b8">'+(item.watch.dataset.period||item.watch.dataset.name||"Latest report")+'</div></div>';
+      html+='<span style="padding:4px 8px;border-radius:999px;background:'+(item.topAlert&&item.topAlert.severity==="danger"?"#fef2f2":"#fffbeb")+';color:'+(item.topAlert&&item.topAlert.severity==="danger"?R:A)+';font-size:10px;font-weight:700;">'+((item.topAlert&&item.topAlert.category)||"Watch")+'</span>';
+      html+='</div>';
+      if(item.topAlert){
+        html+='<div style="font-size:10px;color:#334155;margin-top:8px;line-height:1.4"><strong>'+(item.topAlert.gl?`GL ${item.topAlert.gl} · `:"")+item.topAlert.name+'</strong><br />'+item.topAlert.action+'</div>';
+      } else {
+        html+='<div style="font-size:10px;color:#94a3b8;margin-top:8px">No material resets detected.</div>';
+      }
+      html+='</div>';
+    });
+    html+='</div>';
+  }
+  html+='<div style="background:white;border-radius:8px;border:1px solid #e2e8f0;overflow:auto;">';
+  html+='<table style="width:100%;border-collapse:collapse;font-size:10px;"><thead style="position:sticky;top:0;background:white;z-index:1"><tr style="border-bottom:2px solid #e2e8f0">';
+  ["GL","Account","Category","2026 Budget","2026 Proj Act","2027 Rec Threshold","Watch / Mo","Critical / Mo","Management Posture"].forEach((label,index)=>{
+    html+='<th style="text-align:'+(index<3||index===8?"left":"right")+';padding:6px 5px;color:#64748b;font-weight:700;font-size:9px;text-transform:uppercase">'+label+'</th>';
+  });
+  html+='</tr></thead><tbody>';
+  topRows.forEach(row=>{
+    const delta=row.recommendedAnnual-row.annBud;
+    const deltaColor=row.isIncome?(delta>=0?G:R):(delta<=0?G:R);
+    html+='<tr style="border-bottom:1px solid #f1f5f9;background:'+(row.status==="over"||row.status==="under"?"#fffaf0":"white")+'">';
+    html+='<td style="padding:5px;font-family:monospace">'+row.gl+'</td>';
+    html+='<td style="padding:5px;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+row.name+'</td>';
+    html+='<td style="padding:5px">'+row.category+'</td>';
+    html+='<td style="padding:5px;text-align:right">'+f$(row.annBud)+'</td>';
+    html+='<td style="padding:5px;text-align:right">'+f$(row.projEOY)+'</td>';
+    html+='<td style="padding:5px;text-align:right;font-weight:700;color:'+deltaColor+'">'+f$(row.recommendedAnnual)+'</td>';
+    html+='<td style="padding:5px;text-align:right">'+f$(row.watchMonthly)+'</td>';
+    html+='<td style="padding:5px;text-align:right">'+f$(row.criticalMonthly)+'</td>';
+    html+='<td style="padding:5px;min-width:240px"><div style="font-weight:700;color:'+D+'">'+row.stance+'</div><div style="font-size:10px;color:#64748b;line-height:1.35;margin-top:2px">'+row.action+'</div></td>';
+    html+='</tr>';
+  });
+  html+='</tbody></table></div>';
+  html+='<div style="font-size:10px;color:#94a3b8;margin-top:8px">Threshold logic: recommended annual threshold = projected '+year+' actual adjusted by controllability and current revenue recovery gap. Watch and critical monthly triggers are applied to the recommended threshold so site teams know when to escalate.</div>';
+  return html;
+}
 
 function loadFile(file,ent,options={}){
 state.loading=true;render();
@@ -1089,7 +1283,7 @@ const active=getActive();
 const entityDS=getEntityDS();
 const curEntity=getEntityById(state.entity);
 const rows=active?active.rows:[];
-const enriched=enrich(rows);
+const enriched=enrich(rows,active);
 const sections=[...new Set(enriched.map(r=>r.section).filter(Boolean))];
 let filtered=enriched.slice();
 if(state.search){const s=state.search.toLowerCase();filtered=filtered.filter(r=>r.gl.toLowerCase().includes(s)||r.name.toLowerCase().includes(s));}
@@ -1114,7 +1308,7 @@ entities.forEach(e=>{const cnt=(state.store[e.id]||[]).length;html+='<option val
 html+='</select></div></div>';
 
 /* TABS */
-const tabs=[["dash","Dashboard"],["detail","Line Items"],["history","Historical"],["baseline","Baseline Budgets"],["compare","Compare"],["recs","Recommendations"],["report","Investor Report"],["upload","Upload"]];
+const tabs=[["dash","Dashboard"],["detail","Line Items"],["history","Historical"],["baseline","Baseline Budgets"],["compare","Compare"],["recs","Recommendations"],["thresholds","Threshold Plan"],["report","Investor Report"],["upload","Upload"]];
 html+='<div style="display:flex;gap:3px;margin-bottom:12px;flex-wrap:wrap;">';
 tabs.forEach(([k,l])=>{html+='<button class="tabBtn" data-tab="'+k+'" style="padding:5px 11px;font-size:11px;font-weight:600;border:none;border-radius:5px;cursor:pointer;background:'+(state.tab===k?D:"#e2e8f0")+';color:'+(state.tab===k?"white":"#64748b")+'">'+l+'</button>';});
 html+='</div>';
@@ -1149,12 +1343,12 @@ html+='<canvas id="secChart" style="width:100%;height:200px;"></canvas></div>';
 
 html+='<div style="background:white;border-radius:8px;padding:12px;border:1px solid #e2e8f0;">';
 html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:8px">Budget Pace - Top Expense Lines</div>';
-html+='<div style="font-size:10px;color:#64748b;margin-bottom:6px">Gray line = 16.7% expected pace (2/12 months)</div>';
+html+='<div style="font-size:10px;color:#64748b;margin-bottom:6px">Gray line = '+(summary.expectedBudgetPct||0).toFixed(1)+'% expected pace ('+(summary.elapsedMonths||12)+'/12 months)</div>';
 enriched.filter(r=>!r.isIncome&&r.annBud>15000).sort((a,b)=>b.budgetPctUsed-a.budgetPctUsed).slice(0,8).forEach(r=>{
 html+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">';
 html+='<div style="width:110px;font-size:9px;color:#475569;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+r.name+'</div>';
 html+='<div style="flex:1;height:12px;background:#e2e8f0;border-radius:6px;position:relative;overflow:hidden">';
-html+='<div style="position:absolute;left:16.67%;top:0;bottom:0;width:1px;background:#94a3b8;z-index:2"></div>';
+html+='<div style="position:absolute;left:'+(summary.expectedBudgetPct||0)+'%;top:0;bottom:0;width:1px;background:#94a3b8;z-index:2"></div>';
 html+='<div style="height:100%;border-radius:6px;width:'+Math.min(r.budgetPctUsed,100)+'%;background:'+(r.budgetPctUsed>25?R:r.budgetPctUsed>18?A:G)+'"></div></div>';
 html+='<div style="width:36px;font-size:9px;color:#64748b">'+r.budgetPctUsed.toFixed(1)+'%</div></div>';
 });
@@ -1189,7 +1383,8 @@ html+='<div style="background:white;border-radius:8px;padding:12px;border:1px so
 html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:6px">Current Budget Watch</div>';
 html+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">';
 html+='<div style="padding:5px 9px;border-radius:999px;background:#fef2f2;color:'+R+';font-size:10px;font-weight:700;">'+(currentWatch.summary.totalOver||0)+' over budget</div>';
-html+='<div style="padding:5px 9px;border-radius:999px;background:#fffbeb;color:'+A+';font-size:10px;font-weight:700;">'+(currentWatch.summary.totalWatch||0)+' watch</div>';
+html+='<div style="padding:5px 9px;border-radius:999px;background:#fffbeb;color:'+A+';font-size:10px;font-weight:700;">'+(currentWatch.summary.totalUnder||0)+' under target</div>';
+html+='<div style="padding:5px 9px;border-radius:999px;background:#fff7ed;color:'+A+';font-size:10px;font-weight:700;">'+(currentWatch.summary.totalWatch||0)+' pacing watch</div>';
 html+='<div style="padding:5px 9px;border-radius:999px;background:#ecfdf5;color:'+G+';font-size:10px;font-weight:700;">'+(currentWatch.summary.totalOn||0)+' on track</div>';
 html+='</div>';
 html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">';
@@ -1226,6 +1421,25 @@ html+='<div style="font-size:10px;color:#94a3b8">No section overages found in th
 }
 html+='</div>';
 html+='</div>';
+
+html+='<div style="background:white;border-radius:8px;padding:12px;border:1px solid #e2e8f0;margin-top:10px;">';
+html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:6px">REIT Manager Action Board</div>';
+html+='<div style="font-size:10px;color:#64748b;margin-bottom:10px">What to address first to recover budget pace for '+curEntity.label+'.</div>';
+if((currentWatch.actionRows||[]).length){
+  currentWatch.actionRows.forEach(alert=>{
+    html+='<div style="border:1px solid #e2e8f0;border-left:4px solid '+(alert.severity==="danger"?R:alert.severity==="warning"?A:"#2563eb")+';border-radius:8px;padding:9px 10px;margin-bottom:8px;background:'+(alert.severity==="danger"?"#fff7f7":alert.severity==="warning"?"#fffaf0":"#f8fbff")+';">';
+    html+='<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;margin-bottom:4px;">';
+    html+='<div><div style="font-size:10px;font-weight:700;color:'+(alert.severity==="danger"?R:alert.severity==="warning"?A:"#2563eb")+'">'+alert.category+(alert.gl?` · GL ${alert.gl}`:"")+'</div>';
+    html+='<div style="font-size:11px;font-weight:700;color:'+D+'">'+alert.name+'</div></div>';
+    html+='<span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">'+alert.severity+'</span></div>';
+    html+='<div style="font-size:10px;color:#334155;line-height:1.45">'+alert.reason+' '+alert.recovery+'</div>';
+    html+='<div style="font-size:10px;color:'+D+';font-weight:700;margin-top:5px">Action: '+alert.action+'</div>';
+    html+='</div>';
+  });
+} else {
+  html+='<div style="font-size:10px;color:#94a3b8">No immediate recovery alerts. The active report is pacing within threshold.</div>';
+}
+html+='</div>';
 }
 
 const communityHighlights=entities.filter(e=>Array.isArray(state.store[e.id])&&state.store[e.id].length).map(entity=>{
@@ -1243,7 +1457,7 @@ html+='<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px;backg
 html+='<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;margin-bottom:6px;">';
 html+='<div><div style="font-size:11px;font-weight:700;color:'+D+'">'+entity.label+'</div>';
 html+='<div style="font-size:10px;color:#94a3b8">'+(watch.dataset.period||watch.dataset.name||"Latest report")+'</div></div>';
-html+='<div style="text-align:right;"><div style="font-size:9px;color:#94a3b8;text-transform:uppercase;font-weight:700;">Over / Under</div><div style="font-size:14px;font-weight:700;color:'+D+'">'+(watch.summary.totalOver||0)+' / '+(watch.summary.totalWatch||0)+'</div></div>';
+html+='<div style="text-align:right;"><div style="font-size:9px;color:#94a3b8;text-transform:uppercase;font-weight:700;">Over / Under</div><div style="font-size:14px;font-weight:700;color:'+D+'">'+(watch.summary.totalOver||0)+' / '+(watch.summary.totalUnder||0)+'</div></div>';
 html+='</div>';
 if(topOver||topUnder){
 if(topOver)html+='<div style="font-size:10px;color:'+R+';margin-bottom:4px">Over: '+buildBudgetIssueLabel(topOver)+'</div>';
@@ -1256,6 +1470,26 @@ if(leadSection)html+='<div style="font-size:10px;color:#64748b;margin-top:6px">T
 html+='</div>';
 });
 html+='</div></div>';
+}
+
+const portfolioAlerts=buildPortfolioAlertHighlights();
+if(portfolioAlerts.length){
+html+='<div style="background:white;border-radius:8px;padding:12px;border:1px solid #e2e8f0;margin-top:10px;">';
+html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:8px">Portfolio Recovery Priorities</div>';
+html+='<table style="width:100%;border-collapse:collapse;font-size:10px;"><thead><tr style="border-bottom:2px solid #e2e8f0">';
+["Community","Top GL To Address","Severity","Why It Matters","Action"].forEach((h,idx)=>{html+='<th style="text-align:'+(idx<2||idx===3||idx===4?"left":"center")+';padding:5px;color:#64748b;font-weight:700;font-size:9px;text-transform:uppercase">'+h+'</th>';});
+html+='</tr></thead><tbody>';
+portfolioAlerts.slice(0,8).forEach(item=>{
+  const alert=item.topAlert;
+  html+='<tr style="border-bottom:1px solid #f1f5f9">';
+  html+='<td style="padding:6px;font-weight:700;color:'+D+'">'+item.entity.label+'</td>';
+  html+='<td style="padding:6px">'+(alert?(alert.gl?`GL ${alert.gl} · `:"")+alert.name:"No major issue")+'</td>';
+  html+='<td style="padding:6px;text-align:center"><span style="padding:3px 7px;border-radius:999px;background:'+(alert&&alert.severity==="danger"?"#fef2f2":"#fffbeb")+';color:'+(alert&&alert.severity==="danger"?R:A)+';font-size:9px;font-weight:700;text-transform:uppercase">'+(alert?alert.severity:"watch")+'</span></td>';
+  html+='<td style="padding:6px;color:#475569">'+(alert?alert.reason:"Current report is within threshold.")+'</td>';
+  html+='<td style="padding:6px;color:#334155;font-weight:600">'+(alert?alert.action:"Hold current controls.")+'</td>';
+  html+='</tr>';
+});
+html+='</tbody></table></div>';
 }
 }
 
@@ -1579,6 +1813,11 @@ html+='<div style="font-size:11px;color:#334155;line-height:1.4">'+r.m+'</div></
 if(!recs.length)html+='<div style="text-align:center;padding:30px;color:#94a3b8">Upload data to see recommendations.</div>';
 }
 
+/* ===== THRESHOLD PLAN ===== */
+if(state.tab==="thresholds"){
+html+=buildThresholdPlanHtml(curEntity.id);
+}
+
 /* ===== REPORT ===== */
 if(state.tab==="report"){
 html+='<div style="font-size:14px;font-weight:700;color:'+D+';margin-bottom:10px">Investor Report Generator</div>';
@@ -1747,7 +1986,7 @@ compareFileInput.value="";
 const genBtn=document.getElementById("genReport");
 if(genBtn&&summary){genBtn.addEventListener("click",()=>{
 const active=getActive();const curEntity=getEntityById(state.entity);
-const recs=getRecs(enrich(active?active.rows:[]),summary);
+const recs=getRecs(enrich(active?active.rows:[],active),summary);
 const h='<html><head><title>'+curEntity.label+' - Budget Report</title><style>body{font-family:system-ui;max-width:800px;margin:40px auto;color:#1a1a2e;padding:20px}h1{color:'+D+';border-bottom:3px solid '+L+';padding-bottom:8px}h2{color:'+D+';margin-top:24px}.kpi{display:flex;gap:16px;margin:16px 0}.kpi>div{flex:1;background:#f8fafc;border-radius:8px;padding:12px;text-align:center;border:1px solid #e2e8f0}.kpi .label{font-size:11px;color:#64748b;text-transform:uppercase}.kpi .val{font-size:20px;font-weight:700;margin-top:4px}table{width:100%;border-collapse:collapse;margin:12px 0;font-size:12px}th{background:#f1f5f9;padding:8px;text-align:left;border-bottom:2px solid #cbd5e1}td{padding:6px 8px;border-bottom:1px solid #f1f5f9}.pos{color:'+G+'}.neg{color:'+R+'}.footer{margin-top:32px;padding-top:16px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8}</style></head><body><h1>'+curEntity.label+'</h1><p>Financial Performance Summary - '+(active?active.period||"":"Current Period")+'</p><div class="kpi"><div><div class="label">Revenue YTD</div><div class="val">'+f$(summary.incYA)+'</div></div><div><div class="label">Expenses YTD</div><div class="val">'+f$(summary.expYA)+'</div></div><div><div class="label">NOI</div><div class="val" style="color:'+(summary.noi>=summary.noiBud?G:R)+'">'+f$(summary.noi)+'</div></div><div><div class="label">NOI vs Budget</div><div class="val" style="color:'+(summary.noi>=summary.noiBud?G:R)+'">'+f$(summary.noi-summary.noiBud)+'</div></div></div><h2>Budget Performance by Category</h2><table><tr><th>Category</th><th>YTD Actual</th><th>YTD Budget</th><th>Variance</th><th>Annual Budget</th><th>% Used</th></tr>'+summary.ss.map(s=>{const v=s.yBud-s.yAct;const pu=s.annBud?((s.yAct/s.annBud)*100).toFixed(1):0;return'<tr><td><strong>'+s.name+'</strong></td><td>'+f$(s.yAct)+'</td><td>'+f$(s.yBud)+'</td><td class="'+(s.isIncome?(v<=0?"neg":"pos"):(v>=0?"pos":"neg"))+'">'+f$(v)+'</td><td>'+f$(s.annBud)+'</td><td>'+pu+'%</td></tr>';}).join("")+'</table><h2>Key Observations</h2><ul>'+recs.slice(0,6).map(r=>'<li><strong>'+(r.n||"")+(r.gl?" (GL "+r.gl+")":"")+'</strong>: '+r.m+'</li>').join("")+'</ul><div class="footer">Generated '+new Date().toLocaleDateString()+' | RISE Residential, LLC | Confidential</div></body></html>';
 const blob=new Blob([h],{type:"text/html"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=curEntity.label.replace(/[^a-zA-Z0-9]/g,"_")+"_Budget_Report.html";a.click();URL.revokeObjectURL(url);
 });}
