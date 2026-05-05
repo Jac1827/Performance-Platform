@@ -273,6 +273,8 @@ function buildApprovedBudgetBatchSummary(batch){
     id:batchId,
     property,
     sourceFileName:String(batch&&batch.sourceFileName||""),
+    sourceSheetName:String(batch&&batch.sourceSheetName||""),
+    budgetFormat:String(batch&&batch.budgetFormat||""),
     uploadedAt:String(batch&&batch.uploadedAt||new Date().toISOString()),
     archivedAt:String(batch&&batch.archivedAt||""),
     archivedReason:String(batch&&batch.archivedReason||""),
@@ -402,6 +404,15 @@ function normalizeFinancialPeriodKey(value,fallbackYear=new Date().getFullYear()
     if(monthIdx>=0)return`${fallbackYear}-${String(monthIdx+1).padStart(2,"0")}`;
   }
   return"";
+}
+
+function formatBudgetPeriodLabel(period,includeYear=true){
+  const normalized=normalizeFinancialPeriodKey(period);
+  if(!normalized)return String(period||"");
+  const year=String(normalized).slice(0,4);
+  const monthIdx=Number(String(normalized).slice(5,7))-1;
+  const month=MONTHS[monthIdx]||String(normalized).slice(5,7);
+  return includeYear?`${month} ${year}`:month;
 }
 
 function buildFinancialLedgerRows(rows){
@@ -578,14 +589,49 @@ function extractWorkbookBudgetMeta(workbook){
   };
 }
 
+function readWorkbookSheetPreview(workbook,sheetName,rowLimit=8){
+  const sheet=workbook&&workbook.Sheets&&workbook.Sheets[sheetName];
+  if(!sheet)return[];
+  return XLSX.utils.sheet_to_json(sheet,{header:1,raw:false,defval:""}).slice(0,rowLimit);
+}
+
+function sheetLooksLikeApprovedBudget(rows,sheetName){
+  const preview=Array.isArray(rows)?rows:[];
+  const flattened=preview.flat().map(cell=>String(cell||"").trim()).filter(Boolean);
+  if(/monthly budget detail/i.test(String(sheetName||"")))return true;
+  if(flattened.some(cell=>/monthly budget detail/i.test(cell)))return true;
+  if(flattened.some(cell=>/monthly budget rpt/i.test(cell)))return true;
+  if(flattened.some(cell=>/budget summary rpt/i.test(cell)))return true;
+  if(flattened.some(cell=>/import sheet/i.test(cell)))return true;
+  if(flattened.some(cell=>/residential\s*-\s*corporate/i.test(cell)))return true;
+  const monthRow=preview.find(row=>{
+    let count=0;
+    (Array.isArray(row)?row:[]).forEach(cell=>{ if(monthNameToIndex(cell)>=0)count+=1; });
+    return count>=6;
+  });
+  if(monthRow)return true;
+  return false;
+}
+
+function findApprovedBudgetSourceSheetName(workbook){
+  const sheetNames=Array.isArray(workbook&&workbook.SheetNames)?workbook.SheetNames:[];
+  if(!sheetNames.length)return"";
+  const preferred=sheetNames.find(name=>/monthly budget detail|monthly budget rpt|budget summary rpt|import sheet/i.test(String(name||"")));
+  if(preferred)return preferred;
+  if(sheetNames.length===1)return sheetNames[0];
+  for(const sheetName of sheetNames){
+    const preview=readWorkbookSheetPreview(workbook,sheetName,10);
+    if(sheetLooksLikeApprovedBudget(preview,sheetName))return sheetName;
+  }
+  return "";
+}
+
 function buildAnnualBudgetRecordsFromWorkbook(workbook,fileName,entity){
   const meta=extractWorkbookBudgetMeta(workbook);
   const property=String(entity&&entity.label||meta.property||"").trim();
   if(!property)throw new Error("Could not determine which community this approved budget workbook belongs to.");
-  const sourceSheetName=(workbook.SheetNames||[]).find(name=>/monthly budget rpt/i.test(name))
-    || (workbook.SheetNames||[]).find(name=>/budget summary rpt/i.test(name))
-    || (workbook.SheetNames||[]).find(name=>/import sheet/i.test(name));
-  if(!sourceSheetName)throw new Error("No budget detail tab was found. Expected a Monthly Budget Rpt, Budget Summary Rpt, or Import Sheet tab.");
+  const sourceSheetName=findApprovedBudgetSourceSheetName(workbook);
+  if(!sourceSheetName)throw new Error("No budget detail tab was found. Expected a Monthly Budget Detail, Monthly Budget Rpt, Budget Summary Rpt, or Import Sheet tab.");
   const rows=XLSX.utils.sheet_to_json(workbook.Sheets[sourceSheetName],{header:1,raw:false,defval:""});
   if(!Array.isArray(rows)||!rows.length)throw new Error("The approved budget workbook tab was empty.");
   let monthHeaderRow=-1;
@@ -679,6 +725,8 @@ async function loadApprovedBudgetFile(file,ent){
       id:batchId,
       property:parsed.property,
       sourceFileName:file.name,
+      sourceSheetName:parsed.sourceSheetName,
+      budgetFormat:"company_monthly_detail",
       uploadedAt:approvedAt,
       rows:batchRows
     });
@@ -733,6 +781,35 @@ function summarizeApprovedBudgetRowsByGl(rows){
       gl,
       name:String(first.lineItem||first.name||gl||""),
       section:String(first.section||""),
+      annualBudget,
+      rowCount:items.length
+    };
+  }).filter(row=>row.gl);
+}
+
+function summarizeApprovedBudgetRowsByMonth(rows){
+  const grouped=_.groupBy(Array.isArray(rows)?rows:[],row=>{
+    const gl=String(row&&row.glCode||row&&row.gl||"").trim();
+    const section=String(row&&row.section||"").trim();
+    const name=String(row&&row.lineItem||row&&row.name||"").trim();
+    return `${section}::${gl}::${name}`;
+  });
+  return Object.entries(grouped).map(([key,items])=>{
+    const first=items[0]||{};
+    const months={};
+    let annualBudget=0;
+    items.forEach(item=>{
+      const period=normalizeFinancialPeriodKey(item&&item.period||"");
+      if(!period)return;
+      const budget=Number(item&&item.budget||0)||0;
+      months[period]=budget;
+      annualBudget+=budget;
+    });
+    return{
+      gl:String(first.glCode||first.gl||"").trim(),
+      name:String(first.lineItem||first.name||"").trim(),
+      section:String(first.section||"").trim(),
+      months,
       annualBudget,
       rowCount:items.length
     };
@@ -1101,6 +1178,36 @@ html+='<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));ga
   html+='<div style="font-size:13px;font-weight:700;color:'+D+';margin-top:2px">'+card.v+'</div></div>';
 });
 html+='</div>';
+html+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">';
+html+='<div style="padding:6px 10px;border-radius:999px;background:#eff6ff;color:'+D+';font-size:10px;font-weight:700;">'+(currentBudgetBatch.sourceSheetName||"Budget Detail Sheet")+'</div>';
+html+='<div style="padding:6px 10px;border-radius:999px;background:#f0fdf4;color:#166534;font-size:10px;font-weight:700;">'+((currentBudgetBatch.budgetFormat||"").replace(/_/g," ")||"Approved budget format")+'</div>';
+html+='</div>';
+}
+const currentBudgetDetailRows=summarizeApprovedBudgetRowsByMonth(currentBudgetRows);
+const currentBudgetPeriods=[...new Set(currentBudgetRows.map(row=>normalizeFinancialPeriodKey(row&&row.period||"")).filter(Boolean))].sort();
+const currentBudgetPeriodYears=[...new Set(currentBudgetPeriods.map(period=>String(period).slice(0,4)).filter(year=>/^\d{4}$/.test(year)))];
+if(currentBudgetDetailRows.length){
+html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:6px">Budget Detail by Month</div>';
+html+='<div style="max-height:320px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:12px;">';
+html+='<table style="width:100%;min-width:1080px;border-collapse:collapse;font-size:10px;">';
+html+='<thead style="position:sticky;top:0;background:white;z-index:1"><tr style="border-bottom:2px solid #e2e8f0">';
+html+='<th style="text-align:left;padding:5px">Section</th><th style="text-align:left;padding:5px">GL</th><th style="text-align:left;padding:5px">Account</th>';
+currentBudgetPeriods.forEach(period=>{
+html+='<th style="text-align:right;padding:5px">'+formatBudgetPeriodLabel(period,currentBudgetPeriodYears.length>1)+'</th>';
+});
+html+='<th style="text-align:right;padding:5px">Total</th></tr></thead><tbody>';
+currentBudgetDetailRows.slice(0,60).forEach(row=>{
+html+='<tr style="border-bottom:1px solid #f1f5f9;">';
+html+='<td style="padding:4px 5px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+row.section+'</td>';
+html+='<td style="padding:4px 5px;font-family:monospace;">'+row.gl+'</td>';
+html+='<td style="padding:4px 5px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+row.name+'</td>';
+currentBudgetPeriods.forEach(period=>{
+html+='<td style="padding:4px 5px;text-align:right">'+f$(row.months&&Object.prototype.hasOwnProperty.call(row.months,period)?row.months[period]:0)+'</td>';
+});
+html+='<td style="padding:4px 5px;text-align:right;font-weight:700">'+f$(row.annualBudget||0)+'</td></tr>';
+});
+html+='</tbody></table></div>';
+html+='<div style="font-size:10px;color:#94a3b8;margin-bottom:12px">Showing the first '+Math.min(currentBudgetDetailRows.length,60)+' budget detail rows from the active baseline workbook.</div>';
 }
 html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:6px">Current Baseline by GL</div>';
 if(summaryRows.length){
