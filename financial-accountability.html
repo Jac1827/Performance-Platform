@@ -7,6 +7,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.21/lodash.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,-apple-system,sans-serif;background:#f8fafc;color:#1a1a2e;font-size:13px}
@@ -23,6 +24,7 @@ const OPS_PROPERTY_CATALOG_KEY="rise_ops_property_catalog_v1";
 const ATLAS_STATE_DB_NAME="atlas_rise_state_v1";
 const ATLAS_STATE_STORE_NAME="records";
 const ATLAS_STATE_COMMUNITY_KEY="community_data";
+const ATLAS_STATE_APPROVED_BUDGET_KEY="approved_budget_data";
 const APPROVED_BUDGET_STORAGE_KEY="rise_financial_accountability_approved_budgets_v1";
 const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const FULL_MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -46,6 +48,9 @@ const FALLBACK_COMMUNITIES=["Bartram Park","Baymeadows","Nocatee","Doro","St Aug
 const f$=v=>{if(v==null||isNaN(v))return"\u2014";const n=v<0,a=Math.abs(v);return(n?"(":"")+"$"+a.toLocaleString("en-US",{minimumFractionDigits:0,maximumFractionDigits:0})+(n?")":"");};
 const fp=v=>v==null||isNaN(v)?"\u2014":(v>=0?"+":"")+v.toFixed(1)+"%";
 const ATLAS_DASHBOARD_HREF="./index.html";
+if(window.pdfjsLib&&window.pdfjsLib.GlobalWorkerOptions){
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+}
 let atlasStateDbPromise=null;
 
 const slugifyEntityId=v=>String(v||"").toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"")||"other";
@@ -120,6 +125,15 @@ function getEntityById(id){
   return entities.find(e=>e.id===id)||entities[0];
 }
 
+function getEntityByLabel(label){
+  const normalized=normalizeCommunityLookupName(label||"");
+  if(!normalized)return null;
+  const entities=getEntities();
+  return entities.find(entity=>normalizeCommunityLookupName(entity&&entity.label||"")===normalized)
+    || entities.find(entity=>normalized.includes(normalizeCommunityLookupName(entity&&entity.label||"")) || normalizeCommunityLookupName(entity&&entity.label||"").includes(normalized))
+    || null;
+}
+
 function loadStoredPageState(){
   try{
     const raw=window.localStorage.getItem(STORAGE_KEY);
@@ -152,6 +166,12 @@ function persistPageState(){
       compareMode:state.compareMode,
       compareBudgetDs:state.compareBudgetDs,
       compareArchivedBudgetId:state.compareArchivedBudgetId,
+      compareActualEntity:state.compareActualEntity,
+      compareActualDs:state.compareActualDs,
+      compareBaselineEntity:state.compareBaselineEntity,
+      compareBaselineBatchId:state.compareBaselineBatchId,
+      compareBaselinePeriod:state.compareBaselinePeriod,
+      compareUploadTarget:state.compareUploadTarget,
       search:state.search,
       filterSec:state.filterSec,
       filterSt:state.filterSt,
@@ -163,10 +183,21 @@ function persistPageState(){
   }catch(_error){}
 }
 
-function persistApprovedBudgetState(){
+async function loadAtlasApprovedBudgetState(){
+  try{
+    const stored=await atlasStateGetValue(ATLAS_STATE_APPROVED_BUDGET_KEY);
+    if(stored&&typeof stored==="object")return normalizeApprovedBudgetState(stored);
+  }catch(_error){}
+  return normalizeApprovedBudgetState(null);
+}
+
+async function persistApprovedBudgetState(){
   try{
     state.approvedBudgets=normalizeApprovedBudgetState(state.approvedBudgets);
     window.localStorage.setItem(APPROVED_BUDGET_STORAGE_KEY,JSON.stringify(state.approvedBudgets));
+  }catch(_error){}
+  try{
+    await atlasStateSetValue(ATLAS_STATE_APPROVED_BUDGET_KEY,state.approvedBudgets);
   }catch(_error){}
 }
 
@@ -273,6 +304,8 @@ function buildApprovedBudgetBatchSummary(batch){
     id:batchId,
     property,
     sourceFileName:String(batch&&batch.sourceFileName||""),
+    sourceSheetName:String(batch&&batch.sourceSheetName||""),
+    budgetFormat:String(batch&&batch.budgetFormat||""),
     uploadedAt:String(batch&&batch.uploadedAt||new Date().toISOString()),
     archivedAt:String(batch&&batch.archivedAt||""),
     archivedReason:String(batch&&batch.archivedReason||""),
@@ -338,7 +371,7 @@ function getApprovedBudgetRowsForBatch(batchId){
   return archivedBatch&&Array.isArray(archivedBatch.rows)?archivedBatch.rows:[];
 }
 
-function archiveApprovedBudgetBatch(property,batchId){
+async function archiveApprovedBudgetBatch(property,batchId){
   state.approvedBudgets=normalizeApprovedBudgetState(state.approvedBudgets);
   const propertyKey=normalizeCommunityLookupName(property||"");
   const batches=Array.isArray(state.approvedBudgets.batches)?state.approvedBudgets.batches:[];
@@ -351,17 +384,17 @@ function archiveApprovedBudgetBatch(property,batchId){
   state.approvedBudgets.batches=batches.filter(batch=>String(batch&&batch.id||"")!==String(target.id));
   state.approvedBudgets.records=(state.approvedBudgets.records||[]).filter(row=>String(row&&row.batchId||"")!==String(target.id));
   state.approvedBudgets.updatedAt=new Date().toISOString();
-  persistApprovedBudgetState();
+  await persistApprovedBudgetState();
   return true;
 }
 
-function replaceApprovedBudgetBatch(batch){
+async function replaceApprovedBudgetBatch(batch){
   state.approvedBudgets=normalizeApprovedBudgetState(state.approvedBudgets);
   const normalizedBatch=buildApprovedBudgetBatchSummary(batch);
   const propertyKey=normalizeCommunityLookupName(normalizedBatch.property||"");
   const existing=getApprovedBudgetCurrentBatch(normalizedBatch.property);
   if(existing){
-    archiveApprovedBudgetBatch(existing.property,existing.id);
+    await archiveApprovedBudgetBatch(existing.property,existing.id);
     state.approvedBudgets=normalizeApprovedBudgetState(state.approvedBudgets);
   }
   state.approvedBudgets.records=[
@@ -373,7 +406,7 @@ function replaceApprovedBudgetBatch(batch){
     normalizedBatch
   ];
   state.approvedBudgets.updatedAt=new Date().toISOString();
-  persistApprovedBudgetState();
+  await persistApprovedBudgetState();
   return normalizedBatch;
 }
 
@@ -402,6 +435,15 @@ function normalizeFinancialPeriodKey(value,fallbackYear=new Date().getFullYear()
     if(monthIdx>=0)return`${fallbackYear}-${String(monthIdx+1).padStart(2,"0")}`;
   }
   return"";
+}
+
+function formatBudgetPeriodLabel(period,includeYear=true){
+  const normalized=normalizeFinancialPeriodKey(period);
+  if(!normalized)return String(period||"");
+  const year=String(normalized).slice(0,4);
+  const monthIdx=Number(String(normalized).slice(5,7))-1;
+  const month=MONTHS[monthIdx]||String(normalized).slice(5,7);
+  return includeYear?`${month} ${year}`:month;
 }
 
 function buildFinancialLedgerRows(rows){
@@ -510,10 +552,16 @@ function applyIncomingAtlasContext(){
 
 async function hydrateApprovedBudgetsFromAtlas(){
   try{
+    const storedAtlas=await loadAtlasApprovedBudgetState();
+    if((storedAtlas.records&&storedAtlas.records.length)||(storedAtlas.batches&&storedAtlas.batches.length)||(storedAtlas.archivedBatches&&storedAtlas.archivedBatches.length)){
+      state.approvedBudgets=storedAtlas;
+      await persistApprovedBudgetState();
+      return;
+    }
     const storedLocal=normalizeApprovedBudgetState(loadStoredApprovedBudgets());
     if((storedLocal.records&&storedLocal.records.length)||(storedLocal.batches&&storedLocal.batches.length)||(storedLocal.archivedBatches&&storedLocal.archivedBatches.length)){
       state.approvedBudgets=storedLocal;
-      persistApprovedBudgetState();
+      await persistApprovedBudgetState();
       return;
     }
     const store=await loadAtlasCommunityStore();
@@ -537,7 +585,7 @@ async function hydrateApprovedBudgetsFromAtlas(){
     });
     if(records.length){
       state.approvedBudgets=normalizeApprovedBudgetState({records,updatedAt:new Date().toISOString()});
-      persistApprovedBudgetState();
+      await persistApprovedBudgetState();
       return;
     }
   }catch(_error){}
@@ -578,14 +626,64 @@ function extractWorkbookBudgetMeta(workbook){
   };
 }
 
+function readWorkbookSheetPreview(workbook,sheetName,rowLimit=8){
+  const sheet=workbook&&workbook.Sheets&&workbook.Sheets[sheetName];
+  if(!sheet)return[];
+  return XLSX.utils.sheet_to_json(sheet,{header:1,raw:false,defval:""}).slice(0,rowLimit);
+}
+
+function findWorkbookSheetByPriority(workbook,patterns){
+  const sheetNames=Array.isArray(workbook&&workbook.SheetNames)?workbook.SheetNames:[];
+  for(const pattern of Array.isArray(patterns)?patterns:[]){
+    const regex=pattern instanceof RegExp?pattern:new RegExp(String(pattern),"i");
+    const match=sheetNames.find(name=>regex.test(String(name||"")));
+    if(match)return match;
+  }
+  return "";
+}
+
+function sheetLooksLikeApprovedBudget(rows,sheetName){
+  const preview=Array.isArray(rows)?rows:[];
+  const flattened=preview.flat().map(cell=>String(cell||"").trim()).filter(Boolean);
+  if(/monthly budget detail/i.test(String(sheetName||"")))return true;
+  if(flattened.some(cell=>/monthly budget detail/i.test(cell)))return true;
+  if(flattened.some(cell=>/monthly budget rpt/i.test(cell)))return true;
+  if(flattened.some(cell=>/budget summary rpt/i.test(cell)))return true;
+  if(flattened.some(cell=>/import sheet/i.test(cell)))return true;
+  if(flattened.some(cell=>/residential\s*-\s*corporate/i.test(cell)))return true;
+  const monthRow=preview.find(row=>{
+    let count=0;
+    (Array.isArray(row)?row:[]).forEach(cell=>{ if(monthNameToIndex(cell)>=0)count+=1; });
+    return count>=6;
+  });
+  if(monthRow)return true;
+  return false;
+}
+
+function findApprovedBudgetSourceSheetName(workbook){
+  const sheetNames=Array.isArray(workbook&&workbook.SheetNames)?workbook.SheetNames:[];
+  if(!sheetNames.length)return"";
+  const preferred=findWorkbookSheetByPriority(workbook,[
+    /monthly budget detail/i,
+    /monthly budget rpt/i,
+    /budget summary rpt/i,
+    /import sheet/i
+  ]);
+  if(preferred)return preferred;
+  if(sheetNames.length===1)return sheetNames[0];
+  for(const sheetName of sheetNames){
+    const preview=readWorkbookSheetPreview(workbook,sheetName,10);
+    if(sheetLooksLikeApprovedBudget(preview,sheetName))return sheetName;
+  }
+  return "";
+}
+
 function buildAnnualBudgetRecordsFromWorkbook(workbook,fileName,entity){
   const meta=extractWorkbookBudgetMeta(workbook);
-  const property=String(entity&&entity.label||meta.property||"").trim();
+  const property=String(meta.property||entity&&entity.label||"").trim();
   if(!property)throw new Error("Could not determine which community this approved budget workbook belongs to.");
-  const sourceSheetName=(workbook.SheetNames||[]).find(name=>/monthly budget rpt/i.test(name))
-    || (workbook.SheetNames||[]).find(name=>/budget summary rpt/i.test(name))
-    || (workbook.SheetNames||[]).find(name=>/import sheet/i.test(name));
-  if(!sourceSheetName)throw new Error("No budget detail tab was found. Expected a Monthly Budget Rpt, Budget Summary Rpt, or Import Sheet tab.");
+  const sourceSheetName=findApprovedBudgetSourceSheetName(workbook);
+  if(!sourceSheetName)throw new Error("No budget detail tab was found. Expected a Monthly Budget Detail, Monthly Budget Rpt, Budget Summary Rpt, or Import Sheet tab.");
   const rows=XLSX.utils.sheet_to_json(workbook.Sheets[sourceSheetName],{header:1,raw:false,defval:""});
   if(!Array.isArray(rows)||!rows.length)throw new Error("The approved budget workbook tab was empty.");
   let monthHeaderRow=-1;
@@ -669,20 +767,25 @@ async function loadApprovedBudgetFile(file,ent){
     if(typeof XLSX==="undefined")throw new Error("Excel parser is not available on this page.");
     const buffer=await file.arrayBuffer();
     const workbook=XLSX.read(buffer,{type:"array"});
-    const entity=getEntityById(ent);
-    const parsed=buildAnnualBudgetRecordsFromWorkbook(workbook,file.name,entity);
+    const selectedEntity=getEntityById(ent);
+    const parsed=buildAnnualBudgetRecordsFromWorkbook(workbook,file.name,selectedEntity);
+    const workbookEntity=getEntityByLabel(parsed.property)||selectedEntity;
     const approvedAt=new Date().toISOString();
     const batchId=`budget_${Date.now()}`;
     const batchRows=parsed.records.map(record=>normalizeApprovedBudgetRecord({...record,batchId,property:parsed.property},batchId,parsed.property));
-    state.baselineEntity=ent;
-    replaceApprovedBudgetBatch({
+    state.entity=workbookEntity.id;
+    state.uploadEntity=workbookEntity.id;
+    state.baselineEntity=workbookEntity.id;
+    await replaceApprovedBudgetBatch({
       id:batchId,
       property:parsed.property,
       sourceFileName:file.name,
+      sourceSheetName:parsed.sourceSheetName,
+      budgetFormat:"company_monthly_detail",
       uploadedAt:approvedAt,
       rows:batchRows
     });
-    const atlasResult=await applyApprovedBudgetDatasetToAtlasStore(parsed,entity);
+    const atlasResult=await applyApprovedBudgetDatasetToAtlasStore(parsed,workbookEntity);
     state.loading=false;
     state.tab="baseline";
     render();
@@ -702,11 +805,40 @@ function getApprovedBudgetRowsFor(property){
     .filter(record=>normalizeCommunityLookupName(record&&record.property||"")===normalizeCommunityLookupName(property||""));
 }
 
-function buildApprovedBudgetIndex(property,selectedPeriod,rowsOverride){
+function getApprovedBudgetBatchOptions(property){
+  const current=getApprovedBudgetCurrentBatch(property);
+  const archived=getApprovedBudgetArchivedBatches(property);
+  return [current,...archived].filter(Boolean);
+}
+
+function getApprovedBudgetPeriodsForBatch(batch){
+  if(!batch)return[];
+  return [...new Set((Array.isArray(batch.rows)?batch.rows:[])
+    .map(row=>normalizeFinancialPeriodKey(row&&row.period||""))
+    .filter(Boolean))].sort();
+}
+
+function getCompareDatasetList(entityId){
+  const list=Array.isArray(state&&state.store&&state.store[entityId])?state.store[entityId]:[];
+  return [...list].sort((a,b)=>{
+    const aPeriod=normalizeFinancialPeriodKey(a&&a.period||"");
+    const bPeriod=normalizeFinancialPeriodKey(b&&b.period||"");
+    if(aPeriod&&bPeriod&&aPeriod!==bPeriod)return aPeriod.localeCompare(bPeriod);
+    return Number(a&&a.id||0)-Number(b&&b.id||0);
+  });
+}
+
+function getLatestDatasetIdForEntity(entityId){
+  const list=Array.isArray(state&&state.store&&state.store[entityId])?state.store[entityId]:[];
+  return list.length?list[list.length-1].id:null;
+}
+
+function buildApprovedBudgetIndex(property,selectedPeriod,rowsOverride,options={}){
   const normalizedPeriod=normalizeFinancialPeriodKey(selectedPeriod||"");
   if(!normalizedPeriod)return{map:{},matchCount:0,source:"none"};
   const year=Number(String(normalizedPeriod).slice(0,4));
   const month=Number(String(normalizedPeriod).slice(5,7));
+  const mode=String(options&&options.mode||"cumulative");
   const rows=Array.isArray(rowsOverride)?rowsOverride:getApprovedBudgetRowsFor(property);
   const map={};
   let matchCount=0;
@@ -716,12 +848,271 @@ function buildApprovedBudgetIndex(property,selectedPeriod,rowsOverride){
     const periodMonth=Number(period.slice(5,7));
     const glCode=String(record&&record.glCode||"").trim();
     if(!glCode)return;
-    if(periodMonth<=month){
+    const periodMatches=mode==="month"?period===normalizedPeriod:periodMonth<=month;
+    if(periodMatches){
       map[glCode]=(map[glCode]||0)+(Number(record&&record.budget||0)||0);
       matchCount+=1;
     }
   });
   return{map,matchCount,source:matchCount>0?"approved":"uploaded"};
+}
+
+function getCompareContext(){
+  const actualEntityId=state.compareActualEntity||state.entity;
+  const actualEntity=getEntityById(actualEntityId);
+  const actualList=getCompareDatasetList(actualEntity.id);
+  const actualDatasetId=state.compareActualDs&&actualList.some(item=>Number(item.id)===Number(state.compareActualDs))
+    ? Number(state.compareActualDs)
+    : getLatestDatasetIdForEntity(actualEntity.id);
+  const actualDataset=actualList.find(item=>Number(item.id)===Number(actualDatasetId))||actualList[actualList.length-1]||null;
+  const baselineEntityId=state.compareBaselineEntity||state.baselineEntity||state.entity;
+  const baselineEntity=getEntityById(baselineEntityId);
+  const baselineBatches=getApprovedBudgetBatchOptions(baselineEntity.label);
+  const baselineBatch=(state.compareBaselineBatchId&&baselineBatches.some(batch=>String(batch.id)===String(state.compareBaselineBatchId)))
+    ? baselineBatches.find(batch=>String(batch.id)===String(state.compareBaselineBatchId))
+    : baselineBatches[0]||null;
+  const periodOptions=getApprovedBudgetPeriodsForBatch(baselineBatch);
+  const baselinePeriod=(state.compareBaselinePeriod&&periodOptions.includes(normalizeFinancialPeriodKey(state.compareBaselinePeriod)))
+    ? normalizeFinancialPeriodKey(state.compareBaselinePeriod)
+    : periodOptions[periodOptions.length-1]||periodOptions[0]||"";
+  const actualPeriod=actualDataset&&normalizeFinancialPeriodKey(actualDataset.period||actualDataset.name||"")||"";
+  const budgetRows=baselineBatch&&Array.isArray(baselineBatch.rows)?baselineBatch.rows:[];
+  const budgetIndex=baselineBatch&&baselinePeriod
+    ? buildApprovedBudgetIndex(baselineEntity.label,baselinePeriod,budgetRows,{mode:"month"})
+    : {map:{},matchCount:0,source:"none"};
+  return{
+    actualEntity,
+    actualDataset,
+    actualPeriod,
+    baselineEntity,
+    baselineBatch,
+    baselinePeriod,
+    budgetIndex,
+    budgetRows
+  };
+}
+
+function buildActualVsBaselineResults(context){
+  const actualDataset=context&&context.actualDataset;
+  const budgetIndex=context&&context.budgetIndex||{map:{}};
+  if(!actualDataset||!Array.isArray(actualDataset.rows)||!actualDataset.rows.length||!context.baselineBatch||!context.baselinePeriod)return null;
+  const actualMap=_.keyBy(actualDataset.rows,"gl");
+  const allGLs=[...new Set([...Object.keys(actualMap),...Object.keys(budgetIndex.map||{})])];
+  const rows=allGLs.map(gl=>{
+    const actualRow=actualMap[gl]||{yAct:0,yBud:0};
+    const budgetValue=Number((budgetIndex.map||{})[gl]||0)||0;
+    const actualValue=Number(actualRow.yAct||0)||0;
+    const variance=actualValue-budgetValue;
+    const isIncome=isInc(actualRow);
+    const favorable=isIncome?variance>0:variance<0;
+    return{
+      gl:String(gl||""),
+      name:String(actualRow.name||""),
+      section:String(actualRow.section||""),
+      actual:actualValue,
+      budget:budgetValue,
+      variance,
+      variancePct:budgetValue?Math.abs(variance/budgetValue)*100:0,
+      isIncome,
+      favorable,
+      bad:!favorable
+    };
+  }).filter(row=>row.actual||row.budget);
+  const bySection=_.groupBy(rows,"section");
+  const sectionSummary=Object.entries(bySection).map(([section,items])=>{
+    const actual=items.reduce((s,row)=>s+row.actual,0);
+    const budget=items.reduce((s,row)=>s+row.budget,0);
+    const variance=actual-budget;
+    const favorableCount=items.filter(row=>row.favorable).length;
+    const unfavorableCount=items.filter(row=>row.bad).length;
+    return{
+      section,
+      actual,
+      budget,
+      variance,
+      variancePct:budget?Math.abs(variance/budget)*100:0,
+      favorableCount,
+      unfavorableCount,
+      bad:unfavorableCount>favorableCount
+    };
+  }).filter(row=>row.actual||row.budget).sort((a,b)=>Math.abs(b.variance)-Math.abs(a.variance));
+  const unfavorableRows=rows.filter(row=>row.bad).sort((a,b)=>Math.abs(b.variance)-Math.abs(a.variance));
+  const favorableRows=rows.filter(row=>row.favorable).sort((a,b)=>Math.abs(b.variance)-Math.abs(a.variance));
+  const totalActual=rows.reduce((s,row)=>s+row.actual,0);
+  const totalBudget=rows.reduce((s,row)=>s+row.budget,0);
+  const netVariance=totalActual-totalBudget;
+  const netFavorable=rows.reduce((s,row)=>s+(row.isIncome?(row.actual-row.budget):(row.budget-row.actual)),0);
+  const topNegative=unfavorableRows[0]||null;
+  const posture=netFavorable>=0?"Protect and hold the line":"Escalate recovery actions";
+  const postureDetail=netFavorable>=0
+    ? "The selected actual month is tracking at or ahead of the selected baseline month."
+    : "The selected actual month is trailing the selected baseline month and needs a management response.";
+  return{
+    ...context,
+    rows,
+    sectionSummary,
+    unfavorableRows,
+    favorableRows,
+    totalActual,
+    totalBudget,
+    netVariance,
+    netFavorable,
+    topNegative,
+    posture,
+    postureDetail
+  };
+}
+
+function downloadHtmlBlob(html,fileName){
+  const blob=new Blob([html],{type:"text/html"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;
+  a.download=fileName;
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),250);
+}
+
+function buildRegionalCorrespondenceHtml(context,results){
+  const actualEntity=context.actualEntity||{};
+  const baselineEntity=context.baselineEntity||{};
+  const actualMonth=formatBudgetPeriodLabel(context.actualPeriod||"",true)||"Actual month";
+  const baselineMonth=formatBudgetPeriodLabel(context.baselinePeriod||"",true)||"Baseline month";
+  const title=`${actualEntity.label||"Community"} vs ${baselineEntity.label||"Baseline"} - Regional Variance Brief`;
+  const favorableLines=(results.favorableRows||[]).slice(0,5);
+  const unfavorableLines=(results.unfavorableRows||[]).slice(0,5);
+  const sectionLines=(results.sectionSummary||[]).slice(0,8);
+  const netLabel=results.netFavorable>=0?"favorable":"unfavorable";
+  const body=[];
+  body.push('<div style="max-width:980px;margin:0 auto;padding:28px;font-family:Arial,Helvetica,sans-serif;color:#102a43;background:#f8fafc;">');
+  body.push('<div style="background:linear-gradient(135deg,'+D+',#0f5a73);color:white;border-radius:18px;padding:24px 26px;margin-bottom:16px;">');
+  body.push('<div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;opacity:.8;font-weight:700">RISE · ATLAS Internal Correspondence</div>');
+  body.push('<div style="font-size:28px;font-weight:800;margin-top:6px">'+title+'</div>');
+  body.push('<div style="margin-top:8px;font-size:13px;line-height:1.5;max-width:760px">Prepared for Regional review. This memo compares the selected actual month against the chosen baseline budget month and highlights the lines that are driving the variance.</div>');
+  body.push('</div>');
+  body.push('<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:16px;">');
+  [
+    {l:"Actual Community",v:actualEntity.label||""},
+    {l:"Actual Month",v:actualMonth},
+    {l:"Baseline Community",v:baselineEntity.label||""},
+    {l:"Baseline Month",v:baselineMonth}
+  ].forEach(card=>{
+    body.push('<div style="background:white;border:1px solid #d9e2ec;border-radius:12px;padding:12px 14px;">');
+    body.push('<div style="font-size:10px;font-weight:700;color:#829ab1;text-transform:uppercase;letter-spacing:.06em">'+card.l+'</div>');
+    body.push('<div style="font-size:14px;font-weight:700;color:'+D+';margin-top:4px">'+(card.v||"")+'</div>');
+    body.push('</div>');
+  });
+  body.push('</div>');
+  body.push('<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:16px;">');
+  [
+    {l:"Total Actual",v:f$(results.totalActual),c:D},
+    {l:"Total Baseline",v:f$(results.totalBudget),c:L},
+    {l:"Net Variance",v:f$(results.netFavorable),c:results.netFavorable>=0?G:R}
+  ].forEach(card=>{
+    body.push('<div style="background:white;border:1px solid #d9e2ec;border-radius:12px;padding:14px;">');
+    body.push('<div style="font-size:10px;font-weight:700;color:#829ab1;text-transform:uppercase;letter-spacing:.06em">'+card.l+'</div>');
+    body.push('<div style="font-size:24px;font-weight:800;color:'+card.c+';margin-top:4px">'+card.v+'</div>');
+    body.push('</div>');
+  });
+  body.push('</div>');
+  body.push('<div style="background:white;border:1px solid #d9e2ec;border-radius:14px;padding:18px;margin-bottom:14px;">');
+  body.push('<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">');
+  body.push('<div>');
+  body.push('<div style="font-size:12px;font-weight:800;color:#627d98;text-transform:uppercase;letter-spacing:.08em">Executive Note</div>');
+  body.push('<div style="font-size:20px;font-weight:800;color:'+D+';margin-top:3px">'+results.posture+'</div>');
+  body.push('</div>');
+  body.push('<div style="padding:8px 12px;border-radius:999px;background:'+(results.netFavorable>=0?"#ecfdf5":"#fef2f2")+';color:'+(results.netFavorable>=0?G:R)+';font-weight:700;font-size:12px;">'+f$(results.netFavorable)+' '+netLabel+'</div>');
+  body.push('</div>');
+  body.push('<div style="margin-top:8px;font-size:13px;line-height:1.55;color:#334155">'+results.postureDetail+' Top pressure is <strong>'+(results.topNegative&&results.topNegative.name||"none detected")+'</strong>.</div>');
+  body.push('</div>');
+  body.push('<div style="display:grid;grid-template-columns:1.05fr .95fr;gap:12px;margin-bottom:14px;">');
+  body.push('<div style="background:white;border:1px solid #d9e2ec;border-radius:14px;padding:16px;">');
+  body.push('<div style="font-size:13px;font-weight:800;color:'+D+';margin-bottom:10px">Top Unfavorable Lines</div>');
+  if(unfavorableLines.length){
+    body.push('<table style="width:100%;border-collapse:collapse;font-size:12px;">');
+    body.push('<thead><tr style="border-bottom:2px solid #e2e8f0"><th style="text-align:left;padding:6px">GL</th><th style="text-align:left;padding:6px">Account</th><th style="text-align:right;padding:6px">Variance</th></tr></thead><tbody>');
+    unfavorableLines.forEach(row=>{
+      body.push('<tr style="border-bottom:1px solid #eef2f7"><td style="padding:6px;font-family:monospace">'+row.gl+'</td><td style="padding:6px">'+row.name+'</td><td style="padding:6px;text-align:right;color:'+R+';font-weight:700">'+f$(Math.abs(row.variance))+'</td></tr>');
+    });
+    body.push('</tbody></table>');
+  } else {
+    body.push('<div style="font-size:12px;color:#829ab1">No unfavorable lines are standing out against the selected baseline month.</div>');
+  }
+  body.push('</div>');
+  body.push('<div style="background:white;border:1px solid #d9e2ec;border-radius:14px;padding:16px;">');
+  body.push('<div style="font-size:13px;font-weight:800;color:'+D+';margin-bottom:10px">Offsets / Favors</div>');
+  if(favorableLines.length){
+    body.push('<table style="width:100%;border-collapse:collapse;font-size:12px;">');
+    body.push('<thead><tr style="border-bottom:2px solid #e2e8f0"><th style="text-align:left;padding:6px">GL</th><th style="text-align:left;padding:6px">Account</th><th style="text-align:right;padding:6px">Benefit</th></tr></thead><tbody>');
+    favorableLines.forEach(row=>{
+      body.push('<tr style="border-bottom:1px solid #eef2f7"><td style="padding:6px;font-family:monospace">'+row.gl+'</td><td style="padding:6px">'+row.name+'</td><td style="padding:6px;text-align:right;color:'+G+';font-weight:700">'+f$(Math.abs(row.variance))+'</td></tr>');
+    });
+    body.push('</tbody></table>');
+  } else {
+    body.push('<div style="font-size:12px;color:#829ab1">No offsetting lines were identified.</div>');
+  }
+  body.push('</div></div>');
+  body.push('<div style="background:white;border:1px solid #d9e2ec;border-radius:14px;padding:16px;margin-bottom:14px;">');
+  body.push('<div style="font-size:13px;font-weight:800;color:'+D+';margin-bottom:10px">Section-Level Drilldown</div>');
+  body.push('<table style="width:100%;border-collapse:collapse;font-size:12px;">');
+  body.push('<thead><tr style="border-bottom:2px solid #e2e8f0"><th style="text-align:left;padding:6px">Section</th><th style="text-align:right;padding:6px">Actual</th><th style="text-align:right;padding:6px">Baseline</th><th style="text-align:right;padding:6px">Variance</th><th style="text-align:right;padding:6px">Mix</th></tr></thead><tbody>');
+  sectionLines.forEach(row=>{
+    body.push('<tr style="border-bottom:1px solid #eef2f7">');
+    body.push('<td style="padding:6px;font-weight:700;color:'+D+'">'+row.section+'</td>');
+    body.push('<td style="padding:6px;text-align:right">'+f$(row.actual)+'</td>');
+    body.push('<td style="padding:6px;text-align:right">'+f$(row.budget)+'</td>');
+    body.push('<td style="padding:6px;text-align:right;color:'+(row.variance>=0?R:G)+';font-weight:700">'+f$(Math.abs(row.variance))+'</td>');
+    body.push('<td style="padding:6px;text-align:right">'+row.favorableCount+' favorable / '+row.unfavorableCount+' unfavorable</td>');
+    body.push('</tr>');
+  });
+  body.push('</tbody></table></div>');
+  body.push('<div style="font-size:11px;color:#829ab1;text-align:center;margin-top:12px">Generated by ATLAS RISE Financial Accountability · Confidential internal use only</div>');
+  body.push('</div>');
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+title+'</title></head><body style="margin:0;background:#f8fafc;">'+body.join('')+'</body></html>';
+}
+
+function generateRegionalBrief(){
+  const context=getCompareContext();
+  if(!context.actualDataset||!context.baselineBatch||!context.baselinePeriod){
+    window.alert("Select an actual report, baseline community, baseline budget, and baseline month first.");
+    return;
+  }
+  const results=buildActualVsBaselineResults(context);
+  if(!results||!results.rows.length){
+    window.alert("The selected comparison did not produce any comparable budget lines.");
+    return;
+  }
+  const html=buildRegionalCorrespondenceHtml(context,results);
+  const actualLabel=(context.actualEntity&&context.actualEntity.label||"Community").replace(/[^a-zA-Z0-9]/g,"_");
+  const baselineLabel=(context.baselineEntity&&context.baselineEntity.label||"Baseline").replace(/[^a-zA-Z0-9]/g,"_");
+  const periodLabel=(formatBudgetPeriodLabel(context.actualPeriod||"",false)||"Actual").replace(/[^a-zA-Z0-9]/g,"_");
+  downloadHtmlBlob(html,`${actualLabel}_vs_${baselineLabel}_${periodLabel}_Regional_Brief.html`);
+}
+
+function syncActualVsBaselineSelections(){
+  if(state.compareMode!=="actual_vs_baseline")return;
+  const communityEntities=getEntities().filter(e=>e.kind==="community");
+  if(!state.compareActualEntity||!communityEntities.some(e=>e.id===state.compareActualEntity)){
+    state.compareActualEntity=(state.entity&&getEntityById(state.entity).kind==="community"?state.entity:(communityEntities[0]&&communityEntities[0].id)||state.entity);
+  }
+  if(!state.compareBaselineEntity||!communityEntities.some(e=>e.id===state.compareBaselineEntity)){
+    state.compareBaselineEntity=state.baselineEntity||state.compareActualEntity||state.entity;
+  }
+  const actualCompareEntity=getEntityById(state.compareActualEntity);
+  const actualCompareList=getCompareDatasetList(actualCompareEntity.id);
+  if(!state.compareActualDs||!actualCompareList.some(d=>Number(d.id)===Number(state.compareActualDs))){
+    state.compareActualDs=getLatestDatasetIdForEntity(actualCompareEntity.id);
+  }
+  const baselineCompareEntity=getEntityById(state.compareBaselineEntity);
+  const baselineCompareBatches=getApprovedBudgetBatchOptions(baselineCompareEntity.label);
+  if(!state.compareBaselineBatchId||!baselineCompareBatches.some(batch=>String(batch.id)===String(state.compareBaselineBatchId))){
+    state.compareBaselineBatchId=baselineCompareBatches[0]&&baselineCompareBatches[0].id||null;
+  }
+  const baselineCompareBatch=baselineCompareBatches.find(batch=>String(batch.id)===String(state.compareBaselineBatchId))||baselineCompareBatches[0]||null;
+  const baselineComparePeriods=getApprovedBudgetPeriodsForBatch(baselineCompareBatch);
+  if(!state.compareBaselinePeriod||!baselineComparePeriods.includes(normalizeFinancialPeriodKey(state.compareBaselinePeriod))){
+    state.compareBaselinePeriod=baselineComparePeriods[baselineComparePeriods.length-1]||baselineComparePeriods[0]||null;
+  }
 }
 
 function summarizeApprovedBudgetRowsByGl(rows){
@@ -737,6 +1128,106 @@ function summarizeApprovedBudgetRowsByGl(rows){
       rowCount:items.length
     };
   }).filter(row=>row.gl);
+}
+
+function summarizeApprovedBudgetRowsByMonth(rows){
+  const grouped=_.groupBy(Array.isArray(rows)?rows:[],row=>{
+    const gl=String(row&&row.glCode||row&&row.gl||"").trim();
+    const section=String(row&&row.section||"").trim();
+    const name=String(row&&row.lineItem||row&&row.name||"").trim();
+    return `${section}::${gl}::${name}`;
+  });
+  return Object.entries(grouped).map(([key,items])=>{
+    const first=items[0]||{};
+    const months={};
+    let annualBudget=0;
+    items.forEach(item=>{
+      const period=normalizeFinancialPeriodKey(item&&item.period||"");
+      if(!period)return;
+      const budget=Number(item&&item.budget||0)||0;
+      months[period]=budget;
+      annualBudget+=budget;
+    });
+    return{
+      gl:String(first.glCode||first.gl||"").trim(),
+      name:String(first.lineItem||first.name||"").trim(),
+      section:String(first.section||"").trim(),
+      months,
+      annualBudget,
+      rowCount:items.length
+    };
+  }).filter(row=>row.gl);
+}
+
+function getLatestDatasetForEntity(entityId){
+  const list=Array.isArray(state&&state.store&&state.store[entityId])?state.store[entityId]:[];
+  return list.length?list[list.length-1]:null;
+}
+
+function removeDatasetFromState(entityId,datasetId){
+  const id=Number(datasetId);
+  const list=Array.isArray(state.store&&state.store[entityId])?state.store[entityId]:[];
+  const target=list.find(item=>Number(item&&item.id)===id)||null;
+  state.store[entityId]=list.filter(item=>Number(item&&item.id)!==id);
+  if(Number(state.selDs)===id)state.selDs=(state.store[entityId]&&state.store[entityId][state.store[entityId].length-1]&&state.store[entityId][state.store[entityId].length-1].id)||null;
+  if(Number(state.cmpA)===id)state.cmpA=null;
+  if(Number(state.cmpB)===id)state.cmpB=null;
+  if(Number(state.compareBudgetDs)===id)state.compareBudgetDs=null;
+  return target;
+}
+
+function renameDatasetInState(entityId,datasetId,newName){
+  const id=Number(datasetId);
+  const name=String(newName||"").trim();
+  if(!name)return null;
+  const list=Array.isArray(state.store&&state.store[entityId])?state.store[entityId]:[];
+  let updated=null;
+  state.store[entityId]=list.map(item=>{
+    if(Number(item&&item.id)!==id)return item;
+    updated={...item,name};
+    return updated;
+  });
+  return updated;
+}
+
+function getCommunityBudgetWatchItems(entityId){
+  const ds=getLatestDatasetForEntity(entityId);
+  if(!ds||!Array.isArray(ds.rows)||!ds.rows.length)return null;
+  const enrichedRows=enrich(ds.rows,ds);
+  const summary=getSummary(enrichedRows);
+  if(!summary)return null;
+  const actionRows=[
+    ...enrichedRows.filter(row=>!row.isIncome&&row.status==="over"),
+    ...enrichedRows.filter(row=>row.isIncome&&row.status==="under")
+  ]
+    .sort((a,b)=>Math.abs(b.yVar||0)-Math.abs(a.yVar||0))
+    .slice(0,4)
+    .map(row=>buildManagerAlert(row,ds));
+  const overRows=enrichedRows
+    .filter(row=>!row.isIncome&&row.status==="over")
+    .sort((a,b)=>(b.yVar||0)-(a.yVar||0))
+    .slice(0,3);
+  const underRows=enrichedRows
+    .filter(row=>row.isIncome&&row.status==="under")
+    .sort((a,b)=>(a.yVar||0)-(b.yVar||0))
+    .slice(0,3);
+  const overSections=(summary.ss||[])
+    .filter(section=>section.overCount>0)
+    .sort((a,b)=>b.overCount-a.overCount)
+    .slice(0,2);
+  return{
+    dataset:ds,
+    summary,
+    overRows,
+    underRows,
+    overSections,
+    actionRows
+  };
+}
+
+function buildBudgetIssueLabel(row){
+  const variance=Number(row&&row.yVar||0);
+  return `${row&&row.name||""} · ${f$(Math.abs(variance))} ${row&&row.isIncome?"below":"over"} budget`;
 }
 
 function goBackToAtlas(){
@@ -765,12 +1256,17 @@ function parseWorkbook(file){
 if(typeof XLSX==="undefined")throw new Error("Excel parser is not available on this page.");
 return file.arrayBuffer().then(buffer=>{
 const workbook=XLSX.read(buffer,{type:"array"});
-const sheetName=(workbook.SheetNames||[]).find(name=>{
-const sheet=workbook.Sheets[name];
-if(!sheet)return false;
-const rows=XLSX.utils.sheet_to_json(sheet,{header:1,raw:false,defval:""});
-return Array.isArray(rows)&&rows.some(row=>Array.isArray(row)&&row.some(cell=>String(cell||"").trim()!==""));
-})||(workbook.SheetNames||[])[0];
+const sheetName=findWorkbookSheetByPriority(workbook,[
+  /monthly budget detail/i,
+  /monthly budget rpt/i,
+  /budget summary rpt/i,
+  /import sheet/i
+])||((workbook.SheetNames||[]).find(name=>{
+  const sheet=workbook.Sheets[name];
+  if(!sheet)return false;
+  const rows=XLSX.utils.sheet_to_json(sheet,{header:1,raw:false,defval:""});
+  return Array.isArray(rows)&&rows.some(row=>Array.isArray(row)&&row.some(cell=>String(cell||"").trim()!==""));
+})||(workbook.SheetNames||[])[0]);
 if(!sheetName)throw new Error("Workbook has no readable sheets.");
 const rows=XLSX.utils.sheet_to_json(workbook.Sheets[sheetName],{header:1,raw:false,defval:""});
 const csvText=(Array.isArray(rows)?rows:[]).map(row=>(Array.isArray(row)?row:[]).map(cell=>String(cell??""))).map(row=>row.map(cell=>/[,"\n]/.test(cell)?`"${cell.replace(/"/g,'""')}"`:cell).join(",")).join("\n");
@@ -778,9 +1274,252 @@ return parseCSV(csvText);
 });
 }
 
+function parseFinancialNumber(token){
+  const raw=String(token||"").trim();
+  if(!raw)return 0;
+  const cleaned=raw.replace(/[%,$]/g,"").trim();
+  if(!cleaned)return 0;
+  const negative=/^\(.*\)$/.test(cleaned);
+  const normalized=cleaned.replace(/^\(/,"").replace(/\)$/,"").replace(/,/g,"");
+  const value=Number(normalized);
+  if(Number.isNaN(value))return 0;
+  return negative?-value:value;
+}
+
+function extractPdfTextLines(items){
+  const groups=[];
+  (Array.isArray(items)?items:[]).forEach(item=>{
+    const str=String(item&&item.str||"");
+    if(!str)return;
+    const x=Number(item&&item.transform&&item.transform[4]||0);
+    const y=Math.round(Number(item&&item.transform&&item.transform[5]||0));
+    let group=groups.find(entry=>Math.abs(entry.y-y)<=2);
+    if(!group){
+      group={y,items:[]};
+      groups.push(group);
+    }
+    group.items.push({x,str});
+  });
+  return groups.sort((a,b)=>b.y-a.y).map(group=>group.items.sort((a,b)=>a.x-b.x).map(item=>item.str).join(" ").replace(/\s+/g," ").trim()).filter(Boolean);
+}
+
+function extractPdfProperty(text){
+  const raw=String(text||"");
+  const match=raw.match(/Property:\s*([^\n]+)/i);
+  if(match)return String(match[1]||"").trim();
+  const alt=raw.match(/\bRISE\s+[A-Za-z0-9 &/-]+/i);
+  return alt?String(alt[0]||"").trim():"";
+}
+
+function extractPdfPeriod(text,fileName){
+  const raw=String(text||"");
+  const match=raw.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})\b/i);
+  if(match){
+    const monthIdx=MONTHS.findIndex(m=>m.toLowerCase()===String(match[1]).slice(0,3).toLowerCase());
+    if(monthIdx>=0)return `${MONTHS[monthIdx]} ${match[2]}`;
+  }
+  const fileMatch=String(fileName||"").match(/(\d{4})[.\-_](\d{2})(?!\d)/);
+  if(fileMatch){
+    const monthIdx=Number(fileMatch[2])-1;
+    return `${MONTHS[monthIdx]||fileMatch[2]} ${fileMatch[1]}`;
+  }
+  return "";
+}
+
+function isPdfBudgetComparisonPage(text){
+  const raw=String(text||"");
+  return /Budget Comparison - Income Statement/i.test(raw) || /Income Statement - Budget vs Actual/i.test(raw);
+}
+
+function isPdfSectionHeading(line){
+  const text=String(line||"").trim();
+  if(!text)return false;
+  if(/^(\d{4,6})\b/.test(text))return false;
+  if(/^(RISE -|Property:|Accrual Basis|Account\b|Page \d+|Report Parameters|Balance Sheet|Cash Flow Statement|Forecasted Income Statement|Trailing 12 Month - Income Statement|Income Statement - Budget vs Actual)/i.test(text))return false;
+  if(/^Total\b/i.test(text))return false;
+  if(/^Net\b/i.test(text) && /(Income|Operating|Cash Flow)/i.test(text))return false;
+  if(/\d/.test(text))return false;
+  return text.length<=60;
+}
+
+function parsePdfIncomeStatementRow(line,currentSection,pageNum){
+  const text=String(line||"").trim();
+  const glMatch=text.match(/^(\d{4,6})\b/);
+  if(!glMatch)return null;
+  const numericMatches=[...text.matchAll(/(\(?-?[\d,]+\.\d{2}\)?|-?\d+\.\d{2}%)/g)];
+  if(numericMatches.length<9)return null;
+  const firstNumberIndex=numericMatches[0].index;
+  if(firstNumberIndex==null||firstNumberIndex<0)return null;
+  const gl=String(glMatch[1]||"").trim();
+  const name=text.slice(glMatch[0].length,firstNumberIndex).trim();
+  const values=numericMatches.slice(0,9).map(match=>parseFinancialNumber(match[0]));
+  const [mAct,mBud,mVar,mVarPct,yAct,yBud,yVar,yVarPct,annBud]=values;
+  return{
+    gl,
+    name,
+    section:String(currentSection||"").trim(),
+    mAct,
+    mBud,
+    mVar,
+    mVarPct,
+    yAct,
+    yBud,
+    yVar,
+    yVarPct,
+    annBud,
+    comment:`PDF page ${pageNum}`
+  };
+}
+
+async function parsePdfFinancialActuals(file){
+  if(!window.pdfjsLib||typeof window.pdfjsLib.getDocument!=="function"){
+    throw new Error("PDF parser is not available on this page.");
+  }
+  const buffer=new Uint8Array(await file.arrayBuffer());
+  const pdf=await window.pdfjsLib.getDocument({data:buffer}).promise;
+  const rows=[];
+  let currentSection="";
+  let property="";
+  let period="";
+  let statementPages=0;
+  for(let pageNum=1;pageNum<=pdf.numPages;pageNum++){
+    const page=await pdf.getPage(pageNum);
+    const content=await page.getTextContent();
+    const lines=extractPdfTextLines(content.items);
+    const pageText=lines.join("\n");
+    if(!period)period=extractPdfPeriod(pageText,file.name);
+    if(!property)property=extractPdfProperty(pageText);
+    if(!isPdfBudgetComparisonPage(pageText))continue;
+    statementPages+=1;
+    lines.forEach(line=>{
+      if(isPdfSectionHeading(line)){
+        currentSection=line;
+        return;
+      }
+      const parsed=parsePdfIncomeStatementRow(line,currentSection,pageNum);
+      if(parsed)rows.push(parsed);
+    });
+  }
+  if(!rows.length)throw new Error("No monthly actual rows were detected in the PDF package.");
+  return{
+    property:property||"",
+    period:period||"",
+    rows,
+    sourceFileName:file.name,
+    sourceType:"pdf",
+    statementPages
+  };
+}
+
 function getSt(a,b,inc){if(!b)return"on";if(inc)return a/b>=1?"on":a/b>=.9?"watch":"under";const r=a/b;return r<=1?"on":r<=1.1?"watch":"over";}
 
-let state={store:{},entity:"rise_corp",tab:"dash",selDs:null,cmpA:null,cmpB:null,compareMode:"report_vs_budget",compareBudgetDs:null,compareArchivedBudgetId:null,search:"",filterSec:"all",filterSt:"all",sortCol:null,sortDir:"desc",uploadEntity:"rise_corp",baselineEntity:"rise_corp",loading:false,approvedBudgets:loadStoredApprovedBudgets()};
+function getDatasetPeriodKey(dataset){
+  return normalizeFinancialPeriodKey(dataset&&dataset.period||dataset&&dataset.name||"");
+}
+
+function getElapsedMonthsForDataset(dataset){
+  const periodKey=getDatasetPeriodKey(dataset);
+  const month=Number(String(periodKey).slice(5,7));
+  return month&&month>=1&&month<=12?month:12;
+}
+
+function getExpectedBudgetUsagePct(dataset){
+  return (getElapsedMonthsForDataset(dataset)/12)*100;
+}
+
+function getAlertProfile(row){
+  const token=`${row&&row.section||""} ${row&&row.name||""} ${row&&row.gl||""}`.toLowerCase();
+  if(row&&row.isIncome){
+    if(/rent|rental|lease/.test(token))return{category:"Revenue",action:"Protect rate, collections, and occupancy conversion this month.",watchFactor:.98,criticalFactor:.95,recoveryPct:.75};
+    if(/concession/.test(token))return{category:"Pricing",action:"Tighten concession approvals and reset quote discipline.",watchFactor:.97,criticalFactor:.94,recoveryPct:.6};
+    if(/bad debt|delin/.test(token))return{category:"Collections",action:"Escalate collections, payment plans, and skip-risk follow up immediately.",watchFactor:.98,criticalFactor:.94,recoveryPct:.7};
+    return{category:"Revenue",action:"Recover revenue leakage before next close.",watchFactor:.98,criticalFactor:.95,recoveryPct:.55};
+  }
+  if(/payroll|overtime|bonus|temp|contract labor/.test(token))return{category:"Labor",action:"Reset staffing/overtime approvals and require weekly labor variance review.",watchFactor:1.03,criticalFactor:1.08,clawbackPct:.5};
+  if(/repair|maintenance|turn|make ready|suppl/.test(token))return{category:"R&M",action:"Gate high-cost work orders and tighten make-ready scope approval.",watchFactor:1.04,criticalFactor:1.1,clawbackPct:.45};
+  if(/utilit|water|electric|gas|trash|sewer/.test(token))return{category:"Utilities",action:"Audit site consumption, leaks, and vacant-unit utility controls.",watchFactor:1.04,criticalFactor:1.08,clawbackPct:.2};
+  if(/marketing|advertis|resident retention|locator/.test(token))return{category:"Marketing",action:"Reallocate spend to channels converting to signed leases.",watchFactor:1.03,criticalFactor:1.08,clawbackPct:.35};
+  if(/admin|office|travel|training/.test(token))return{category:"G&A",action:"Freeze discretionary spend until the variance normalizes.",watchFactor:1.02,criticalFactor:1.06,clawbackPct:.4};
+  return{category:"Expense",action:"Require variance approval before month-end close.",watchFactor:1.04,criticalFactor:1.08,clawbackPct:.25};
+}
+
+function buildManagerAlert(row,dataset){
+  const profile=getAlertProfile(row);
+  const expectedPct=getExpectedBudgetUsagePct(dataset);
+  const paceGap=(row&&row.budgetPctUsed||0)-expectedPct;
+  const variance=Math.abs(Number(row&&row.yVar||0));
+  const severity=row&&row.isIncome
+    ? ((row&&row.status)==="under"&&variance>Math.max(5000,Math.abs(Number(row&&row.yBud||0))*.12)?"danger":"warning")
+    : ((row&&row.status)==="over"&&paceGap>10?"danger":(row&&row.status)==="over"?"warning":"info");
+  const reason=row&&row.isIncome
+    ? `Revenue is ${f$(variance)} below budget and pacing ${(row&&row.budgetPctUsed||0).toFixed(1)}% of annual target through ${getElapsedMonthsForDataset(dataset)}/12 months.`
+    : `Spend is ${f$(variance)} over budget and pacing ${(row&&row.budgetPctUsed||0).toFixed(1)}% of annual plan versus ${(expectedPct).toFixed(1)}% expected.`;
+  const recovery=row&&row.isIncome
+    ? `Need ${f$(Math.max(0,Number(row&&row.yBud||0)-Number(row&&row.yAct||0)))} of recovered revenue to get back on plan.`
+    : `Projected year-end run rate is ${f$(row&&row.projEOY||0)} versus ${f$(row&&row.annBud||0)} annual plan.`;
+  return{
+    severity,
+    gl:row&&row.gl||"",
+    name:row&&row.name||"",
+    category:profile.category,
+    action:profile.action,
+    reason,
+    recovery
+  };
+}
+
+function buildThresholdPlanRows(entityId){
+  const dataset=getLatestDatasetForEntity(entityId);
+  if(!dataset||!Array.isArray(dataset.rows)||!dataset.rows.length)return[];
+  const elapsedMonths=getElapsedMonthsForDataset(dataset);
+  return enrich(dataset.rows,dataset)
+    .filter(row=>Math.abs(Number(row&&row.annBud||0))>2500||Math.abs(Number(row&&row.yAct||0))>2500)
+    .map(row=>{
+      const profile=getAlertProfile(row);
+      const projected=Math.max(0,Number(row&&row.projEOY||0));
+      const annualBudget=Math.max(0,Number(row&&row.annBud||0));
+      const gap=row.isIncome?Math.max(0,annualBudget-projected):Math.max(0,projected-annualBudget);
+      const recommendedAnnual=row.isIncome
+        ? projected + gap*profile.recoveryPct
+        : projected - gap*profile.clawbackPct;
+      const recommendedMonthly=recommendedAnnual/12;
+      const watchMonthly=row.isIncome?recommendedMonthly*profile.watchFactor:recommendedMonthly*profile.watchFactor;
+      const criticalMonthly=row.isIncome?recommendedMonthly*profile.criticalFactor:recommendedMonthly*profile.criticalFactor;
+      const stance=row.isIncome
+        ? (row.status==="under"?"Raise collections/revenue threshold":"Hold / modestly grow top-line threshold")
+        : (row.status==="over"?"Reset downward with active clawback":"Hold near projected run-rate");
+      return{
+        ...row,
+        category:profile.category,
+        action:profile.action,
+        stance,
+        elapsedMonths,
+        recommendedAnnual,
+        recommendedMonthly,
+        watchMonthly,
+        criticalMonthly
+      };
+    })
+    .sort((a,b)=>Math.abs(b.recommendedAnnual-a.annBud)-Math.abs(a.recommendedAnnual-a.annBud));
+}
+
+function buildPortfolioThresholdHighlights(){
+  return getEntities()
+    .filter(entity=>Array.isArray(state.store[entity.id])&&state.store[entity.id].length)
+    .map(entity=>{
+      const rows=buildThresholdPlanRows(entity.id);
+      const topReset=rows
+        .filter(row=>!row.isIncome&&row.status==="over")
+        .sort((a,b)=>(b.projEOY-b.recommendedAnnual)-(a.projEOY-a.recommendedAnnual))[0]||null;
+      const topRecovery=rows
+        .filter(row=>row.isIncome&&row.status==="under")
+        .sort((a,b)=>(b.recommendedAnnual-b.projEOY)-(a.recommendedAnnual-a.projEOY))[0]||null;
+      return rows.length?{entity,rows,topReset,topRecovery}:null;
+    })
+    .filter(Boolean);
+}
+
+let state={store:{},entity:"rise_corp",tab:"dash",selDs:null,cmpA:null,cmpB:null,compareMode:"report_vs_budget",compareBudgetDs:null,compareArchivedBudgetId:null,compareActualEntity:null,compareActualDs:null,compareBaselineEntity:null,compareBaselineBatchId:null,compareBaselinePeriod:null,compareUploadTarget:"a",search:"",filterSec:"all",filterSt:"all",sortCol:null,sortDir:"desc",uploadEntity:"rise_corp",baselineEntity:"rise_corp",loading:false,approvedBudgets:loadStoredApprovedBudgets()};
 {
   const storedState=loadStoredPageState();
   if(storedState&&typeof storedState==="object"){
@@ -793,6 +1532,12 @@ let state={store:{},entity:"rise_corp",tab:"dash",selDs:null,cmpA:null,cmpB:null
     state.compareMode=storedState.compareMode||state.compareMode;
     state.compareBudgetDs=storedState.compareBudgetDs??state.compareBudgetDs;
     state.compareArchivedBudgetId=storedState.compareArchivedBudgetId??state.compareArchivedBudgetId;
+    state.compareActualEntity=storedState.compareActualEntity??state.compareActualEntity;
+    state.compareActualDs=storedState.compareActualDs??state.compareActualDs;
+    state.compareBaselineEntity=storedState.compareBaselineEntity??state.compareBaselineEntity;
+    state.compareBaselineBatchId=storedState.compareBaselineBatchId??state.compareBaselineBatchId;
+    state.compareBaselinePeriod=storedState.compareBaselinePeriod??state.compareBaselinePeriod;
+    state.compareUploadTarget=storedState.compareUploadTarget||state.compareUploadTarget;
     state.search=storedState.search||state.search;
     state.filterSec=storedState.filterSec||state.filterSec;
     state.filterSt=storedState.filterSt||state.filterSt;
@@ -809,7 +1554,7 @@ function getEntityDS(){return state.store[state.entity]||[];}
 function getActive(){const ds=getEntityDS();return ds.find(d=>d.id===state.selDs)||ds[ds.length-1]||null;}
 function isInc(r){return(r.section&&r.section.toLowerCase().includes("income"))||parseInt(r.gl)<5000;}
 
-function enrich(rows){return rows.map(r=>{const inc=isInc(r);const st=getSt(r.yAct,r.yBud,inc);const rr=2>0?r.yAct/2:0;const pe=rr*12;const rem=r.annBud-r.yAct;const pu=r.annBud?(r.yAct/r.annBud)*100:0;return Object.assign({},r,{isIncome:inc,status:st,runRate:rr,projEOY:pe,remaining:rem,budgetPctUsed:pu});});}
+function enrich(rows,dataset){const elapsed=getElapsedMonthsForDataset(dataset);const expectedPct=getExpectedBudgetUsagePct(dataset);return rows.map(r=>{const inc=isInc(r);const st=getSt(r.yAct,r.yBud,inc);const rr=elapsed>0?r.yAct/elapsed:0;const pe=rr*12;const rem=r.annBud-r.yAct;const pu=r.annBud?(r.yAct/r.annBud)*100:0;return Object.assign({},r,{isIncome:inc,status:st,runRate:rr,projEOY:pe,remaining:rem,budgetPctUsed:pu,elapsedMonths:elapsed,expectedBudgetPct:expectedPct,paceGapPct:pu-expectedPct});});}
 
 function getSummary(enriched){
 if(!enriched.length)return null;
@@ -817,38 +1562,135 @@ const inc=enriched.filter(r=>r.isIncome),exp=enriched.filter(r=>!r.isIncome);
 const t=(a,k)=>a.reduce((s,r)=>s+r[k],0);
 const sg=_.groupBy(enriched,"section");
 const ss=Object.entries(sg).map(([n,items])=>({name:n,count:items.length,yAct:t(items,"yAct"),yBud:t(items,"yBud"),annBud:t(items,"annBud"),overCount:items.filter(r=>r.status==="over").length,watchCount:items.filter(r=>r.status==="watch").length,isIncome:items[0]&&items[0].isIncome}));
-return{incYA:t(inc,"yAct"),incYB:t(inc,"yBud"),incAnn:t(inc,"annBud"),expYA:t(exp,"yAct"),expYB:t(exp,"yBud"),expAnn:t(exp,"annBud"),totalOver:enriched.filter(r=>r.status==="over").length,totalWatch:enriched.filter(r=>r.status==="watch").length,totalOn:enriched.filter(r=>r.status==="on").length,ss:ss,noi:t(inc,"yAct")-t(exp,"yAct"),noiBud:t(inc,"yBud")-t(exp,"yBud")};
+const projectedRevenue=t(inc,"projEOY"),projectedExpense=t(exp,"projEOY"),elapsedMonths=enriched[0]&&enriched[0].elapsedMonths||12;
+return{incYA:t(inc,"yAct"),incYB:t(inc,"yBud"),incAnn:t(inc,"annBud"),expYA:t(exp,"yAct"),expYB:t(exp,"yBud"),expAnn:t(exp,"annBud"),totalOver:enriched.filter(r=>r.status==="over").length,totalUnder:enriched.filter(r=>r.status==="under").length,totalWatch:enriched.filter(r=>r.status==="watch").length,totalOn:enriched.filter(r=>r.status==="on").length,ss:ss,noi:t(inc,"yAct")-t(exp,"yAct"),noiBud:t(inc,"yBud")-t(exp,"yBud"),projectedNoi:projectedRevenue-projectedExpense,elapsedMonths,expectedBudgetPct:enriched[0]&&enriched[0].expectedBudgetPct||100};
 }
 
 function getRecs(enriched,summary){
 if(!enriched.length)return[];const r=[];
-const ov=enriched.filter(x=>!x.isIncome&&x.status==="over").sort((a,b)=>a.yVar-b.yVar);
-ov.slice(0,5).forEach(x=>r.push({t:"danger",gl:x.gl,n:x.name,m:"Over YTD budget by "+f$(Math.abs(x.yVar))+". Run rate projects "+f$(x.projEOY)+" vs "+f$(x.annBud)+" annual."+(x.comment?" Comment: "+x.comment:"")}));
-const ui=enriched.filter(x=>x.isIncome&&x.yAct<x.yBud*.9&&x.yBud>5000);
-ui.slice(0,3).forEach(x=>r.push({t:"warning",gl:x.gl,n:x.name,m:"Income "+f$(x.yBud-x.yAct)+" below target."}));
-const bs=enriched.filter(x=>!x.isIncome&&x.yBud>0&&x.yAct<x.yBud*.7&&x.yBud>5000).sort((a,b)=>(b.yBud-b.yAct)-(a.yBud-a.yAct));
-if(bs.length)r.push({t:"info",gl:"",n:"Offsets",m:bs.length+" lines under budget. Top: "+bs.slice(0,3).map(x=>x.name+" ("+f$(x.yBud-x.yAct)+")").join("; ")});
-if(summary){const nv=summary.noi-summary.noiBud;r.push({t:nv>=0?"success":"danger",gl:"",n:"NOI",m:"NOI "+f$(Math.abs(nv))+" "+(nv>=0?"above":"below")+" budget. YTD: "+f$(summary.noi)+" vs "+f$(summary.noiBud)});}
-return r;
+const overExpense=enriched.filter(x=>!x.isIncome&&x.status==="over").sort((a,b)=>(Math.abs(b.yVar)-Math.abs(a.yVar)));
+const underIncome=enriched.filter(x=>x.isIncome&&x.status==="under").sort((a,b)=>(Math.abs(b.yVar)-Math.abs(a.yVar)));
+overExpense.slice(0,4).forEach(x=>{const alert=buildManagerAlert(x,{period:`2026-${String(x.elapsedMonths).padStart(2,"0")}`});r.push({t:alert.severity,gl:x.gl,n:`${alert.category}: ${x.name}`,m:`${alert.reason} ${alert.recovery} Action: ${alert.action}`});});
+underIncome.slice(0,3).forEach(x=>{const alert=buildManagerAlert(x,{period:`2026-${String(x.elapsedMonths).padStart(2,"0")}`});r.push({t:alert.severity,gl:x.gl,n:`${alert.category}: ${x.name}`,m:`${alert.reason} ${alert.recovery} Action: ${alert.action}`});});
+const offsets=enriched.filter(x=>!x.isIncome&&x.yBud>0&&x.yAct<x.yBud*.85&&x.yBud>5000).sort((a,b)=>(b.yBud-b.yAct)-(a.yBud-a.yAct));
+if(offsets.length)r.push({t:"info",gl:"",n:"Available Offsets",m:"Use under-running controllable lines to fund recovery. Best offsets: "+offsets.slice(0,3).map(x=>x.name+" ("+f$(x.yBud-x.yAct)+")").join("; ")});
+if(summary){const nv=summary.noi-summary.noiBud;const projectedGap=(summary.projectedNoi||0)-(summary.noiBud/Math.max(summary.elapsedMonths,1)*12);r.push({t:nv>=0?"success":"danger",gl:"",n:"NOI Recovery",m:"NOI is "+f$(Math.abs(nv))+" "+(nv>=0?"above":"below")+" budget. Projected full-year NOI is "+f$(summary.projectedNoi||0)+" versus current pace-adjusted plan. "+(projectedGap<0?"Close the gap by attacking labor, R&M, and revenue leakage before next close.":"Current run-rate supports the plan.")});}
+return r.slice(0,8);
 }
 
 function statusBadge(s){const m={on:{l:"On Track",c:G,b:"#ecfdf5"},watch:{l:"Watch",c:A,b:"#fffbeb"},over:{l:"Over",c:R,b:"#fef2f2"},under:{l:"Under",c:A,b:"#fffbeb"}};const x=m[s]||m.on;return '<span style="display:inline-block;padding:2px 7px;border-radius:10px;font-size:9px;font-weight:600;color:'+x.c+';background:'+x.b+'">'+x.l+'</span>';}
 
-function loadFile(file,ent){
+function buildPortfolioAlertHighlights(){
+  return getEntities()
+    .filter(entity=>Array.isArray(state.store[entity.id])&&state.store[entity.id].length)
+    .map(entity=>{
+      const watch=getCommunityBudgetWatchItems(entity.id);
+      if(!watch)return null;
+      return{
+        entity,
+        watch,
+        topAlert:(watch.actionRows||[])[0]||null
+      };
+    })
+    .filter(Boolean)
+    .sort((a,b)=>{
+      const rank={danger:0,warning:1,info:2,success:3};
+      return (rank[a.topAlert&&a.topAlert.severity||"success"]??3)-(rank[b.topAlert&&b.topAlert.severity||"success"]??3);
+    });
+}
+
+function buildThresholdPlanHtml(entityId){
+  const entity=getEntityById(entityId);
+  const dataset=getLatestDatasetForEntity(entityId);
+  const rows=buildThresholdPlanRows(entityId);
+  const portfolioRows=buildPortfolioThresholdHighlights();
+  if(!dataset||!rows.length){
+    return '<div style="text-align:center;padding:30px;color:#94a3b8">Upload a 2026 income statement first. Threshold planning uses the latest actual spend run-rate.</div>';
+  }
+  const year=Number(String(getDatasetPeriodKey(dataset)).slice(0,4))||new Date().getFullYear();
+  const nextYear=year+1;
+  const topRows=rows.slice(0,24);
+  let html='';
+  html+='<div style="font-size:14px;font-weight:700;color:'+D+';margin-bottom:10px">Next-Year Budget Threshold Plan</div>';
+  html+='<div style="background:white;border-radius:8px;padding:12px;border:1px solid #e2e8f0;margin-bottom:12px;">';
+  html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:4px">'+entity.label+' · '+nextYear+' threshold view</div>';
+  html+='<div style="font-size:11px;color:#64748b;line-height:1.45">Recommended thresholds are built from projected '+year+' run-rate actuals. For over-spent controllable GLs, the plan claws back part of the overrun instead of simply rolling the spend forward. For under-performing income GLs, the target recovers part of the missed revenue gap.</div>';
+  html+='</div>';
+  if(portfolioRows.length>1){
+    html+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:12px;">';
+    portfolioRows.forEach(item=>{
+      html+='<div style="background:white;border-radius:8px;padding:10px;border:1px solid #e2e8f0;">';
+      html+='<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">';
+      html+='<div><div style="font-size:11px;font-weight:700;color:'+D+'">'+item.entity.label+'</div><div style="font-size:10px;color:#94a3b8">'+(item.watch.dataset.period||item.watch.dataset.name||"Latest report")+'</div></div>';
+      html+='<span style="padding:4px 8px;border-radius:999px;background:'+(item.topAlert&&item.topAlert.severity==="danger"?"#fef2f2":"#fffbeb")+';color:'+(item.topAlert&&item.topAlert.severity==="danger"?R:A)+';font-size:10px;font-weight:700;">'+((item.topAlert&&item.topAlert.category)||"Watch")+'</span>';
+      html+='</div>';
+      if(item.topAlert){
+        html+='<div style="font-size:10px;color:#334155;margin-top:8px;line-height:1.4"><strong>'+(item.topAlert.gl?`GL ${item.topAlert.gl} · `:"")+item.topAlert.name+'</strong><br />'+item.topAlert.action+'</div>';
+      } else {
+        html+='<div style="font-size:10px;color:#94a3b8;margin-top:8px">No material resets detected.</div>';
+      }
+      html+='</div>';
+    });
+    html+='</div>';
+  }
+  html+='<div style="background:white;border-radius:8px;border:1px solid #e2e8f0;overflow:auto;">';
+  html+='<table style="width:100%;border-collapse:collapse;font-size:10px;"><thead style="position:sticky;top:0;background:white;z-index:1"><tr style="border-bottom:2px solid #e2e8f0">';
+  ["GL","Account","Category","2026 Budget","2026 Proj Act","2027 Rec Threshold","Watch / Mo","Critical / Mo","Management Posture"].forEach((label,index)=>{
+    html+='<th style="text-align:'+(index<3||index===8?"left":"right")+';padding:6px 5px;color:#64748b;font-weight:700;font-size:9px;text-transform:uppercase">'+label+'</th>';
+  });
+  html+='</tr></thead><tbody>';
+  topRows.forEach(row=>{
+    const delta=row.recommendedAnnual-row.annBud;
+    const deltaColor=row.isIncome?(delta>=0?G:R):(delta<=0?G:R);
+    html+='<tr style="border-bottom:1px solid #f1f5f9;background:'+(row.status==="over"||row.status==="under"?"#fffaf0":"white")+'">';
+    html+='<td style="padding:5px;font-family:monospace">'+row.gl+'</td>';
+    html+='<td style="padding:5px;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+row.name+'</td>';
+    html+='<td style="padding:5px">'+row.category+'</td>';
+    html+='<td style="padding:5px;text-align:right">'+f$(row.annBud)+'</td>';
+    html+='<td style="padding:5px;text-align:right">'+f$(row.projEOY)+'</td>';
+    html+='<td style="padding:5px;text-align:right;font-weight:700;color:'+deltaColor+'">'+f$(row.recommendedAnnual)+'</td>';
+    html+='<td style="padding:5px;text-align:right">'+f$(row.watchMonthly)+'</td>';
+    html+='<td style="padding:5px;text-align:right">'+f$(row.criticalMonthly)+'</td>';
+    html+='<td style="padding:5px;min-width:240px"><div style="font-weight:700;color:'+D+'">'+row.stance+'</div><div style="font-size:10px;color:#64748b;line-height:1.35;margin-top:2px">'+row.action+'</div></td>';
+    html+='</tr>';
+  });
+  html+='</tbody></table></div>';
+  html+='<div style="font-size:10px;color:#94a3b8;margin-top:8px">Threshold logic: recommended annual threshold = projected '+year+' actual adjusted by controllability and current revenue recovery gap. Watch and critical monthly triggers are applied to the recommended threshold so site teams know when to escalate.</div>';
+  return html;
+}
+
+function loadFile(file,ent,options={}){
 state.loading=true;render();
 const lowerName=String(file?.name||"").toLowerCase();
-const loader=(lowerName.endsWith(".xlsx")||lowerName.endsWith(".xls")||lowerName.endsWith(".xlsm"))
+const loader=lowerName.endsWith(".pdf")
+? parsePdfFinancialActuals(file)
+: (lowerName.endsWith(".xlsx")||lowerName.endsWith(".xls")||lowerName.endsWith(".xlsm"))
 ? parseWorkbook(file)
 : file.text().then(text=>parseCSV(text));
-loader.then(async rows=>{
+loader.then(async parsed=>{
+const payload=Array.isArray(parsed)?{rows:parsed}:{...(parsed||{})};
+const rows=Array.isArray(payload.rows)?payload.rows:[];
+const entityFromSelection=getEntityById(ent);
+const entity=getEntityByLabel(payload.property)||entityFromSelection;
 const nameMatch=file.name.match(/(\d{2})[.\-_](\d{2})[.\-_](\d{2,4})/);
 let period=file.name.replace(/\.\w+$/,"");
 if(nameMatch){const m=nameMatch[1],y=nameMatch[3];period=m+"/"+(y.length===2?"20"+y:y);}
-const entity=getEntityById(ent);
+const pdfNameMatch=String(file.name||"").match(/(\d{4})[.\-_](\d{2})(?!\d)/);
+if(lowerName.endsWith(".pdf")&&pdfNameMatch){const monthIdx=Number(pdfNameMatch[2])-1;period=`${MONTHS[monthIdx]||pdfNameMatch[2]} ${pdfNameMatch[1]}`;}
+if(payload.period)period=payload.period;
 const ds={id:Date.now(),name:file.name.replace(/\.\w+$/,""),period:period,date:new Date().toLocaleDateString(),rows:rows,rowCount:rows.length,entityLabel:entity&&entity.label||ent};
-if(!state.store[ent])state.store[ent]=[];
-state.store[ent]=[...state.store[ent],ds];
-state.entity=ent;state.selDs=ds.id;state.tab="dash";state.loading=false;render();
+if(!state.store[entity.id])state.store[entity.id]=[];
+state.store[entity.id]=[...state.store[entity.id],ds];
+state.entity=entity.id;
+state.uploadEntity=entity.id;
+state.selDs=ds.id;
+if(options.keepTab)state.tab=options.keepTab;
+else if(options.compareTarget)state.tab="compare";
+else state.tab="dash";
+if(options.compareTarget==="a")state.cmpA=ds.id;
+if(options.compareTarget==="b")state.cmpB=ds.id;
+if(options.compareTarget)state.compareMode="month_over_month";
+state.loading=false;render();
 const atlasResult=await applyDatasetToAtlasStore(ds,entity);
 if(atlasResult&&atlasResult.ok===false){
 window.alert(atlasResult.message||"The upload loaded into the financial page, but it could not be saved back into ATLAS.");
@@ -902,12 +1744,13 @@ const app=document.getElementById("app");
 const entities=getEntities();
 if(!entities.some(e=>e.id===state.entity))state.entity=entities[0]&&entities[0].id||"rise_corp";
 if(!entities.some(e=>e.id===state.uploadEntity))state.uploadEntity=state.entity;
+syncActualVsBaselineSelections();
 persistPageState();
 const active=getActive();
 const entityDS=getEntityDS();
 const curEntity=getEntityById(state.entity);
 const rows=active?active.rows:[];
-const enriched=enrich(rows);
+const enriched=enrich(rows,active);
 const sections=[...new Set(enriched.map(r=>r.section).filter(Boolean))];
 let filtered=enriched.slice();
 if(state.search){const s=state.search.toLowerCase();filtered=filtered.filter(r=>r.gl.toLowerCase().includes(s)||r.name.toLowerCase().includes(s));}
@@ -932,7 +1775,7 @@ entities.forEach(e=>{const cnt=(state.store[e.id]||[]).length;html+='<option val
 html+='</select></div></div>';
 
 /* TABS */
-const tabs=[["dash","Dashboard"],["detail","Line Items"],["history","Historical"],["baseline","Baseline Budgets"],["compare","Compare"],["recs","Recommendations"],["report","Investor Report"],["upload","Upload"]];
+const tabs=[["dash","Dashboard"],["detail","Line Items"],["history","Historical"],["baseline","Baseline Budgets"],["compare","Compare"],["recs","Recommendations"],["thresholds","Threshold Plan"],["report","Investor Report"],["upload","Upload"]];
 html+='<div style="display:flex;gap:3px;margin-bottom:12px;flex-wrap:wrap;">';
 tabs.forEach(([k,l])=>{html+='<button class="tabBtn" data-tab="'+k+'" style="padding:5px 11px;font-size:11px;font-weight:600;border:none;border-radius:5px;cursor:pointer;background:'+(state.tab===k?D:"#e2e8f0")+';color:'+(state.tab===k?"white":"#64748b")+'">'+l+'</button>';});
 html+='</div>';
@@ -967,12 +1810,12 @@ html+='<canvas id="secChart" style="width:100%;height:200px;"></canvas></div>';
 
 html+='<div style="background:white;border-radius:8px;padding:12px;border:1px solid #e2e8f0;">';
 html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:8px">Budget Pace - Top Expense Lines</div>';
-html+='<div style="font-size:10px;color:#64748b;margin-bottom:6px">Gray line = 16.7% expected pace (2/12 months)</div>';
+html+='<div style="font-size:10px;color:#64748b;margin-bottom:6px">Gray line = '+(summary.expectedBudgetPct||0).toFixed(1)+'% expected pace ('+(summary.elapsedMonths||12)+'/12 months)</div>';
 enriched.filter(r=>!r.isIncome&&r.annBud>15000).sort((a,b)=>b.budgetPctUsed-a.budgetPctUsed).slice(0,8).forEach(r=>{
 html+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">';
 html+='<div style="width:110px;font-size:9px;color:#475569;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+r.name+'</div>';
 html+='<div style="flex:1;height:12px;background:#e2e8f0;border-radius:6px;position:relative;overflow:hidden">';
-html+='<div style="position:absolute;left:16.67%;top:0;bottom:0;width:1px;background:#94a3b8;z-index:2"></div>';
+html+='<div style="position:absolute;left:'+(summary.expectedBudgetPct||0)+'%;top:0;bottom:0;width:1px;background:#94a3b8;z-index:2"></div>';
 html+='<div style="height:100%;border-radius:6px;width:'+Math.min(r.budgetPctUsed,100)+'%;background:'+(r.budgetPctUsed>25?R:r.budgetPctUsed>18?A:G)+'"></div></div>';
 html+='<div style="width:36px;font-size:9px;color:#64748b">'+r.budgetPctUsed.toFixed(1)+'%</div></div>';
 });
@@ -999,6 +1842,122 @@ html+='<td style="padding:5px;text-align:right">'+pu.toFixed(1)+'%</td>';
 html+='<td style="padding:5px;text-align:right">'+(s.overCount>0?'<span style="color:'+R+';font-size:10px">'+s.overCount+'&#9888;</span>':'')+'</td></tr>';
 });
 html+='</tbody></table></div>';
+
+const currentWatch=getCommunityBudgetWatchItems(curEntity.id);
+if(currentWatch){
+html+='<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:10px;">';
+html+='<div style="background:white;border-radius:8px;padding:12px;border:1px solid #e2e8f0;">';
+html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:6px">Current Budget Watch</div>';
+html+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">';
+html+='<div style="padding:5px 9px;border-radius:999px;background:#fef2f2;color:'+R+';font-size:10px;font-weight:700;">'+(currentWatch.summary.totalOver||0)+' over budget</div>';
+html+='<div style="padding:5px 9px;border-radius:999px;background:#fffbeb;color:'+A+';font-size:10px;font-weight:700;">'+(currentWatch.summary.totalUnder||0)+' under target</div>';
+html+='<div style="padding:5px 9px;border-radius:999px;background:#fff7ed;color:'+A+';font-size:10px;font-weight:700;">'+(currentWatch.summary.totalWatch||0)+' pacing watch</div>';
+html+='<div style="padding:5px 9px;border-radius:999px;background:#ecfdf5;color:'+G+';font-size:10px;font-weight:700;">'+(currentWatch.summary.totalOn||0)+' on track</div>';
+html+='</div>';
+html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">';
+[
+  {title:"Over Budget Lines", items:currentWatch.overRows, color:R, bg:"#fef2f2", empty:"No expense lines over budget yet."},
+  {title:"Income Under Target", items:currentWatch.underRows, color:A, bg:"#fffbeb", empty:"No income lines under target yet."}
+].forEach(block=>{
+html+='<div style="border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#fafafa;">';
+html+='<div style="font-size:10px;font-weight:700;color:'+D+';margin-bottom:6px">'+block.title+'</div>';
+if(block.items.length){
+block.items.forEach(item=>{
+html+='<div style="display:flex;justify-content:space-between;gap:6px;align-items:flex-start;padding:5px 0;border-top:1px solid #eef2f7;">';
+html+='<div style="font-size:10px;color:#334155;line-height:1.25;max-width:72%">'+item.name+'</div>';
+html+='<div style="font-size:10px;font-weight:700;color:'+block.color+';text-align:right">'+f$(Math.abs(item.yVar||0))+'</div></div>';
+});
+} else {
+html+='<div style="font-size:10px;color:#94a3b8">'+block.empty+'</div>';
+}
+html+='</div>';
+});
+html+='</div>';
+html+='</div>';
+
+html+='<div style="background:white;border-radius:8px;padding:12px;border:1px solid #e2e8f0;">';
+html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:6px">Section Highlights</div>';
+if(currentWatch.overSections.length){
+html+='<div style="display:flex;flex-wrap:wrap;gap:6px;">';
+currentWatch.overSections.forEach(section=>{
+html+='<div style="padding:6px 8px;border-radius:999px;background:#eff6ff;color:'+D+';font-size:10px;font-weight:700;">'+section.name+' · '+section.overCount+' over</div>';
+});
+html+='</div>';
+} else {
+html+='<div style="font-size:10px;color:#94a3b8">No section overages found in the active report.</div>';
+}
+html+='</div>';
+html+='</div>';
+
+html+='<div style="background:white;border-radius:8px;padding:12px;border:1px solid #e2e8f0;margin-top:10px;">';
+html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:6px">REIT Manager Action Board</div>';
+html+='<div style="font-size:10px;color:#64748b;margin-bottom:10px">What to address first to recover budget pace for '+curEntity.label+'.</div>';
+if((currentWatch.actionRows||[]).length){
+  currentWatch.actionRows.forEach(alert=>{
+    html+='<div style="border:1px solid #e2e8f0;border-left:4px solid '+(alert.severity==="danger"?R:alert.severity==="warning"?A:"#2563eb")+';border-radius:8px;padding:9px 10px;margin-bottom:8px;background:'+(alert.severity==="danger"?"#fff7f7":alert.severity==="warning"?"#fffaf0":"#f8fbff")+';">';
+    html+='<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;margin-bottom:4px;">';
+    html+='<div><div style="font-size:10px;font-weight:700;color:'+(alert.severity==="danger"?R:alert.severity==="warning"?A:"#2563eb")+'">'+alert.category+(alert.gl?` · GL ${alert.gl}`:"")+'</div>';
+    html+='<div style="font-size:11px;font-weight:700;color:'+D+'">'+alert.name+'</div></div>';
+    html+='<span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">'+alert.severity+'</span></div>';
+    html+='<div style="font-size:10px;color:#334155;line-height:1.45">'+alert.reason+' '+alert.recovery+'</div>';
+    html+='<div style="font-size:10px;color:'+D+';font-weight:700;margin-top:5px">Action: '+alert.action+'</div>';
+    html+='</div>';
+  });
+} else {
+  html+='<div style="font-size:10px;color:#94a3b8">No immediate recovery alerts. The active report is pacing within threshold.</div>';
+}
+html+='</div>';
+}
+
+const communityHighlights=entities.filter(e=>Array.isArray(state.store[e.id])&&state.store[e.id].length).map(entity=>{
+  const watch=getCommunityBudgetWatchItems(entity.id);
+  return watch?{entity,watch}:null;
+}).filter(Boolean);
+if(communityHighlights.length){
+html+='<div style="background:white;border-radius:8px;padding:12px;border:1px solid #e2e8f0;margin-top:10px;">';
+html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:8px">Community Over / Under Highlights</div>';
+html+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;">';
+communityHighlights.forEach(({entity,watch})=>{
+const topOver=watch.overRows[0];
+const topUnder=watch.underRows[0];
+html+='<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px;background:#f8fafc;">';
+html+='<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;margin-bottom:6px;">';
+html+='<div><div style="font-size:11px;font-weight:700;color:'+D+'">'+entity.label+'</div>';
+html+='<div style="font-size:10px;color:#94a3b8">'+(watch.dataset.period||watch.dataset.name||"Latest report")+'</div></div>';
+html+='<div style="text-align:right;"><div style="font-size:9px;color:#94a3b8;text-transform:uppercase;font-weight:700;">Over / Under</div><div style="font-size:14px;font-weight:700;color:'+D+'">'+(watch.summary.totalOver||0)+' / '+(watch.summary.totalUnder||0)+'</div></div>';
+html+='</div>';
+if(topOver||topUnder){
+if(topOver)html+='<div style="font-size:10px;color:'+R+';margin-bottom:4px">Over: '+buildBudgetIssueLabel(topOver)+'</div>';
+if(topUnder)html+='<div style="font-size:10px;color:'+A+';">Under: '+buildBudgetIssueLabel(topUnder)+'</div>';
+} else {
+html+='<div style="font-size:10px;color:#94a3b8">No over/under watch items yet.</div>';
+}
+const leadSection=watch.overSections[0];
+if(leadSection)html+='<div style="font-size:10px;color:#64748b;margin-top:6px">Top section: '+leadSection.name+' ('+leadSection.overCount+' over)</div>';
+html+='</div>';
+});
+html+='</div></div>';
+}
+
+const portfolioAlerts=buildPortfolioAlertHighlights();
+if(portfolioAlerts.length){
+html+='<div style="background:white;border-radius:8px;padding:12px;border:1px solid #e2e8f0;margin-top:10px;">';
+html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:8px">Portfolio Recovery Priorities</div>';
+html+='<table style="width:100%;border-collapse:collapse;font-size:10px;"><thead><tr style="border-bottom:2px solid #e2e8f0">';
+["Community","Top GL To Address","Severity","Why It Matters","Action"].forEach((h,idx)=>{html+='<th style="text-align:'+(idx<2||idx===3||idx===4?"left":"center")+';padding:5px;color:#64748b;font-weight:700;font-size:9px;text-transform:uppercase">'+h+'</th>';});
+html+='</tr></thead><tbody>';
+portfolioAlerts.slice(0,8).forEach(item=>{
+  const alert=item.topAlert;
+  html+='<tr style="border-bottom:1px solid #f1f5f9">';
+  html+='<td style="padding:6px;font-weight:700;color:'+D+'">'+item.entity.label+'</td>';
+  html+='<td style="padding:6px">'+(alert?(alert.gl?`GL ${alert.gl} · `:"")+alert.name:"No major issue")+'</td>';
+  html+='<td style="padding:6px;text-align:center"><span style="padding:3px 7px;border-radius:999px;background:'+(alert&&alert.severity==="danger"?"#fef2f2":"#fffbeb")+';color:'+(alert&&alert.severity==="danger"?R:A)+';font-size:9px;font-weight:700;text-transform:uppercase">'+(alert?alert.severity:"watch")+'</span></td>';
+  html+='<td style="padding:6px;color:#475569">'+(alert?alert.reason:"Current report is within threshold.")+'</td>';
+  html+='<td style="padding:6px;color:#334155;font-weight:600">'+(alert?alert.action:"Hold current controls.")+'</td>';
+  html+='</tr>';
+});
+html+='</tbody></table></div>';
+}
 }
 
 /* ===== DETAIL ===== */
@@ -1101,6 +2060,36 @@ html+='<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));ga
   html+='<div style="font-size:13px;font-weight:700;color:'+D+';margin-top:2px">'+card.v+'</div></div>';
 });
 html+='</div>';
+html+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">';
+html+='<div style="padding:6px 10px;border-radius:999px;background:#eff6ff;color:'+D+';font-size:10px;font-weight:700;">'+(currentBudgetBatch.sourceSheetName||"Budget Detail Sheet")+'</div>';
+html+='<div style="padding:6px 10px;border-radius:999px;background:#f0fdf4;color:#166534;font-size:10px;font-weight:700;">'+((currentBudgetBatch.budgetFormat||"").replace(/_/g," ")||"Approved budget format")+'</div>';
+html+='</div>';
+}
+const currentBudgetDetailRows=summarizeApprovedBudgetRowsByMonth(currentBudgetRows);
+const currentBudgetPeriods=[...new Set(currentBudgetRows.map(row=>normalizeFinancialPeriodKey(row&&row.period||"")).filter(Boolean))].sort();
+const currentBudgetPeriodYears=[...new Set(currentBudgetPeriods.map(period=>String(period).slice(0,4)).filter(year=>/^\d{4}$/.test(year)))];
+if(currentBudgetDetailRows.length){
+html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:6px">Budget Detail by Month</div>';
+html+='<div style="max-height:320px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:12px;">';
+html+='<table style="width:100%;min-width:1080px;border-collapse:collapse;font-size:10px;">';
+html+='<thead style="position:sticky;top:0;background:white;z-index:1"><tr style="border-bottom:2px solid #e2e8f0">';
+html+='<th style="text-align:left;padding:5px">Section</th><th style="text-align:left;padding:5px">GL</th><th style="text-align:left;padding:5px">Account</th>';
+currentBudgetPeriods.forEach(period=>{
+html+='<th style="text-align:right;padding:5px">'+formatBudgetPeriodLabel(period,currentBudgetPeriodYears.length>1)+'</th>';
+});
+html+='<th style="text-align:right;padding:5px">Total</th></tr></thead><tbody>';
+currentBudgetDetailRows.slice(0,60).forEach(row=>{
+html+='<tr style="border-bottom:1px solid #f1f5f9;">';
+html+='<td style="padding:4px 5px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+row.section+'</td>';
+html+='<td style="padding:4px 5px;font-family:monospace;">'+row.gl+'</td>';
+html+='<td style="padding:4px 5px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+row.name+'</td>';
+currentBudgetPeriods.forEach(period=>{
+html+='<td style="padding:4px 5px;text-align:right">'+f$(row.months&&Object.prototype.hasOwnProperty.call(row.months,period)?row.months[period]:0)+'</td>';
+});
+html+='<td style="padding:4px 5px;text-align:right;font-weight:700">'+f$(row.annualBudget||0)+'</td></tr>';
+});
+html+='</tbody></table></div>';
+html+='<div style="font-size:10px;color:#94a3b8;margin-bottom:12px">Showing the first '+Math.min(currentBudgetDetailRows.length,60)+' budget detail rows from the active baseline workbook.</div>';
 }
 html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:6px">Current Baseline by GL</div>';
 if(summaryRows.length){
@@ -1134,7 +2123,8 @@ html+='</div></div>';
 
 /* ===== COMPARE ===== */
 if(state.tab==="compare"){
-html+='<div style="font-size:14px;font-weight:700;color:'+D+';margin-bottom:10px">Period Comparison - '+curEntity.label+'</div>';
+const compareContextPreview=state.compareMode==="actual_vs_baseline"?getCompareContext():null;
+html+='<div style="font-size:14px;font-weight:700;color:'+D+';margin-bottom:10px">Period Comparison'+(state.compareMode==="actual_vs_baseline"&&compareContextPreview?' - '+compareContextPreview.actualEntity.label+' vs '+compareContextPreview.baselineEntity.label:' - '+curEntity.label)+'</div>';
 html+='<div style="display:grid;grid-template-columns:minmax(220px,260px) 1fr;gap:12px;align-items:end;margin-bottom:14px;">';
 html+='<div><label style="font-size:11px;font-weight:600;color:'+D+';display:block;margin-bottom:3px">Comparison Mode</label>';
 html+='<select id="compareModeSel" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;">';
@@ -1153,11 +2143,48 @@ html+='</select></div>';
 if(state.compareMode==="actual_vs_baseline"&&!state.compareBudgetDs&&entityDS.length)state.compareBudgetDs=entityDS[entityDS.length-1].id;
 if(state.compareMode==="baseline_yoy"&&!state.compareArchivedBudgetId&&getApprovedBudgetArchivedBatches(curEntity.label).length)state.compareArchivedBudgetId=getApprovedBudgetArchivedBatches(curEntity.label)[0].id;
 if(state.compareMode==="actual_vs_baseline"){
-html+='<div><label style="font-size:11px;font-weight:600;color:'+L+';display:block;margin-bottom:3px">Actual Report / Month</label>';
-html+='<select id="compareBudgetSel" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;"><option value="">Select...</option>';
-entityDS.forEach(d=>{html+='<option value="'+d.id+'"'+(state.compareBudgetDs===d.id?' selected':'')+'>'+d.name+' ('+d.period+')</option>';});
-html+='</select></div>';
-html+='<div style="font-size:11px;color:#64748b;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;">Uses the active baseline workbook for '+curEntity.label+' and projects it to the selected month for true actual-vs-budget variance.</div>';
+const communityEntities=getEntities().filter(e=>e.kind==="community");
+if(!state.compareActualEntity||!communityEntities.some(e=>e.id===state.compareActualEntity))state.compareActualEntity=state.entity&&getEntityById(state.entity).kind==="community"?state.entity:(communityEntities[0]&&communityEntities[0].id)||state.entity;
+if(!state.compareBaselineEntity||!communityEntities.some(e=>e.id===state.compareBaselineEntity))state.compareBaselineEntity=state.baselineEntity||state.compareActualEntity||state.entity;
+const actualCompareEntity=getEntityById(state.compareActualEntity);
+const actualCompareList=getCompareDatasetList(actualCompareEntity.id);
+if(!state.compareActualDs||!actualCompareList.some(d=>Number(d.id)===Number(state.compareActualDs)))state.compareActualDs=getLatestDatasetIdForEntity(actualCompareEntity.id);
+const actualCompareDataset=actualCompareList.find(d=>Number(d.id)===Number(state.compareActualDs))||actualCompareList[actualCompareList.length-1]||null;
+const baselineCompareEntity=getEntityById(state.compareBaselineEntity);
+const baselineCompareBatches=getApprovedBudgetBatchOptions(baselineCompareEntity.label);
+if(!state.compareBaselineBatchId||!baselineCompareBatches.some(batch=>String(batch.id)===String(state.compareBaselineBatchId)))state.compareBaselineBatchId=baselineCompareBatches[0]&&baselineCompareBatches[0].id||null;
+const baselineCompareBatch=baselineCompareBatches.find(batch=>String(batch.id)===String(state.compareBaselineBatchId))||baselineCompareBatches[0]||null;
+const baselineComparePeriods=getApprovedBudgetPeriodsForBatch(baselineCompareBatch);
+if(!state.compareBaselinePeriod||!baselineComparePeriods.includes(normalizeFinancialPeriodKey(state.compareBaselinePeriod)))state.compareBaselinePeriod=baselineComparePeriods[baselineComparePeriods.length-1]||baselineComparePeriods[0]||null;
+html+='<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;">';
+html+='<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px;background:#f8fafc;">';
+html+='<div style="font-size:11px;font-weight:700;color:'+L+';margin-bottom:3px">Actual Community</div>';
+html+='<select id="compareActualEntitySel" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;margin-bottom:8px;">';
+communityEntities.forEach(entity=>{html+='<option value="'+entity.id+'"'+(state.compareActualEntity===entity.id?' selected':'')+'>'+entity.label+'</option>';});
+html+='</select>';
+html+='<label style="font-size:10px;font-weight:700;color:#64748b;display:block;margin-bottom:3px">Actual Report / Month</label>';
+html+='<select id="compareActualSel" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;"><option value="">Select...</option>';
+actualCompareList.forEach(d=>{html+='<option value="'+d.id+'"'+(state.compareActualDs===d.id?' selected':'')+'>'+d.name+' ('+d.period+')</option>';});
+html+='</select>';
+html+='<div style="font-size:10px;color:#64748b;margin-top:6px">'+(actualCompareDataset?actualCompareDataset.rowCount+' accounts loaded for this month.':'No uploaded actual report exists for this community yet.')+'</div>';
+html+='</div>';
+html+='<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px;background:#f8fafc;">';
+html+='<div style="font-size:11px;font-weight:700;color:'+P+';margin-bottom:3px">Baseline Community</div>';
+html+='<select id="compareBaselineEntitySel" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;margin-bottom:8px;">';
+communityEntities.forEach(entity=>{html+='<option value="'+entity.id+'"'+(state.compareBaselineEntity===entity.id?' selected':'')+'>'+entity.label+'</option>';});
+html+='</select>';
+html+='<label style="font-size:10px;font-weight:700;color:#64748b;display:block;margin-bottom:3px">Baseline Budget Batch</label>';
+html+='<select id="compareBaselineBatchSel" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;margin-bottom:8px;"><option value="">Select...</option>';
+baselineCompareBatches.forEach(batch=>{html+='<option value="'+batch.id+'"'+(String(state.compareBaselineBatchId)===String(batch.id)?' selected':'')+'>'+((batch.archivedAt?"Archived ":"Active ")+ (batch.yearLabel||"Baseline"))+' &middot; '+(batch.sourceFileName||"Budget workbook")+'</option>';});
+html+='</select>';
+html+='<label style="font-size:10px;font-weight:700;color:#64748b;display:block;margin-bottom:3px">Baseline Month</label>';
+html+='<select id="compareBaselinePeriodSel" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;"><option value="">Select...</option>';
+baselineComparePeriods.forEach(period=>{html+='<option value="'+period+'"'+(normalizeFinancialPeriodKey(state.compareBaselinePeriod)===period?' selected':'')+'>'+formatBudgetPeriodLabel(period,true)+'</option>';});
+html+='</select>';
+html+='<div style="font-size:10px;color:#64748b;margin-top:6px">'+(baselineCompareBatch?baselineCompareBatch.rowCount+' baseline rows available across '+baselineComparePeriods.length+' month(s).':'No baseline workbook has been saved for this community yet.')+'</div>';
+html+='</div>';
+html+='</div>';
+html+='<div style="margin-top:10px;font-size:11px;color:#64748b;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;">Select any saved actual month from one community and compare it against any saved baseline month from another community. This compares exact baseline month values so the drilldown reflects the selected period only.</div>';
 } else if(state.compareMode==="baseline_yoy"){
 const archivedBudgetBatches=getApprovedBudgetArchivedBatches(curEntity.label);
 html+='<div><label style="font-size:11px;font-weight:600;color:'+P+';display:block;margin-bottom:3px">Archived Baseline</label>';
@@ -1165,6 +2192,24 @@ html+='<select id="compareArchivedBudgetSel" style="width:100%;padding:6px;borde
 archivedBudgetBatches.forEach(batch=>{html+='<option value="'+batch.id+'"'+(state.compareArchivedBudgetId===batch.id?' selected':'')+'>'+batch.yearLabel+' ('+(batch.sourceFileName||"archived")+' )</option>';});
 html+='</select></div>';
 html+='<div style="font-size:11px;color:#64748b;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;">Compare the current active baseline against a prior archived year to see year-over-year budget movement.</div>';
+} else if(state.compareMode==="month_over_month"){
+html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">';
+[
+  {slot:"a",label:"Period A (Current/Newer)",button:"Upload Report A",sel:"cmpASel",color:L},
+  {slot:"b",label:"Period B (Prior/Older)",button:"Upload Report B",sel:"cmpBSel",color:P}
+].forEach(cfg=>{
+html+='<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px;background:#f8fafc;">';
+html+='<label style="font-size:11px;font-weight:600;color:'+cfg.color+';display:block;margin-bottom:3px">'+cfg.label+'</label>';
+html+='<select id="'+cfg.sel+'" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;"><option value="">Select...</option>';
+entityDS.forEach(d=>{html+='<option value="'+d.id+'"'+((cfg.slot==="a"&&state.cmpA===d.id)||(cfg.slot==="b"&&state.cmpB===d.id)?' selected':'')+'>'+d.name+' ('+d.period+')</option>';});
+html+='</select>';
+html+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">';
+html+='<button class="compareUploadBtn" data-target="'+cfg.slot+'" style="padding:6px 10px;background:'+D+';color:white;border:none;border-radius:5px;cursor:pointer;font-size:11px;font-weight:600;">'+cfg.button+'</button>';
+html+='<span style="font-size:10px;color:#94a3b8;align-self:center;">Uploads into the library and selects '+cfg.slot.toUpperCase()+'</span>';
+html+='</div></div>';
+});
+html+='</div>';
+html+='<input id="compareFileInput" type="file" accept=".csv,.txt,.xlsx,.xls,.xlsm,.pdf" style="display:none"/>';
 } else {
 html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">';
 html+='<div><label style="font-size:11px;font-weight:600;color:'+L+';display:block;margin-bottom:3px">Period A (Current/Newer)</label>';
@@ -1192,18 +2237,27 @@ compareHeadingA=(cmpBudgetData.period||cmpBudgetData.name)+" Actual";
  compareHeadingB=approvedBudgetIndex.source==="approved"?(cmpBudgetData.period||cmpBudgetData.name)+" Approved Budget":(cmpBudgetData.period||cmpBudgetData.name)+" Budget";
 }
 } else if(state.compareMode==="actual_vs_baseline"){
-const cmpActualData=entityDS.find(d=>d.id===state.compareBudgetDs);
-const currentBudgetBatch=getApprovedBudgetCurrentBatch(curEntity.label);
-if(cmpActualData&&currentBudgetBatch){
-const budgetRows=currentBudgetBatch.rows||[];
-const budgetIndex=buildApprovedBudgetIndex(curEntity.label,cmpActualData.period,budgetRows);
-const mapA=_.keyBy(cmpActualData.rows,"gl");
-const allGLs=[...new Set([...Object.keys(mapA),...Object.keys(budgetIndex.map)])];
-compResults=allGLs.map(gl=>{const a=mapA[gl]||{yAct:0,yBud:0};const compareBudget=budgetIndex.map[gl]||0;const budgetBase=Math.abs(compareBudget||0);return{gl:gl,name:a.name||"",section:a.section||"",aYAct:a.yAct||0,bYAct:compareBudget||0,yoyChange:budgetBase?((a.yAct-compareBudget)/budgetBase)*100:0,worse:isInc(a)?(a.yAct<compareBudget):((a.yAct>compareBudget)&&budgetBase>0)};}).filter(r=>r.aYAct||r.bYAct);
-const bySec=_.groupBy(compResults,"section");
-compChartData=Object.entries(bySec).map(([sec,items])=>({section:sec,periodA:items.reduce((s,r)=>s+r.aYAct,0),periodB:items.reduce((s,r)=>s+r.bYAct,0)})).filter(r=>r.periodA||r.periodB);
-compareHeadingA=(cmpActualData.period||cmpActualData.name)+" Actual";
-compareHeadingB=(currentBudgetBatch.yearLabel||"Baseline")+" Budget";
+const compareContext=getCompareContext();
+const compareResults=buildActualVsBaselineResults(compareContext);
+if(compareResults){
+const actualRows=compareResults.rows||[];
+compResults=actualRows.map(row=>({
+  gl:row.gl,
+  name:row.name,
+  section:row.section,
+  aYAct:row.actual,
+  bYAct:row.budget,
+  yoyChange:row.budget?((row.actual-row.budget)/Math.abs(row.budget))*100:0,
+  worse:row.bad,
+  variance:row.variance,
+  variancePct:row.variancePct,
+  favorable:row.favorable
+}));
+const bySec=_.groupBy(actualRows,"section");
+compChartData=Object.entries(bySec).map(([sec,items])=>({section:sec,periodA:items.reduce((s,r)=>s+r.actual,0),periodB:items.reduce((s,r)=>s+r.budget,0)})).filter(r=>r.periodA||r.periodB);
+compareHeadingA=(compareContext.actualEntity.label||"Actual")+" · "+(formatBudgetPeriodLabel(compareContext.actualPeriod,true)||"Month");
+compareHeadingB=(compareContext.baselineEntity.label||"Baseline")+" · "+(formatBudgetPeriodLabel(compareContext.baselinePeriod,true)||"Budget");
+window._compareActualBaselineResults=compareResults;
 }
 } else if(state.compareMode==="baseline_yoy"){
 const currentBudgetBatch=getApprovedBudgetCurrentBatch(curEntity.label);
@@ -1236,6 +2290,31 @@ if(compChartData.length){
 html+='<div style="background:white;border-radius:8px;padding:12px;border:1px solid #e2e8f0;margin-bottom:12px;">';
 html+='<div style="font-size:12px;font-weight:700;color:'+D+';margin-bottom:6px">'+(state.compareMode==="report_vs_budget"?'Report vs Budget by Section':state.compareMode==="actual_vs_baseline"?'Actual vs Baseline by Section':state.compareMode==="baseline_yoy"?'Baseline Year Over Year by Section':'Section-Level YTD Comparison')+'</div>';
 html+='<canvas id="cmpChart" style="width:100%;height:220px;"></canvas></div>';
+if(state.compareMode==="actual_vs_baseline"&&window._compareActualBaselineResults){
+const brief=window._compareActualBaselineResults;
+const favorableCount=brief.rows.filter(row=>row.favorable).length;
+const unfavorableCount=brief.rows.filter(row=>row.bad).length;
+html+='<div style="background:linear-gradient(135deg,#ffffff,#f8fafc);border:1px solid #d9e2ec;border-radius:12px;padding:14px;margin-bottom:12px;">';
+html+='<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">';
+html+='<div><div style="font-size:12px;font-weight:800;color:'+D+';">Regional Variance Brief</div>';
+html+='<div style="font-size:11px;color:#64748b">Accountant-style snapshot for the selected actual month versus selected baseline month.</div></div>';
+html+='<button id="genRegionalBriefBtn" style="padding:8px 14px;background:'+D+';color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:12px;">&#128196; Generate Regional Brief</button>';
+html+='</div>';
+html+='<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:10px;">';
+[
+  {l:"Net Variance",v:f$(brief.netFavorable),c:brief.netFavorable>=0?G:R},
+  {l:"Actual Total",v:f$(brief.totalActual),c:D},
+  {l:"Baseline Total",v:f$(brief.totalBudget),c:L},
+  {l:"Flags",v:favorableCount+' favor / '+unfavorableCount+' unfavor',c:A}
+].forEach(card=>{
+  html+='<div style="background:white;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;">';
+  html+='<div style="font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase">'+card.l+'</div>';
+  html+='<div style="font-size:18px;font-weight:800;color:'+card.c+';margin-top:2px">'+card.v+'</div></div>';
+});
+html+='</div>';
+html+='<div style="font-size:11px;color:#475569;line-height:1.45">Top pressure: <strong>'+(brief.topNegative&&brief.topNegative.name||"none detected")+'</strong>. The summary below surfaces the biggest over-budget expense items and under-budget revenue items so you can speak to the regional team in plain accounting language.</div>';
+html+='</div>';
+}
 html+='<div style="background:white;border-radius:8px;border:1px solid #e2e8f0;overflow:auto;max-height:350px;">';
 html+='<table style="width:100%;border-collapse:collapse;font-size:10px;"><thead style="position:sticky;top:0;background:white"><tr style="border-bottom:2px solid #e2e8f0">';
 html+='<th style="text-align:left;padding:5px">GL</th><th style="text-align:left;padding:5px">Account</th>';
@@ -1243,7 +2322,9 @@ html+='<th style="text-align:right;padding:5px">'+compareHeadingA+'</th>';
 html+='<th style="text-align:right;padding:5px">'+compareHeadingB+'</th>';
 html+='<th style="text-align:right;padding:5px">'+(state.compareMode==="report_vs_budget"||state.compareMode==="actual_vs_baseline"?'Var % to Budget':state.compareMode==="baseline_yoy"?'YoY Chg %':'MoM Chg %')+'</th></tr></thead><tbody>';
 compResults.sort((a,b)=>Math.abs(b.yoyChange)-Math.abs(a.yoyChange)).slice(0,60).forEach(r=>{
-const bad=(!r.section.toLowerCase().includes("income")&&r.yoyChange>10)||(r.section.toLowerCase().includes("income")&&r.yoyChange<-10);
+const bad=state.compareMode==="actual_vs_baseline"
+  ? !!r.worse
+  : ((!r.section.toLowerCase().includes("income")&&r.yoyChange>10)||(r.section.toLowerCase().includes("income")&&r.yoyChange<-10));
 html+='<tr style="border-bottom:1px solid #f1f5f9;background:'+(bad?"#fff5f5":"white")+'">';
 html+='<td style="padding:4px;font-family:monospace;font-size:9px">'+r.gl+'</td>';
 html+='<td style="padding:4px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+r.name+'</td>';
@@ -1271,6 +2352,11 @@ html+='<span style="font-size:10px;font-weight:600;color:#475569">'+r.n+'</span>
 html+='<div style="font-size:11px;color:#334155;line-height:1.4">'+r.m+'</div></div>';
 });
 if(!recs.length)html+='<div style="text-align:center;padding:30px;color:#94a3b8">Upload data to see recommendations.</div>';
+}
+
+/* ===== THRESHOLD PLAN ===== */
+if(state.tab==="thresholds"){
+html+=buildThresholdPlanHtml(curEntity.id);
 }
 
 /* ===== REPORT ===== */
@@ -1310,8 +2396,12 @@ html+='<div style="margin-top:20px;"><div style="font-size:12px;font-weight:600;
 entities.filter(e=>(state.store[e.id]||[]).length>0).forEach(e=>{
 html+='<div style="margin-bottom:10px;"><div style="font-size:12px;font-weight:600;color:'+D+';margin-bottom:4px">'+e.label+' ('+state.store[e.id].length+' reports)</div>';
 state.store[e.id].forEach(d=>{
-html+='<div style="padding:6px 10px;background:white;border-radius:6px;border:1px solid #e2e8f0;margin-bottom:3px;display:flex;justify-content:space-between;font-size:11px;">';
-html+='<span>'+d.name+' &middot; '+d.period+'</span><span style="color:#94a3b8">'+d.rowCount+' accts</span></div>';
+html+='<div style="padding:6px 10px;background:white;border-radius:6px;border:1px solid #e2e8f0;margin-bottom:3px;display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:11px;">';
+html+='<div style="min-width:0;"><div style="font-weight:600;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+d.name+'</div><div style="font-size:10px;color:#94a3b8">'+(d.period||"")+' &middot; '+d.rowCount+' accts</div></div>';
+html+='<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end;align-items:center;">';
+html+='<button class="editDs" data-entity="'+e.id+'" data-id="'+d.id+'" style="padding:3px 7px;font-size:10px;background:#eff6ff;color:'+D+';border:1px solid #bfdbfe;border-radius:4px;cursor:pointer;font-weight:600;">Edit</button>';
+html+='<button class="delDs" data-entity="'+e.id+'" data-id="'+d.id+'" style="padding:3px 7px;font-size:10px;background:#fee2e2;color:'+R+';border:none;border-radius:4px;cursor:pointer;font-weight:600;">Delete</button>';
+html+='</div></div>';
 });
 html+='</div>';
 });
@@ -1339,9 +2429,9 @@ entities.forEach(e=>{h+='<option value="'+e.id+'"'+(ent===e.id?' selected':'')+'
 h+='</select></div>';
 h+='<div id="dropZone" style="border:2px dashed #cbd5e1;border-radius:10px;padding:36px;text-align:center;background:white;cursor:pointer;">';
 h+='<div style="font-size:32px;margin-bottom:8px">&#128202;</div>';
-h+='<div style="font-size:14px;font-weight:600;color:'+D+'">Upload Income Statement / Budget CSV or Excel</div>';
-h+='<div style="font-size:12px;color:#64748b;margin-top:4px">Click or drag & drop .csv, .xlsx, .xls, or .xlsm</div>';
-h+='<input id="fileInput" type="file" accept=".csv,.txt,.xlsx,.xls,.xlsm" style="display:none"/>';
+h+='<div style="font-size:14px;font-weight:600;color:'+D+'">Upload Income Statement / Budget CSV, Excel, or PDF</div>';
+h+='<div style="font-size:12px;color:#64748b;margin-top:4px">Click or drag & drop .csv, .xlsx, .xls, .xlsm, or monthly actual PDF packages</div>';
+h+='<input id="fileInput" type="file" accept=".csv,.txt,.xlsx,.xls,.xlsm,.pdf" style="display:none"/>';
 h+='</div></div>';
 return h;
 }
@@ -1369,9 +2459,36 @@ document.querySelectorAll(".secRow").forEach(tr=>tr.addEventListener("click",()=
 document.querySelectorAll(".histItem").forEach(el=>el.addEventListener("click",e=>{if(e.target.tagName==="BUTTON")return;state.selDs=parseInt(el.dataset.id);state.tab="dash";render();}));
 document.querySelectorAll(".setCmpA").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();state.compareMode="month_over_month";state.cmpA=parseInt(b.dataset.id);state.tab="compare";render();}));
 document.querySelectorAll(".setCmpB").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();state.compareMode="month_over_month";state.cmpB=parseInt(b.dataset.id);state.tab="compare";render();}));
-document.querySelectorAll(".delDs").forEach(b=>b.addEventListener("click",async e=>{e.stopPropagation();const id=parseInt(b.dataset.id);const existing=(state.store[state.entity]||[]).find(x=>x.id===id)||null;state.store[state.entity]=(state.store[state.entity]||[]).filter(x=>x.id!==id);render();if(existing){try{await removeDatasetFromAtlasStore(existing,getEntityById(state.entity));}catch(error){console.error(error);}}}));
+document.querySelectorAll(".editDs").forEach(b=>b.addEventListener("click",e=>{
+e.stopPropagation();
+const id=parseInt(b.dataset.id);
+const entityId=b.dataset.entity||state.entity;
+const existing=(state.store[entityId]||[]).find(x=>x.id===id)||null;
+if(!existing)return;
+const nextName=window.prompt("Rename this report in the data library:",existing.name||"");
+if(nextName==null)return;
+if(renameDatasetInState(entityId,id,nextName))render();
+}));
+document.querySelectorAll(".delDs").forEach(b=>b.addEventListener("click",async e=>{
+e.stopPropagation();
+const id=parseInt(b.dataset.id);
+const entityId=b.dataset.entity||state.entity;
+const existing=removeDatasetFromState(entityId,id);
+render();
+if(existing){try{await removeDatasetFromAtlasStore(existing,getEntityById(entityId));}catch(error){console.error(error);}}
+}));
 const compareModeSel=document.getElementById("compareModeSel");
 if(compareModeSel)compareModeSel.addEventListener("change",()=>{state.compareMode=compareModeSel.value||"report_vs_budget";render();});
+const compareActualEntitySel=document.getElementById("compareActualEntitySel");
+if(compareActualEntitySel)compareActualEntitySel.addEventListener("change",()=>{state.compareActualEntity=compareActualEntitySel.value||null;state.compareActualDs=null;render();});
+const compareActualSel=document.getElementById("compareActualSel");
+if(compareActualSel)compareActualSel.addEventListener("change",()=>{state.compareActualDs=compareActualSel.value?parseInt(compareActualSel.value):null;render();});
+const compareBaselineEntitySel=document.getElementById("compareBaselineEntitySel");
+if(compareBaselineEntitySel)compareBaselineEntitySel.addEventListener("change",()=>{state.compareBaselineEntity=compareBaselineEntitySel.value||null;state.compareBaselineBatchId=null;state.compareBaselinePeriod=null;render();});
+const compareBaselineBatchSel=document.getElementById("compareBaselineBatchSel");
+if(compareBaselineBatchSel)compareBaselineBatchSel.addEventListener("change",()=>{state.compareBaselineBatchId=compareBaselineBatchSel.value||null;state.compareBaselinePeriod=null;render();});
+const compareBaselinePeriodSel=document.getElementById("compareBaselinePeriodSel");
+if(compareBaselinePeriodSel)compareBaselinePeriodSel.addEventListener("change",()=>{state.compareBaselinePeriod=compareBaselinePeriodSel.value||null;render();});
 const cmpASel=document.getElementById("cmpASel");
 if(cmpASel)cmpASel.addEventListener("change",()=>{state.cmpA=cmpASel.value?parseInt(cmpASel.value):null;render();});
 const cmpBSel=document.getElementById("cmpBSel");
@@ -1380,19 +2497,27 @@ const compareBudgetSel=document.getElementById("compareBudgetSel");
 if(compareBudgetSel)compareBudgetSel.addEventListener("change",()=>{state.compareBudgetDs=compareBudgetSel.value?parseInt(compareBudgetSel.value):null;render();});
 const compareArchivedBudgetSel=document.getElementById("compareArchivedBudgetSel");
 if(compareArchivedBudgetSel)compareArchivedBudgetSel.addEventListener("change",()=>{state.compareArchivedBudgetId=compareArchivedBudgetSel.value||null;render();});
+document.querySelectorAll(".compareUploadBtn").forEach(btn=>btn.addEventListener("click",()=>{
+state.compareUploadTarget=btn.dataset.target||"a";
+const compareFileInput=document.getElementById("compareFileInput");
+if(compareFileInput)compareFileInput.click();
+}));
 const baselineEntSel=document.getElementById("baselineEntSel");
 if(baselineEntSel)baselineEntSel.addEventListener("change",()=>{state.baselineEntity=baselineEntSel.value;render();});
 const archiveBudgetBtn=document.getElementById("archiveBudgetBtn");
-if(archiveBudgetBtn)archiveBudgetBtn.addEventListener("click",()=>{const target=getApprovedBudgetCurrentBatch((getEntityById(state.baselineEntity||state.entity)||{}).label);if(target&&archiveApprovedBudgetBatch(target.property,target.id)){render();}});
+if(archiveBudgetBtn)archiveBudgetBtn.addEventListener("click",async()=>{const target=getApprovedBudgetCurrentBatch((getEntityById(state.baselineEntity||state.entity)||{}).label);if(target&&await archiveApprovedBudgetBatch(target.property,target.id)){render();}});
 const openBudgetCompareBtn=document.getElementById("openBudgetCompareBtn");
-if(openBudgetCompareBtn)openBudgetCompareBtn.addEventListener("click",()=>{state.compareMode="actual_vs_baseline";state.tab="compare";render();});
+if(openBudgetCompareBtn)openBudgetCompareBtn.addEventListener("click",()=>{state.compareMode="actual_vs_baseline";state.compareActualEntity=state.entity;state.compareBaselineEntity=state.baselineEntity||state.entity;state.compareActualDs=null;state.compareBaselineBatchId=null;state.compareBaselinePeriod=null;state.tab="compare";render();});
 document.querySelectorAll(".compareArchivedBudgetBtn").forEach(btn=>btn.addEventListener("click",()=>{state.compareMode="baseline_yoy";state.compareArchivedBudgetId=btn.dataset.id||null;state.tab="compare";render();}));
+const genRegionalBriefBtn=document.getElementById("genRegionalBriefBtn");
+if(genRegionalBriefBtn)genRegionalBriefBtn.addEventListener("click",generateRegionalBrief);
 const uploadEntSel=document.getElementById("uploadEntSel");
 if(uploadEntSel)uploadEntSel.addEventListener("change",()=>{if(state.tab==="upload")state.uploadEntity=uploadEntSel.value;else state.entity=uploadEntSel.value;render();});
 const dropZone=document.getElementById("dropZone");
 const fileInput=document.getElementById("fileInput");
 const budgetUploadBtn=document.getElementById("budgetUploadBtn");
 const budgetFileInput=document.getElementById("budgetFileInput");
+const compareFileInput=document.getElementById("compareFileInput");
 if(dropZone&&fileInput){
 dropZone.addEventListener("click",()=>fileInput.click());
 dropZone.addEventListener("dragover",e=>{e.preventDefault();dropZone.style.borderColor=D;dropZone.style.background="#f0f9ff";});
@@ -1404,10 +2529,17 @@ if(budgetUploadBtn&&budgetFileInput){
 budgetUploadBtn.addEventListener("click",()=>budgetFileInput.click());
 budgetFileInput.addEventListener("change",()=>{const f=budgetFileInput.files[0];const ent=(uploadEntSel?uploadEntSel.value:state.entity);if(f)loadApprovedBudgetFile(f,ent);});
 }
+if(compareFileInput){
+compareFileInput.addEventListener("change",()=>{
+const f=compareFileInput.files[0];
+if(f)loadFile(f,state.entity,{keepTab:"compare",compareTarget:state.compareUploadTarget||"a"});
+compareFileInput.value="";
+});
+}
 const genBtn=document.getElementById("genReport");
 if(genBtn&&summary){genBtn.addEventListener("click",()=>{
 const active=getActive();const curEntity=getEntityById(state.entity);
-const recs=getRecs(enrich(active?active.rows:[]),summary);
+const recs=getRecs(enrich(active?active.rows:[],active),summary);
 const h='<html><head><title>'+curEntity.label+' - Budget Report</title><style>body{font-family:system-ui;max-width:800px;margin:40px auto;color:#1a1a2e;padding:20px}h1{color:'+D+';border-bottom:3px solid '+L+';padding-bottom:8px}h2{color:'+D+';margin-top:24px}.kpi{display:flex;gap:16px;margin:16px 0}.kpi>div{flex:1;background:#f8fafc;border-radius:8px;padding:12px;text-align:center;border:1px solid #e2e8f0}.kpi .label{font-size:11px;color:#64748b;text-transform:uppercase}.kpi .val{font-size:20px;font-weight:700;margin-top:4px}table{width:100%;border-collapse:collapse;margin:12px 0;font-size:12px}th{background:#f1f5f9;padding:8px;text-align:left;border-bottom:2px solid #cbd5e1}td{padding:6px 8px;border-bottom:1px solid #f1f5f9}.pos{color:'+G+'}.neg{color:'+R+'}.footer{margin-top:32px;padding-top:16px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8}</style></head><body><h1>'+curEntity.label+'</h1><p>Financial Performance Summary - '+(active?active.period||"":"Current Period")+'</p><div class="kpi"><div><div class="label">Revenue YTD</div><div class="val">'+f$(summary.incYA)+'</div></div><div><div class="label">Expenses YTD</div><div class="val">'+f$(summary.expYA)+'</div></div><div><div class="label">NOI</div><div class="val" style="color:'+(summary.noi>=summary.noiBud?G:R)+'">'+f$(summary.noi)+'</div></div><div><div class="label">NOI vs Budget</div><div class="val" style="color:'+(summary.noi>=summary.noiBud?G:R)+'">'+f$(summary.noi-summary.noiBud)+'</div></div></div><h2>Budget Performance by Category</h2><table><tr><th>Category</th><th>YTD Actual</th><th>YTD Budget</th><th>Variance</th><th>Annual Budget</th><th>% Used</th></tr>'+summary.ss.map(s=>{const v=s.yBud-s.yAct;const pu=s.annBud?((s.yAct/s.annBud)*100).toFixed(1):0;return'<tr><td><strong>'+s.name+'</strong></td><td>'+f$(s.yAct)+'</td><td>'+f$(s.yBud)+'</td><td class="'+(s.isIncome?(v<=0?"neg":"pos"):(v>=0?"pos":"neg"))+'">'+f$(v)+'</td><td>'+f$(s.annBud)+'</td><td>'+pu+'%</td></tr>';}).join("")+'</table><h2>Key Observations</h2><ul>'+recs.slice(0,6).map(r=>'<li><strong>'+(r.n||"")+(r.gl?" (GL "+r.gl+")":"")+'</strong>: '+r.m+'</li>').join("")+'</ul><div class="footer">Generated '+new Date().toLocaleDateString()+' | RISE Residential, LLC | Confidential</div></body></html>';
 const blob=new Blob([h],{type:"text/html"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=curEntity.label.replace(/[^a-zA-Z0-9]/g,"_")+"_Budget_Report.html";a.click();URL.revokeObjectURL(url);
 });}
