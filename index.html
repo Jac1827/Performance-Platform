@@ -520,6 +520,7 @@ function makeNewPlanDraft(){
   return {
     employeeId: '',
     planFocuses: [],
+    preHrReviewOverride: false,
     planImportedActionItems: [],
     msoeImportedActionItems: [],
     msoeTaskDueDates: {},
@@ -699,8 +700,17 @@ function normalizePlan(plan){
     callReviewSourceName: String(plan && plan.callReviewSourceName || ''),
     callReviewSourceData: String(plan && plan.callReviewSourceData || ''),
     preHrReviewRecipients: Array.isArray(plan && plan.preHrReviewRecipients) ? plan.preHrReviewRecipients : [],
+    preHrReviewOverride: Boolean(plan && plan.preHrReviewOverride),
+    preHrReviewOverrideAt: String(plan && plan.preHrReviewOverrideAt || ''),
+    preHrReviewOverrideBy: String(plan && plan.preHrReviewOverrideBy || ''),
+    preHrReviewOverrideRole: String(plan && plan.preHrReviewOverrideRole || ''),
+    preHrReviewApprovedAt: String(plan && plan.preHrReviewApprovedAt || ''),
+    preHrReviewApprovedBy: String(plan && plan.preHrReviewApprovedBy || ''),
+    preHrReviewApprovedRole: String(plan && plan.preHrReviewApprovedRole || ''),
     preHrReviewRequestedAt: String(plan && plan.preHrReviewRequestedAt || ''),
     preHrReviewCorrespondenceId: String(plan && plan.preHrReviewCorrespondenceId || ''),
+    preHrReviewSignOffCorrespondenceId: String(plan && plan.preHrReviewSignOffCorrespondenceId || ''),
+    preHrReviewOverrideCorrespondenceId: String(plan && plan.preHrReviewOverrideCorrespondenceId || ''),
     hrApprovedAt: String(plan && plan.hrApprovedAt || ''),
     hrApprovedBy: String(plan && plan.hrApprovedBy || ''),
     hrApprovalCorrespondenceId: String(plan && plan.hrApprovalCorrespondenceId || ''),
@@ -1387,6 +1397,21 @@ function regionalManagerDisplayName(employee){
 function regionalManagerEmail(employee){
   if(!employee) return '';
   return userEmail(employee.regionalManagerId);
+}
+
+function preHrReviewOverrideAllowed(employee){
+  if(!employee || !STATE.currentUser) return false;
+  if(isAdminUser(STATE.currentUser)) return true;
+  if(employee.regionalManagerId && STATE.currentUser.id === employee.regionalManagerId) return true;
+  return Boolean(employee.regionalManagerName && normalizeComparable(employee.regionalManagerName) === normalizeComparable(STATE.currentUser.name));
+}
+
+function preHrReviewApproverAllowed(plan){
+  const employee = getEmployee(plan ? plan.employeeId : '');
+  if(!employee || !STATE.currentUser) return false;
+  if(isAdminUser(STATE.currentUser)) return true;
+  if(employee.managerId && STATE.currentUser.id === employee.managerId) return true;
+  return Boolean(employee.managerName && normalizeComparable(employee.managerName) === normalizeComparable(STATE.currentUser.name));
 }
 
 function sortEmployeesByName(list){
@@ -2481,6 +2506,7 @@ function setNewPlanEmployee(employeeId){
   UI.newPlanDraft.employeeId = String(employeeId || '');
   seedNewPlanHistoricalSelections(UI.newPlanDraft.employeeId);
   syncNewPlanManager();
+  UI.newPlanDraft.preHrReviewOverride = preHrReviewOverrideAllowed(getEmployee(UI.newPlanDraft.employeeId)) && Boolean(UI.newPlanDraft.preHrReviewOverride);
   // Reset score inputs when the selected employee changes so history never carries across employees.
   clearNewPlanScoreFields();
   // Pull forward the last saved call review scorecard for the newly selected employee.
@@ -4071,6 +4097,8 @@ function renderNewPlan(){
   const hasMsoeFocus = planFocuses.includes('msoe');
   const hasWriteupFocus = planFocuses.includes('writeups');
   const preHrRecipients = new Set(UI.newPlanDraft.preHrReviewRecipients || []);
+  const canBypassPreHr = preHrReviewOverrideAllowed(selectedEmployee);
+  const preHrOverrideChecked = UI.newPlanDraft.preHrReviewOverride && canBypassPreHr;
   return `
     <div class="page">
       <div class="grid-2-equal">
@@ -4252,7 +4280,7 @@ function renderNewPlan(){
 
           <div class="history-card" style="margin-bottom:14px">
             <h4>Pre-HR email routing</h4>
-            <div class="small muted" style="margin-bottom:10px">Optionally send the generated plan to the employee's direct supervisor and/or assigned regional before the HR approval request is opened.</div>
+            <div class="small muted" style="margin-bottom:10px">Send the generated plan to the employee's direct supervisor and/or assigned regional before the HR approval request opens. Regional or HR admin users can also bypass that step and open HR approval immediately.</div>
             <div class="form-grid cols-2">
               <label class="checkbox-row">
                 <input type="checkbox" id="np-prehr-supervisor" ${preHrRecipients.has('supervisor') ? 'checked' : ''}>
@@ -4269,6 +4297,13 @@ function renderNewPlan(){
                 </div>
               </label>
             </div>
+            <label class="checkbox-row" style="margin-top:10px">
+              <input type="checkbox" id="np-prehr-override" ${preHrOverrideChecked ? 'checked' : ''} ${canBypassPreHr ? '' : 'disabled'} onchange="setNewPlanPreHrOverride(this.checked)">
+              <div>
+                <strong>Override sign off</strong>
+                <div class="tiny muted">${selectedEmployee ? (canBypassPreHr ? 'Regional or HR admin only. Skip the supervisor email and open the HR approval draft immediately.' : 'Only the assigned regional or an HR admin can bypass the supervisor review.') : 'Select an employee'}</div>
+              </div>
+            </label>
           </div>
 
           <div class="inline">
@@ -4316,6 +4351,12 @@ function toggleNewPlanFocus(focus){
   if(UI.newPlanDraft.employeeId){
     seedNewPlanHistoricalSelections(UI.newPlanDraft.employeeId);
   }
+  syncNewPlanTypeSections();
+}
+
+function setNewPlanPreHrOverride(checked){
+  const employee = getEmployee(UI.newPlanDraft.employeeId);
+  UI.newPlanDraft.preHrReviewOverride = Boolean(checked && preHrReviewOverrideAllowed(employee));
   syncNewPlanTypeSections();
 }
 
@@ -4426,6 +4467,7 @@ function buildPlanFromForm(){
     ? Math.round((Number(currentMsoeScore) - Number(priorMsoe.score)) * 10) / 10
     : null;
   const requiresUpdatedShopField = document.getElementById('np-requires-shop');
+  const preHrOverrideField = document.getElementById('np-prehr-override');
 
   return {
     id: genId(),
@@ -4465,6 +4507,7 @@ function buildPlanFromForm(){
       document.getElementById('np-prehr-supervisor') && document.getElementById('np-prehr-supervisor').checked ? 'supervisor' : '',
       document.getElementById('np-prehr-regional') && document.getElementById('np-prehr-regional').checked ? 'regional' : ''
     ].filter(Boolean),
+    preHrReviewOverride: Boolean(preHrOverrideField && !preHrOverrideField.disabled && preHrOverrideField.checked && preHrReviewOverrideAllowed(employee)),
     callReviewEmployeeScore: (isCallReview || hasCallReviewFocus) ? numberOrNull('np-call-employee-score') : null,
     callReviewManagerScore: (isCallReview || hasCallReviewFocus) ? numberOrNull('np-call-manager-score') : null,
     callReviewSentiment: (isCallReview || hasCallReviewFocus) ? String(document.getElementById('np-call-sentiment').value || '') : '',
@@ -8414,11 +8457,70 @@ function buildPreHrReviewDraft(plan){
   return {recipient: contacts.map(contact => contact.email).join(','), subject, body, contacts};
 }
 
+function recordPreHrSignoffAndSendToHr(plan, mode){
+  if(!plan || plan.hrApprovedAt || plan.hrApprovalRequestedAt) return;
+  const employee = getEmployee(plan.employeeId);
+  const now = today();
+  const actor = STATE.currentUser ? STATE.currentUser.name : '';
+  const actorRole = STATE.currentUser ? STATE.currentUser.role : '';
+  const isOverride = mode === 'override';
+  const subject = `${isOverride ? 'Override sign-off' : 'Supervisor approval'}: ${employee ? employee.name : 'Employee'} · ${planTypeUpperLabel(plan.type)} plan`;
+  const body =
+    `Hello,\n\n` +
+    `${isOverride
+      ? 'The assigned regional or HR administrator has overridden the supervisor review for this plan.'
+      : 'The direct supervisor has approved this plan after review.'}\n\n` +
+    `Employee: ${employee ? employee.name : 'Unknown employee'}\n` +
+    `Plan type: ${planTypeUpperLabel(plan.type)}\n` +
+    `Graded items: ${planFocusSummary(plan.planFocuses || plan.planFocus) || 'Not set'}\n` +
+    `Review date: ${formatDate(plan.reviewDate)}\n` +
+    `Sign-off date: ${formatDate(now)}\n\n` +
+    `The HR approval request will be opened next.\n`;
+
+  if(isOverride){
+    plan.preHrReviewOverride = true;
+    plan.preHrReviewOverrideAt = now;
+    plan.preHrReviewOverrideBy = actor;
+    plan.preHrReviewOverrideRole = actorRole;
+  }else{
+    plan.preHrReviewApprovedAt = now;
+    plan.preHrReviewApprovedBy = actor;
+    plan.preHrReviewApprovedRole = actorRole;
+  }
+
+  const correspondence = logCorrespondence({
+    employeeId: employee ? employee.id : '',
+    planId: plan.id,
+    type: isOverride ? 'pre_hr_override_signoff' : 'pre_hr_supervisor_signoff',
+    date: now,
+    subject,
+    recipient: HR_ALERT_EMAIL,
+    status: isOverride ? 'Override sign-off recorded' : 'Supervisor approval recorded',
+    summary: isOverride
+      ? 'Regional or HR admin bypassed the direct supervisor review and the HR approval request was opened immediately.'
+      : 'Direct supervisor approved the plan before the HR approval request was opened.',
+    body,
+    createdBy: actor
+  });
+  if(isOverride){
+    plan.preHrReviewOverrideCorrespondenceId = correspondence.id;
+  }else{
+    plan.preHrReviewSignOffCorrespondenceId = correspondence.id;
+  }
+  saveState();
+  sendPlanToHrForReview(plan.id);
+}
+
 function maybeTriggerHrApprovalRequest(plan){
   if(!plan || plan.hrApprovedAt) return;
   if(plan.hrApprovalRequestedAt) return;
   const employee = getEmployee(plan.employeeId);
   if(employee && isEmployeeTerminated(employee)) return;
+
+  if(plan.preHrReviewOverride){
+    recordPreHrSignoffAndSendToHr(plan, 'override');
+    return;
+  }
 
   const preHrDraft = buildPreHrReviewDraft(plan);
   if((plan.preHrReviewRecipients || []).length && !plan.preHrReviewRequestedAt){
@@ -8446,6 +8548,24 @@ function maybeTriggerHrApprovalRequest(plan){
   }
 
   sendPlanToHrForReview(plan.id);
+}
+
+function advancePlanPreHrReview(planId, mode){
+  const plan = getPlan(planId);
+  if(!plan || plan.hrApprovedAt || plan.hrApprovalRequestedAt) return;
+  const employee = getEmployee(plan.employeeId);
+  if(mode === 'override'){
+    if(!preHrReviewOverrideAllowed(employee)){
+      alert('Only the assigned regional or an HR admin can bypass the direct supervisor review.');
+      return;
+    }
+  }else if(!preHrReviewApproverAllowed(plan)){
+    alert('Only the direct supervisor, assigned regional, or an HR admin can approve the pre-HR review.');
+    return;
+  }
+  recordPreHrSignoffAndSendToHr(plan, mode === 'override' ? 'override' : 'approve');
+  closeModal();
+  render();
 }
 
 function sendPlanToHrForReview(planId){
@@ -8662,9 +8782,11 @@ function openPlanDetail(planId){
               ` : ''}
               <div class="history-card">
                 <strong>HR approval</strong>
-                <div class="small muted" style="margin:6px 0 10px">${hrApproved ? `Approved ${formatDate(plan.hrApprovedAt)}${plan.hrApprovedBy ? ' · ' + escapeHtml(plan.hrApprovedBy) : ''}` : plan.hrApprovalRequestedAt ? `HR approval requested ${formatDate(plan.hrApprovalRequestedAt)}.` : plan.preHrReviewRequestedAt ? `Pre-HR review routed ${formatDate(plan.preHrReviewRequestedAt)}. Send to HR after supervisor/regional review.` : 'Awaiting HR approval before this plan can be presented to the employee.'}</div>
+                <div class="small muted" style="margin:6px 0 10px">${hrApproved ? `Approved ${formatDate(plan.hrApprovedAt)}${plan.hrApprovedBy ? ' · ' + escapeHtml(plan.hrApprovedBy) : ''}` : plan.hrApprovalRequestedAt ? `HR approval requested ${formatDate(plan.hrApprovalRequestedAt)}.` : plan.preHrReviewOverrideAt ? `Override sign-off recorded ${formatDate(plan.preHrReviewOverrideAt)}${plan.preHrReviewOverrideBy ? ' · ' + escapeHtml(plan.preHrReviewOverrideBy) : ''}. HR review was opened directly.` : plan.preHrReviewApprovedAt ? `Supervisor approval recorded ${formatDate(plan.preHrReviewApprovedAt)}${plan.preHrReviewApprovedBy ? ' · ' + escapeHtml(plan.preHrReviewApprovedBy) : ''}. Send to HR after review.` : plan.preHrReviewRequestedAt ? `Pre-HR review routed ${formatDate(plan.preHrReviewRequestedAt)}. Send to HR after supervisor/regional review.` : 'Awaiting HR approval before this plan can be presented to the employee.'}</div>
                 <div class="inline">
-                  ${!hrApproved && plan.preHrReviewRequestedAt && !plan.hrApprovalRequestedAt ? `<button class="btn btn-sm btn-accent" onclick="sendPlanToHrForReview('${plan.id}')">Send to HR review</button>` : ''}
+                  ${!hrApproved && plan.preHrReviewRequestedAt && !plan.hrApprovalRequestedAt && preHrReviewApproverAllowed(plan) ? `<button class="btn btn-sm btn-accent" onclick="advancePlanPreHrReview('${plan.id}','approve')">Supervisor approved, send to HR</button>` : ''}
+                  ${!hrApproved && !plan.hrApprovalRequestedAt && preHrReviewOverrideAllowed(employee) ? `<button class="btn btn-sm btn-primary" onclick="advancePlanPreHrReview('${plan.id}','override')">Override sign off, send to HR</button>` : ''}
+                  ${!hrApproved && plan.preHrReviewOverrideAt && !plan.hrApprovalRequestedAt ? `<button class="btn btn-sm btn-accent" onclick="sendPlanToHrForReview('${plan.id}')">Open HR review</button>` : ''}
                   ${STATE.currentUser && STATE.currentUser.role === 'admin' && !hrApproved ? `<button class="btn btn-sm btn-primary" onclick="openHrApprovalModal('${plan.id}')">Approve + notify manager</button>` : ''}
                   ${plan.hrApprovalCorrespondenceId && employee ? `<button class="btn btn-sm btn-soft" onclick="closeModal();openEmployeeProfile('${employee.id}')">View correspondence log</button>` : ''}
                 </div>
@@ -8674,7 +8796,9 @@ function openPlanDetail(planId){
                   <strong>Pre-HR routing</strong>
                   <div class="small muted" style="margin-top:6px">
                     Selected: ${(plan.preHrReviewRecipients || []).map(value => value === 'supervisor' ? 'Direct supervisor' : 'Assigned regional').join(' · ')}<br>
-                    ${plan.preHrReviewRequestedAt ? `Email draft opened ${formatDate(plan.preHrReviewRequestedAt)}` : 'Not sent yet.'}
+                    ${plan.preHrReviewRequestedAt ? `Supervisor/regional email drafted ${formatDate(plan.preHrReviewRequestedAt)}` : 'Not sent yet.'}<br>
+                    ${plan.preHrReviewApprovedAt ? `Supervisor approval ${formatDate(plan.preHrReviewApprovedAt)}${plan.preHrReviewApprovedBy ? ' · ' + escapeHtml(plan.preHrReviewApprovedBy) : ''}` : ''}
+                    ${plan.preHrReviewOverrideAt ? `Override sign-off ${formatDate(plan.preHrReviewOverrideAt)}${plan.preHrReviewOverrideBy ? ' · ' + escapeHtml(plan.preHrReviewOverrideBy) : ''}` : ''}
                   </div>
                 </div>
               ` : ''}
