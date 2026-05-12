@@ -9839,6 +9839,8 @@ function renderTrafficTab() {
   if (isPortfolioWorkspaceSelected()) return renderPortfolioScopedTrafficTab();
   const cm = monthlyData[currentMonth] ?? {};
   const leadSources = getLeadSourceBreakdown(cm);
+  const leadSourceBucketTotal = Object.values(leadSources).reduce((sum, value) => sum + (Number(value) || 0), 0);
+  const hasAggregateLeadFallback = leadSourceBucketTotal === 0 && Math.max(0, Number(cm.guestCards) || 0) > 0;
   const schedule = computeSchedule();
   const currentRow = schedule[currentMonth] ?? {};
   const totalUnits = getTotalUnits();
@@ -9872,6 +9874,7 @@ function renderTrafficTab() {
   const leadSourceCard = `<div class="card mb4">
     <h2 style="font-size:0.9rem;font-weight:600;margin-bottom:4px">${MONTHS[currentMonth]} Lead Source Breakdown</h2>
     <p style="font-size:0.68rem;color:var(--muted);margin-bottom:14px">Track the same five lead-source buckets used by the DLR so investor exports can mirror the report format more closely. The guest card total below auto-rolls up from these source fields when they are populated.</p>
+    ${hasAggregateLeadFallback ? `<div style="margin-bottom:14px;padding:10px 12px;border-radius:10px;background:rgba(68,147,248,0.08);border:1px solid rgba(68,147,248,0.18);font-size:0.68rem;color:#24507a">ATLAS imported ${guestCardTotal} total guest cards for ${MONTHS[currentMonth]}, but this upload did not include the source-level split. The community Traffic & Funnel totals are current; the five source buckets will populate after a source-detail upload.</div>` : ""}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
       <div>${statBox("Walk In", String(leadSources.walkIn), "Lead source count", "#60a5fa")}</div>
       <div>${statBox("Off Site Event", String(leadSources.offSiteEvent), "Lead source count", "#818cf8")}</div>
@@ -10032,14 +10035,21 @@ function renderTrafficTab() {
   const leadSourceRows = MONTHS.map((month, i) => {
     const d = monthlyData[i] ?? {};
     const sourceTotal = getLeadSourceTotal(d);
+    const sourceBreakdown = getLeadSourceBreakdown(d);
+    const sourceBreakdownTotal = Object.values(sourceBreakdown).reduce((sum, value) => sum + (Number(value) || 0), 0);
+    const hasAggregateOnly = sourceBreakdownTotal === 0 && Math.max(0, Number(d.guestCards) || 0) > 0;
+    const formatLeadSourceCell = (field, value) => {
+      if (!hasAggregateOnly) return monthInpField(i, field, value ?? 0);
+      return `<div style="display:grid;gap:4px"><input type="number" value="0" disabled style="width:100%;opacity:0.55;cursor:not-allowed"><div class="goal-sub" style="color:#4493f8">Awaiting source split</div></div>`;
+    };
     return `<tr class="${i<currentMonth?"past":i===currentMonth?"current-row":""}">
       <td class="l">${month}${i===currentMonth?`<span class="now-badge">Now</span>`:""}</td>
-      <td>${monthInpField(i, "walkIn", d.walkIn ?? 0)}</td>
-      <td>${monthInpField(i, "offSiteEvent", d.offSiteEvent ?? 0)}</td>
-      <td>${monthInpField(i, "phoneCalls", d.phoneCalls ?? 0)}</td>
-      <td>${monthInpField(i, "emailsOnline", d.emailsOnline ?? 0)}</td>
-      <td>${monthInpField(i, "textChatOther", d.textChatOther ?? 0)}</td>
-      <td style="font-weight:700;color:#4493f8">${sourceTotal}</td>
+      <td>${formatLeadSourceCell("walkIn", d.walkIn ?? 0)}</td>
+      <td>${formatLeadSourceCell("offSiteEvent", d.offSiteEvent ?? 0)}</td>
+      <td>${formatLeadSourceCell("phoneCalls", d.phoneCalls ?? 0)}</td>
+      <td>${formatLeadSourceCell("emailsOnline", d.emailsOnline ?? 0)}</td>
+      <td>${formatLeadSourceCell("textChatOther", d.textChatOther ?? 0)}</td>
+      <td style="font-weight:700;color:#4493f8">${sourceTotal}${hasAggregateOnly ? `<div class="goal-sub" style="color:#4493f8">Aggregate import</div>` : ""}</td>
     </tr>`;
   });
 
