@@ -717,6 +717,8 @@
   .scout-msg{max-width:92%;padding:12px 14px;border-radius:16px;font-size:0.75rem;line-height:1.5;white-space:pre-wrap}
   .scout-msg.user{align-self:flex-end;background:#12324b;color:#fff;border-bottom-right-radius:6px}
   .scout-msg.assistant{align-self:flex-start;background:#fff;color:#23435b;border:1px solid rgba(15,47,87,0.08);border-bottom-left-radius:6px}
+  .scout-msg-media{margin-top:10px;border-radius:12px;overflow:hidden;border:1px solid rgba(15,47,87,0.08);background:#edf4fb}
+  .scout-msg-media img{display:block;width:100%;max-height:180px;object-fit:cover}
   .scout-msg-meta{display:block;font-size:0.62rem;color:#6a8599;margin-top:6px}
   .scout-assistant-compose{display:grid;grid-template-columns:1fr auto auto;gap:8px;padding:12px 18px 18px;border-top:1px solid rgba(15,47,87,0.08);background:#f8fbfe}
   .scout-assistant-compose input{
@@ -6962,10 +6964,33 @@ function getScoutQuestionScope(question = "") {
 function buildScoutRecommendationSummary(detail) {
   const recommendations = Array.isArray(detail?.recommendations) ? detail.recommendations : [];
   if (recommendations.length === 0) {
-    return "Here’s where to focus next: no active watchlist item is flagged from the current dashboard sections.";
+    return "No active watchlist item is flagged from the current dashboard sections.";
   }
   const top = recommendations.slice(0, 2).map(item => `${item.title}: ${item.body}`).join(" ");
-  return `Here’s where to focus next: ${top}`;
+  return top;
+}
+
+function buildScoutNarrative(...parts) {
+  return parts
+    .flat()
+    .map(part => String(part ?? "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+\n/g, " ")
+    .replace(/\n+\s*/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function getScoutPhotoAssetForScope(scope = null) {
+  if (!scope || scope.type !== "community") return null;
+  const photo = normalizeCommunityPhotoBank(scope.detail?.record?.photoBank)?.[0] || null;
+  if (!photo?.src) return null;
+  return {
+    src: photo.src,
+    alt: `${scope.detail?.name || "Community"} photo`,
+    caption: `Atlas community photo · ${scope.detail?.name || "Selected community"}`
+  };
 }
 
 function answerScoutPortfolioQuestion(question = "", scope = null) {
@@ -6983,12 +7008,27 @@ function answerScoutPortfolioQuestion(question = "", scope = null) {
       const plan = getCommunityPerformancePlan(detail.name, detail.record) ?? {};
       return `${detail.name}: ${Math.round(plan.currentGrossLeaseNeed ?? 0)} lease goal, ${Math.round(plan.currentAppNeed ?? 0)} app goal`;
     }).join("; ");
-    return `Here’s what changed: for ${monthLabel}, the portfolio goal editor is now the source of truth for monthly lease and app targets.\nHere’s what is driving it: each recommendation is based on budget occupancy pressure, current close rate, and current funnel depth.\nHere’s where to focus next: ${targets || "set community-level lease and app goals from the portfolio overview tab."}\nHere’s what I can’t confirm from the current data: exact 7-day pacing where a community has not stored a fresh box score snapshot.`;
+    return buildScoutNarrative(
+      `For ${monthLabel}, the portfolio goal editor is the source of truth for monthly lease and app targets.`,
+      `Those recommendations are being driven by budget occupancy pressure, current close rate, and current funnel depth across the selected communities.`,
+      targets || "Set community-level lease and app goals from the portfolio overview tab.",
+      "The only thing I cannot confirm cleanly from the current data is true 7-day pacing where a fresh box score has not been saved."
+    );
   }
   if (/\battention\b|\brisk\b|\bpriority\b|\bfocus\b/.test(lower)) {
-    return `Here’s what changed: ${details.length} communities are in scope for ${monthLabel}, with physical occupancy at ${getSummaryOccPct(aggregate).toFixed(1)}% and leased occupancy at ${getSummaryLeasedPct(aggregate).toFixed(1)}%.\nHere’s what is driving it: the highest visible pressure is ${topRiskDetail ? `${topRiskDetail.name} with ${Math.max(topRiskDetail.summary?.occGapUnits ?? 0, 0)} occupancy gap units and ${(topRiskDetail.summary?.tourToLeasePct ?? 0).toFixed(1)}% tour-to-lease conversion.` : "the current budget gap across the selected communities."}\nHere’s where to focus next: ${details.slice(0, 3).map(detail => `${detail.name} (${Math.max(detail.summary?.occGapUnits ?? 0, 0)} gap units)`).join(", ") || "review the portfolio overview goal guidance table"}.\nHere’s what I can’t confirm from the current data: any operating issue that depends on notes or external actions not stored in ATLAS.`;
+    return buildScoutNarrative(
+      `${details.length} communities are in scope for ${monthLabel}, and the selected portfolio is running at ${getSummaryOccPct(aggregate).toFixed(1)}% physical occupancy and ${getSummaryLeasedPct(aggregate).toFixed(1)}% leased occupancy.`,
+      `The highest visible pressure is ${topRiskDetail ? `${topRiskDetail.name}, with ${Math.max(topRiskDetail.summary?.occGapUnits ?? 0, 0)} occupancy gap units and ${(topRiskDetail.summary?.tourToLeasePct ?? 0).toFixed(1)}% tour-to-lease conversion` : "the current budget gap across the selected communities"}.`,
+      `The clearest next review set is ${details.slice(0, 3).map(detail => `${detail.name} (${Math.max(detail.summary?.occGapUnits ?? 0, 0)} gap units)`).join(", ") || "the portfolio overview goal guidance table"}.`,
+      "Anything that depends on unsaved notes or external actions still sits outside what I can verify from ATLAS."
+    );
   }
-  return `Here’s what changed: the portfolio is at ${getSummaryOccPct(aggregate).toFixed(1)}% physical occupancy and ${getSummaryLeasedPct(aggregate).toFixed(1)}% leased occupancy for ${monthLabel}.\nHere’s what is driving it: ${Math.round(aggregate.applications ?? 0)} applications and ${Math.round(aggregate.applicationsApproved ?? 0)} approved applications are saved month to date, with ${Math.max(aggregate.occGapUnits ?? 0, 0)} budget gap units across the current scope.\nHere’s where to focus next: ${topRiskDetail ? `${topRiskDetail.name} is the clearest first review because it combines occupancy pressure with current funnel needs.` : "review community goal guidance from the portfolio overview editor."}\nHere’s what I can’t confirm from the current data: any change that depends on unstored pricing strategy or pending manual updates.`;
+  return buildScoutNarrative(
+    `For ${monthLabel}, the portfolio is at ${getSummaryOccPct(aggregate).toFixed(1)}% physical occupancy and ${getSummaryLeasedPct(aggregate).toFixed(1)}% leased occupancy.`,
+    `${Math.round(aggregate.applications ?? 0)} applications and ${Math.round(aggregate.applicationsApproved ?? 0)} approved applications are saved month to date, with ${Math.max(aggregate.occGapUnits ?? 0, 0)} budget gap units across the current scope.`,
+    topRiskDetail ? `${topRiskDetail.name} is the clearest first review because it combines occupancy pressure with current funnel needs.` : "The portfolio overview goal guidance table is the best next place to review current recommendations.",
+    "Any pricing or operating context that has not been written into ATLAS is still outside what I can confirm."
+  );
 }
 
 function answerScoutCommunityQuestion(question = "", scope = null) {
@@ -7008,36 +7048,80 @@ function answerScoutCommunityQuestion(question = "", scope = null) {
     const phoneCalls = Number(monthEntry.phoneCalls ?? 0) || 0;
     const emailsOnline = Number(monthEntry.emailsOnline ?? 0) || 0;
     const textChatOther = Number(monthEntry.textChatOther ?? 0) || 0;
-    return `Here’s what changed: ${detail.name} has ${Math.round(summary.guestCards ?? 0)} guest cards and ${Math.round(summary.tours ?? 0)} tours saved month to date for ${monthLabel}.\nHere’s what is driving it: the current source mix is ${walkIn} walk-ins, ${offSiteEvent} off-site/event, ${phoneCalls} phone, ${emailsOnline} email/online, and ${textChatOther} text/chat/other.\nHere’s where to focus next: ${Math.round(summary.guestCardGoal ?? 0)} guest cards are needed against the current pace, and ${(summary.tourToAppPct ?? 0).toFixed(1)}% of tours are converting to applications.\nHere’s what I can’t confirm from the current data: any lead-source activity that has not been uploaded into ATLAS yet.`;
+    return buildScoutNarrative(
+      `${detail.name} has ${Math.round(summary.guestCards ?? 0)} guest cards and ${Math.round(summary.tours ?? 0)} tours saved month to date for ${monthLabel}.`,
+      `The current source mix shows ${walkIn} walk-ins, ${offSiteEvent} off-site/event, ${phoneCalls} phone, ${emailsOnline} email/online, and ${textChatOther} text/chat/other.`,
+      `${Math.round(summary.guestCardGoal ?? 0)} guest cards are needed against the current pace, and ${(summary.tourToAppPct ?? 0).toFixed(1)}% of tours are converting to applications.`,
+      "Any lead-source activity that has not been uploaded into ATLAS yet is still outside what I can verify."
+    );
   }
   if (/\boccup|leased|budget gap\b/.test(lower)) {
-    return `Here’s what changed: ${detail.name} is at ${getSummaryOccPct(summary).toFixed(1)}% physical occupancy and ${getSummaryLeasedPct(summary).toFixed(1)}% leased occupancy for ${monthLabel}.\nHere’s what is driving it: the community is ${Math.max(summary.occGapUnits ?? 0, 0)} units from budget occupancy and is currently pacing ${(summary.tourToLeasePct ?? 0).toFixed(1)}% tour-to-lease.\nHere’s where to focus next: ${buildScoutRecommendationSummary(detail)}\nHere’s what I can’t confirm from the current data: whether pending approvals will convert without updated follow-up notes.`;
+    return buildScoutNarrative(
+      `${detail.name} is at ${getSummaryOccPct(summary).toFixed(1)}% physical occupancy and ${getSummaryLeasedPct(summary).toFixed(1)}% leased occupancy for ${monthLabel}.`,
+      `The asset is ${Math.max(summary.occGapUnits ?? 0, 0)} units from budget occupancy and is pacing ${(summary.tourToLeasePct ?? 0).toFixed(1)}% tour-to-lease.`,
+      buildScoutRecommendationSummary(detail),
+      "I still cannot confirm whether pending approvals will convert without updated follow-up notes."
+    );
   }
   if (/\bapplication|\bapps?\b|\bapproved\b|\bconversion\b|\bclose\b/.test(lower)) {
-    return `Here’s what changed: ${detail.name} has ${Math.round(summary.applications ?? 0)} applications and ${Math.round(summary.applicationsApproved ?? 0)} approved applications saved month to date.\nHere’s what is driving it: current conversion is ${(summary.tourToAppPct ?? 0).toFixed(1)}% from tour to app and ${(summary.tourToLeasePct ?? 0).toFixed(1)}% from tour to lease.\nHere’s where to focus next: the current operating plan points to ${Math.round(plan.currentGrossLeaseNeed ?? 0)} lease goal and ${Math.round(plan.currentAppNeed ?? 0)} app goal for this month.\nHere’s what I can’t confirm from the current data: the exact blocker on any one approval unless the team logs it in ATLAS.`;
+    return buildScoutNarrative(
+      `${detail.name} has ${Math.round(summary.applications ?? 0)} applications and ${Math.round(summary.applicationsApproved ?? 0)} approved applications saved month to date.`,
+      `Current conversion is ${(summary.tourToAppPct ?? 0).toFixed(1)}% from tour to app and ${(summary.tourToLeasePct ?? 0).toFixed(1)}% from tour to lease.`,
+      `The current operating plan points to ${Math.round(plan.currentGrossLeaseNeed ?? 0)} lease goal and ${Math.round(plan.currentAppNeed ?? 0)} app goal for this month.`,
+      "I cannot see the exact blocker on any one approval unless the team logs it in ATLAS."
+    );
   }
   if (/\bmove[\s-]?in\b|\bmove[\s-]?out\b|\babsorption\b/.test(lower)) {
-    return `Here’s what changed: ${detail.name} has ${Math.round(summary.moveIns ?? 0)} move-ins and ${Math.round(summary.moveOuts ?? 0)} move-outs saved for ${monthLabel}, for net absorption of ${formatSignedDisplay(summary.monthAbsorption ?? 0)}.\nHere’s what is driving it: the current move-in goal is ${Math.round(summary.moveInGoal ?? 0)} and the asset is carrying ${Math.max(summary.occGapUnits ?? 0, 0)} occupancy gap units.\nHere’s where to focus next: close the approved application pipeline quickly enough to recover exposure before additional move-outs hit.\nHere’s what I can’t confirm from the current data: whether any scheduled move-ins are at risk without updated applicant notes.`;
+    return buildScoutNarrative(
+      `${detail.name} has ${Math.round(summary.moveIns ?? 0)} move-ins and ${Math.round(summary.moveOuts ?? 0)} move-outs saved for ${monthLabel}, for net absorption of ${formatSignedDisplay(summary.monthAbsorption ?? 0)}.`,
+      `The current move-in goal is ${Math.round(summary.moveInGoal ?? 0)} and the asset is carrying ${Math.max(summary.occGapUnits ?? 0, 0)} occupancy gap units.`,
+      "The next priority is closing the approved application pipeline quickly enough to recover exposure before additional move-outs hit.",
+      "I cannot confirm whether scheduled move-ins are at risk unless updated applicant notes are in ATLAS."
+    );
   }
   if (/\brent\b|\bpricing\b|\bner\b|\bnet effective\b|\bmarket rent\b/.test(lower)) {
     const marketRent = Number(monthEntry.marketRent ?? 0) || 0;
     const nerActual = Number(monthEntry.nerActual ?? summary.currentNer ?? 0) || 0;
-    return `Here’s what changed: ${detail.name} is carrying ${marketRent > 0 ? formatDlrCurrency(marketRent) : "no saved market rent"} and ${nerActual > 0 ? formatDlrCurrency(nerActual) : "no saved NER"} for ${monthLabel}.\nHere’s what is driving it: pricing position in ATLAS is tied to the saved monthly operating data and the current comp/recommendation workflow.\nHere’s where to focus next: review the regional pricing worksheet and compare the saved subject metrics against the latest comp averages before changing strategy.\nHere’s what I can’t confirm from the current data: any pricing call that has not been written back into ATLAS yet.`;
+    return buildScoutNarrative(
+      `${detail.name} is carrying ${marketRent > 0 ? formatDlrCurrency(marketRent) : "no saved market rent"} and ${nerActual > 0 ? formatDlrCurrency(nerActual) : "no saved NER"} for ${monthLabel}.`,
+      "Pricing position in ATLAS is tied to the saved monthly operating data and the current comp/recommendation workflow.",
+      "The best next review is the regional pricing worksheet so the saved subject metrics can be compared against the latest comp averages before changing strategy.",
+      "Any pricing call that has not been written back into ATLAS is still outside what I can confirm."
+    );
   }
   if (/\bgoal\b|\bgoals\b|\blease goal\b|\bapp goal\b/.test(lower)) {
-    return `Here’s what changed: ${detail.name} is carrying a recommended target of ${Math.round(plan.currentGrossLeaseNeed ?? 0)} leases and ${Math.round(plan.currentAppNeed ?? 0)} applications for ${monthLabel}.\nHere’s what is driving it: budget occupancy pressure is ${Math.max(summary.occGapUnits ?? 0, 0)} units, and the current close rate is ${(summary.tourToLeasePct ?? 0).toFixed(1)}% against a needed ${(plan.currentTourToLeaseNeededPct ?? 0).toFixed(1)}%.\nHere’s where to focus next: use the portfolio overview goal editor to save the monthly goal, then keep the funnel aligned to approved applications and follow-up speed.\nHere’s what I can’t confirm from the current data: whether you want to stretch above the recommended target for a specific strategic reason.`;
+    return buildScoutNarrative(
+      `${detail.name} is carrying a recommended target of ${Math.round(plan.currentGrossLeaseNeed ?? 0)} leases and ${Math.round(plan.currentAppNeed ?? 0)} applications for ${monthLabel}.`,
+      `That recommendation is being driven by ${Math.max(summary.occGapUnits ?? 0, 0)} budget-gap units and a current close rate of ${(summary.tourToLeasePct ?? 0).toFixed(1)}% against a needed ${(plan.currentTourToLeaseNeededPct ?? 0).toFixed(1)}%.`,
+      "Use the portfolio overview goal editor to save the monthly target and keep the funnel aligned to approved applications and follow-up speed.",
+      "I cannot determine from the current data alone whether you want to stretch above the recommendation for a strategic reason."
+    );
   }
   if (/\brenewal\b|\bretention\b|\bntv\b|\bexpirations?\b/.test(lower)) {
-    return `Here’s what changed: ${detail.name} has ${Math.round(summary.renewalExpirations ?? 0)} expirations, ${Math.round(summary.renewalsSigned ?? 0)} signed renewals, and ${(summary.renewalRetentionRate ?? 0).toFixed(1)}% retention for ${monthLabel}.\nHere’s what is driving it: ${Math.round(summary.renewalNTV ?? 0)} NTVs and ${Math.round(summary.renewalUndecided ?? 0)} undecided renewals are still influencing the final result.\nHere’s where to focus next: close undecided renewals before they flow into move-out exposure and next-month leasing need.\nHere’s what I can’t confirm from the current data: the resident-level reason behind any unsigned renewal unless that note is stored in ATLAS.`;
+    return buildScoutNarrative(
+      `${detail.name} has ${Math.round(summary.renewalExpirations ?? 0)} expirations, ${Math.round(summary.renewalsSigned ?? 0)} signed renewals, and ${(summary.renewalRetentionRate ?? 0).toFixed(1)}% retention for ${monthLabel}.`,
+      `${Math.round(summary.renewalNTV ?? 0)} NTVs and ${Math.round(summary.renewalUndecided ?? 0)} undecided renewals are still influencing the final result.`,
+      "The cleanest next step is closing undecided renewals before they flow into move-out exposure and next-month leasing need.",
+      "I cannot see resident-level reasons behind unsigned renewals unless those notes are stored in ATLAS."
+    );
   }
-  return `Here’s what changed: ${detail.name} is operating at ${getSummaryOccPct(summary).toFixed(1)}% physical occupancy with ${Math.round(summary.applicationsApproved ?? 0)} approved apps month to date in ${monthLabel}.\nHere’s what is driving it: budget gap, current conversion, and move-out pressure are the main leasing drivers in the saved record.\nHere’s where to focus next: ${buildScoutRecommendationSummary(detail)}\nHere’s what I can’t confirm from the current data: any context that lives outside the dashboard, such as pricing calls or team notes not saved here.`;
+  return buildScoutNarrative(
+    `${detail.name} is operating at ${getSummaryOccPct(summary).toFixed(1)}% physical occupancy with ${Math.round(summary.applicationsApproved ?? 0)} approved apps month to date in ${monthLabel}.`,
+    "Budget gap, current conversion, and move-out pressure are the main leasing drivers in the saved record.",
+    buildScoutRecommendationSummary(detail),
+    "Anything that lives outside the dashboard, such as pricing calls or unsaved team notes, is still outside what I can verify."
+  );
 }
 
 function generateScoutAnswer(question = "") {
   const scope = getScoutQuestionScope(question);
-  return scope.type === "portfolio"
+  const body = scope.type === "portfolio"
     ? answerScoutPortfolioQuestion(question, scope)
     : answerScoutCommunityQuestion(question, scope);
+  return {
+    body,
+    photo: getScoutPhotoAssetForScope(scope)
+  };
 }
 
 function renderScoutAssistantMessages() {
@@ -7045,13 +7129,23 @@ function renderScoutAssistantMessages() {
   if (!log) return;
   log.innerHTML = scoutAssistantState.messages.map(message => `<div class="scout-msg ${message.role}">
     ${escapeHtml(message.body)}
+    ${message.photo?.src ? `<div class="scout-msg-media"><img src="${message.photo.src}" alt="${escapeHtml(message.photo.alt || "Scout response image")}"></div>` : ""}
     ${message.meta ? `<span class="scout-msg-meta">${escapeHtml(message.meta)}</span>` : ""}
   </div>`).join("");
   log.scrollTop = log.scrollHeight;
 }
 
-function pushScoutMessage(role, body, meta = "") {
-  scoutAssistantState.messages.push({ role, body: String(body ?? "").trim(), meta: String(meta ?? "").trim() });
+function pushScoutMessage(role, body, meta = "", options = {}) {
+  const photo = options?.photo?.src ? {
+    src: String(options.photo.src),
+    alt: String(options.photo.alt || "").trim()
+  } : null;
+  scoutAssistantState.messages.push({
+    role,
+    body: String(body ?? "").trim(),
+    meta: String(meta ?? "").trim(),
+    photo
+  });
   renderScoutAssistantMessages();
 }
 
@@ -7084,7 +7178,7 @@ function submitScoutQuestion(rawQuestion = "") {
   pulseScoutSpeaking(900);
   const answer = generateScoutAnswer(question);
   window.setTimeout(() => {
-    pushScoutMessage("assistant", answer, `Source: live ATLAS dashboard · ${formatScoutDateLabel(getSelectedDashboardMonthIndex())}`);
+    pushScoutMessage("assistant", answer.body, `Source: live ATLAS dashboard · ${formatScoutDateLabel(getSelectedDashboardMonthIndex())}${answer.photo?.src ? " · Atlas photo enabled" : ""}`, { photo: answer.photo });
     setScoutOrbState("normal");
     pulseScoutSpeaking(1450);
   }, 220);
