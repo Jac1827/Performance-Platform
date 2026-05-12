@@ -7011,6 +7011,40 @@ function getScoutConversationalReply(question = "") {
   return null;
 }
 
+function getScoutMetricIntent(question = "") {
+  const lower = String(question ?? "").toLowerCase();
+  if (/\bphysical occupancy\b|\boccupancy\b|\bocc\b/.test(lower)) return "physical_occupancy";
+  if (/\bleased occupancy\b|\bleased\b/.test(lower)) return "leased_occupancy";
+  if (/\bguest cards?\b|\bleads?\b|\btraffic\b/.test(lower)) return "guest_cards";
+  if (/\btours?\b/.test(lower)) return "tours";
+  if (/\bapproved apps?\b|\bapproved applications?\b/.test(lower)) return "approved_applications";
+  if (/\bpending apps?\b|\bpending applications?\b|\bpending decision\b/.test(lower)) return "pending_applications";
+  if (/\bapplications?\b|\bapps?\b/.test(lower)) return "applications";
+  if (/\bmove[\s-]?ins?\b/.test(lower)) return "move_ins";
+  if (/\bmove[\s-]?outs?\b/.test(lower)) return "move_outs";
+  if (/\babsorption\b/.test(lower)) return "absorption";
+  if (/\blease goal\b|\bgross lease goal\b/.test(lower)) return "lease_goal";
+  if (/\bapp goal\b|\bapplication goal\b/.test(lower)) return "app_goal";
+  if (/\bretention\b|\brenewal retention\b/.test(lower)) return "renewal_retention";
+  if (/\bexpirations?\b/.test(lower)) return "renewal_expirations";
+  if (/\bntv\b/.test(lower)) return "renewal_ntv";
+  if (/\bmarket rent\b/.test(lower)) return "market_rent";
+  if (/\bner\b|\bnet effective rent\b|\bnet effective\b/.test(lower)) return "ner";
+  if (/\bbudget gap\b|\bgap units?\b/.test(lower)) return "budget_gap";
+  if (/\btour to app\b|\btour-to-app\b/.test(lower)) return "tour_to_app";
+  if (/\btour to lease\b|\btour-to-lease\b|\bclose rate\b|\bconversion rate\b/.test(lower)) return "tour_to_lease";
+  if (/\bapproval rate\b/.test(lower)) return "approval_rate";
+  if (/\brenewals signed\b/.test(lower)) return "renewals_signed";
+  return "";
+}
+
+function formatScoutMetricAnswer(label = "", value = "", context = "", source = "") {
+  return buildScoutNarrative(
+    `${label} is ${value}${context ? ` for ${context}` : ""}.`,
+    source ? `This is coming from ${source}.` : ""
+  );
+}
+
 function answerScoutPortfolioQuestion(question = "", scope = null) {
   const resolvedScope = scope || getScoutQuestionScope(question);
   const aggregate = resolvedScope.aggregate;
@@ -7021,6 +7055,24 @@ function answerScoutPortfolioQuestion(question = "", scope = null) {
     - Math.max(Number(left.summary?.occGapUnits ?? 0) || 0, Number(left.summary?.leasedGapUnits ?? 0) || 0)
   )[0];
   const lower = String(question ?? "").toLowerCase();
+  const metricIntent = getScoutMetricIntent(question);
+  if (metricIntent) {
+    if (metricIntent === "physical_occupancy") return formatScoutMetricAnswer("Portfolio physical occupancy", `${getSummaryOccPct(aggregate).toFixed(1)}%`, monthLabel, "the live ATLAS portfolio snapshot");
+    if (metricIntent === "leased_occupancy") return formatScoutMetricAnswer("Portfolio leased occupancy", `${getSummaryLeasedPct(aggregate).toFixed(1)}%`, monthLabel, "the live ATLAS portfolio snapshot");
+    if (metricIntent === "guest_cards") return formatScoutMetricAnswer("Portfolio guest cards", `${Math.round(aggregate.guestCards ?? 0)}`, monthLabel, "saved Traffic & Funnel data across the current scope");
+    if (metricIntent === "tours") return formatScoutMetricAnswer("Portfolio tours", `${Math.round(aggregate.tours ?? 0)}`, monthLabel, "saved Traffic & Funnel data across the current scope");
+    if (metricIntent === "applications") return formatScoutMetricAnswer("Portfolio applications", `${Math.round(aggregate.applications ?? 0)}`, monthLabel, "saved Traffic & Funnel data across the current scope");
+    if (metricIntent === "approved_applications") return formatScoutMetricAnswer("Portfolio approved applications", `${Math.round(aggregate.applicationsApproved ?? 0)}`, monthLabel, "saved Traffic & Funnel data across the current scope");
+    if (metricIntent === "pending_applications") return formatScoutMetricAnswer("Portfolio pending applications", `${Math.round(aggregate.applicationsPendingDecision ?? 0)}`, monthLabel, "saved Traffic & Funnel data across the current scope");
+    if (metricIntent === "move_ins") return formatScoutMetricAnswer("Portfolio move-ins", `${Math.round(aggregate.moveIns ?? 0)}`, monthLabel, "saved Overview and Funnel data across the current scope");
+    if (metricIntent === "move_outs") return formatScoutMetricAnswer("Portfolio move-outs", `${Math.round(aggregate.moveOuts ?? 0)}`, monthLabel, "saved Overview data across the current scope");
+    if (metricIntent === "absorption") return formatScoutMetricAnswer("Portfolio net absorption", `${formatSignedDisplay(aggregate.monthAbsorption ?? 0)}`, monthLabel, "saved move-in and move-out activity across the current scope");
+    if (metricIntent === "renewal_retention") return formatScoutMetricAnswer("Portfolio renewal retention", `${(aggregate.renewalRetentionRate ?? 0).toFixed(1)}%`, monthLabel, "saved renewals data across the current scope");
+    if (metricIntent === "budget_gap") return formatScoutMetricAnswer("Portfolio budget occupancy gap", `${Math.max(aggregate.occGapUnits ?? 0, 0)} units`, monthLabel, "current occupancy against saved budget targets");
+    if (metricIntent === "tour_to_app") return formatScoutMetricAnswer("Portfolio tour-to-app conversion", `${(aggregate.tourToAppPct ?? 0).toFixed(1)}%`, monthLabel, "saved Traffic & Funnel conversion data");
+    if (metricIntent === "tour_to_lease") return formatScoutMetricAnswer("Portfolio tour-to-lease conversion", `${(aggregate.tourToLeasePct ?? 0).toFixed(1)}%`, monthLabel, "saved Traffic & Funnel conversion data");
+    if (metricIntent === "approval_rate") return formatScoutMetricAnswer("Portfolio application approval rate", `${(aggregate.applicationApprovalPct ?? 0).toFixed(1)}%`, monthLabel, "saved application decision data");
+  }
   if (/\bgoal\b|\bgoals\b|\blease goal\b|\bapp goal\b/.test(lower)) {
     const targets = details.slice(0, 5).map(detail => {
       const plan = getCommunityPerformancePlan(detail.name, detail.record) ?? {};
@@ -7060,6 +7112,31 @@ function answerScoutCommunityQuestion(question = "", scope = null) {
   const plan = getCommunityPerformancePlan(detail.name, detail.record) || {};
   const monthEntry = detail.record?.monthlyData?.[resolvedScope.monthIdx] ?? {};
   const lower = String(question ?? "").toLowerCase();
+  const metricIntent = getScoutMetricIntent(question);
+  if (metricIntent) {
+    if (metricIntent === "physical_occupancy") return formatScoutMetricAnswer(`${detail.name} physical occupancy`, `${getSummaryOccPct(summary).toFixed(1)}%`, monthLabel, "the saved ATLAS community record");
+    if (metricIntent === "leased_occupancy") return formatScoutMetricAnswer(`${detail.name} leased occupancy`, `${getSummaryLeasedPct(summary).toFixed(1)}%`, monthLabel, "the saved ATLAS community record");
+    if (metricIntent === "guest_cards") return formatScoutMetricAnswer(`${detail.name} guest cards`, `${Math.round(summary.guestCards ?? 0)}`, monthLabel, "the saved Traffic & Funnel data");
+    if (metricIntent === "tours") return formatScoutMetricAnswer(`${detail.name} tours`, `${Math.round(summary.tours ?? 0)}`, monthLabel, "the saved Traffic & Funnel data");
+    if (metricIntent === "applications") return formatScoutMetricAnswer(`${detail.name} applications`, `${Math.round(summary.applications ?? 0)}`, monthLabel, "the saved Traffic & Funnel data");
+    if (metricIntent === "approved_applications") return formatScoutMetricAnswer(`${detail.name} approved applications`, `${Math.round(summary.applicationsApproved ?? 0)}`, monthLabel, "the saved Traffic & Funnel data");
+    if (metricIntent === "pending_applications") return formatScoutMetricAnswer(`${detail.name} pending applications`, `${Math.round(summary.applicationsPendingDecision ?? 0)}`, monthLabel, "the saved Traffic & Funnel data");
+    if (metricIntent === "move_ins") return formatScoutMetricAnswer(`${detail.name} move-ins`, `${Math.round(summary.moveIns ?? 0)}`, monthLabel, "the saved Overview and Funnel data");
+    if (metricIntent === "move_outs") return formatScoutMetricAnswer(`${detail.name} move-outs`, `${Math.round(summary.moveOuts ?? 0)}`, monthLabel, "the saved Overview data");
+    if (metricIntent === "absorption") return formatScoutMetricAnswer(`${detail.name} net absorption`, `${formatSignedDisplay(summary.monthAbsorption ?? 0)}`, monthLabel, "the saved move-in and move-out activity");
+    if (metricIntent === "lease_goal") return formatScoutMetricAnswer(`${detail.name} recommended lease goal`, `${Math.round(plan.currentGrossLeaseNeed ?? 0)}`, monthLabel, "the current leasing plan");
+    if (metricIntent === "app_goal") return formatScoutMetricAnswer(`${detail.name} recommended app goal`, `${Math.round(plan.currentAppNeed ?? 0)}`, monthLabel, "the current leasing plan");
+    if (metricIntent === "renewal_retention") return formatScoutMetricAnswer(`${detail.name} renewal retention`, `${(summary.renewalRetentionRate ?? 0).toFixed(1)}%`, monthLabel, "the saved renewals data");
+    if (metricIntent === "renewal_expirations") return formatScoutMetricAnswer(`${detail.name} renewal expirations`, `${Math.round(summary.renewalExpirations ?? 0)}`, monthLabel, "the saved renewals data");
+    if (metricIntent === "renewals_signed") return formatScoutMetricAnswer(`${detail.name} renewals signed`, `${Math.round(summary.renewalsSigned ?? 0)}`, monthLabel, "the saved renewals data");
+    if (metricIntent === "renewal_ntv") return formatScoutMetricAnswer(`${detail.name} NTVs`, `${Math.round(summary.renewalNTV ?? 0)}`, monthLabel, "the saved renewals data");
+    if (metricIntent === "market_rent") return formatScoutMetricAnswer(`${detail.name} market rent`, `${Number(monthEntry.marketRent ?? 0) > 0 ? formatDlrCurrency(monthEntry.marketRent) : "not saved"}`, monthLabel, "the saved monthly pricing data");
+    if (metricIntent === "ner") return formatScoutMetricAnswer(`${detail.name} net effective rent`, `${Number(monthEntry.nerActual ?? summary.currentNer ?? 0) > 0 ? formatDlrCurrency(monthEntry.nerActual ?? summary.currentNer ?? 0) : "not saved"}`, monthLabel, "the saved monthly pricing data");
+    if (metricIntent === "budget_gap") return formatScoutMetricAnswer(`${detail.name} budget occupancy gap`, `${Math.max(summary.occGapUnits ?? 0, 0)} units`, monthLabel, "current occupancy against the saved budget target");
+    if (metricIntent === "tour_to_app") return formatScoutMetricAnswer(`${detail.name} tour-to-app conversion`, `${(summary.tourToAppPct ?? 0).toFixed(1)}%`, monthLabel, "the saved Traffic & Funnel conversion data");
+    if (metricIntent === "tour_to_lease") return formatScoutMetricAnswer(`${detail.name} tour-to-lease conversion`, `${(summary.tourToLeasePct ?? 0).toFixed(1)}%`, monthLabel, "the saved Traffic & Funnel conversion data");
+    if (metricIntent === "approval_rate") return formatScoutMetricAnswer(`${detail.name} application approval rate`, `${(summary.applicationApprovalPct ?? 0).toFixed(1)}%`, monthLabel, "the saved application decision data");
+  }
   if (/\blead\b|\bleads\b|\bguest cards?\b|\btraffic\b|\btours?\b|\bwalk[\s-]?in\b|\bphone\b|\bemail\b|\bonline\b|\btext\b|\bchat\b/.test(lower)) {
     const walkIn = Number(monthEntry.walkIn ?? 0) || 0;
     const offSiteEvent = Number(monthEntry.offSiteEvent ?? 0) || 0;
