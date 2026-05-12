@@ -23243,15 +23243,26 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
           concessions: "concessions",
           ner: "ner",
           renewal_expirations: "renewal_expirations",
-          renewals_signed: "renewals_signed",
+          renewals_signed: "renewals_signed"
+        };
+        const leadSourceFieldMap = {
           walk_in: "walk_in",
           off_site_event: "off_site_event",
           phone_calls: "phone_calls",
           emails_online: "emails_online",
           text_chat_other: "text_chat_other"
         };
-        clearMonthlyRecordFields(targetRecord, targetMonthIdx, Object.values(monthlyFieldMap));
-        Object.entries(monthlyFieldMap).forEach(([sourceKey, targetKey]) => {
+        const hasLeadSourceBreakdown = leadSourceValues.some(value => value !== null);
+        const fieldsToClear = [
+          ...Object.values(monthlyFieldMap),
+          ...(hasLeadSourceBreakdown ? Object.values(leadSourceFieldMap) : [])
+        ];
+        clearMonthlyRecordFields(targetRecord, targetMonthIdx, fieldsToClear);
+        const applyFieldMap = {
+          ...monthlyFieldMap,
+          ...(hasLeadSourceBreakdown ? leadSourceFieldMap : {})
+        };
+        Object.entries(applyFieldMap).forEach(([sourceKey, targetKey]) => {
           const rawVal = mappedRow[sourceKey];
           if (rawVal === "" || rawVal === null || rawVal === undefined) return;
           const numeric = Number(String(rawVal).replace(/[$,%]/g, ""));
@@ -23281,6 +23292,8 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
         log.push(`${mappedName} · ${monthLabel}: occupied ${mappedRow.occupied || "—"}, leased ${mappedRow.leased || "—"}, leads ${mappedRow.guest_cards || "—"}`);
         if ([leadWalkInsValue, leadCallsValue, leadEmailsOnlineValue, leadChatTextOtherValue].some(value => value !== null)) {
           log.push(`↳ lead mix: walk ${leadWalkInsValue ?? 0}, calls ${leadCallsValue ?? 0}, email/online ${leadEmailsOnlineValue ?? 0}, text/chat/other ${leadChatTextOtherValue ?? 0}`);
+        } else {
+          log.push("↳ lead mix not supplied in Monthly_Upload; preserved existing source breakdown and updated aggregate leads only.");
         }
       }
     }
