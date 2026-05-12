@@ -52,6 +52,14 @@
     background-size: cover;
     background-position: center;
   }
+  body.portfolio-backdrop {
+    background:
+      linear-gradient(180deg, rgba(10,28,42,0.72) 0%, rgba(10,28,42,0.48) 16%, rgba(245,245,243,0.92) 46%, rgba(245,245,243,0.98) 100%),
+      url("assets/portfolio-scope-backdrop.png");
+    background-attachment: fixed;
+    background-size: cover;
+    background-position: center;
+  }
   .mono { font-family: 'JetBrains Mono', monospace; }
   .container { max-width: 1540px; margin: 0 auto; padding: 14px 18px 26px; }
 
@@ -894,6 +902,9 @@ const scoutAssistantState = {
   uiBound: false
 };
 const PORTFOLIO_SCOPE_LABEL = "ATLAS RISE Portfolio";
+const ATLAS_COMMUNITY_ID_ALIASES = {
+  STA: "St Augustine"
+};
 const WEEKLY_SNAPSHOT_STORAGE_KEY = "rise_weekly_portfolio_snapshot_v1";
 const OPS_GLOBAL_STORAGE_KEY = "rise_ops_global_v1";
 const OPS_WORKSPACE_CONTEXT_KEY = "rise_ops_workspace_context_v1";
@@ -6599,7 +6610,9 @@ function getCommunityBackdropImage() {
 
 function applyDashboardBackdrop() {
   const isCommunityView = [1, 2, 3, 4, 5, 6].includes(activeTab);
+  const isPortfolioReviewView = isPortfolioWorkspaceSelected() && activeTab !== 1;
   const backdropImage = isCommunityView ? getCommunityBackdropImage() : "";
+  document.body.classList.toggle("portfolio-backdrop", isPortfolioReviewView);
   if (isCommunityView && backdropImage) {
     document.body.classList.add("community-backdrop");
     document.body.style.setProperty("--community-backdrop-image", `url("${backdropImage}")`);
@@ -23041,6 +23054,23 @@ function inferAtlasWorkbookCommunityName(fileName = "", row = {}, getCell = () =
   return "";
 }
 
+function resolveAtlasWorkbookCommunityName(communityId = "", communityNameRaw = "", mappedFromId = {}, fileName = "", row = {}, getCell = () => "") {
+  const normalizedId = String(communityId ?? "").trim().toUpperCase();
+  const aliasName = normalizedId ? (ATLAS_COMMUNITY_ID_ALIASES[normalizedId] || "") : "";
+  const candidates = [
+    communityNameRaw,
+    mappedFromId?.name,
+    mappedFromId?.shortName,
+    aliasName,
+    communityId
+  ].map(normalizeAtlasWorkbookText).filter(Boolean);
+  for (const candidate of candidates) {
+    const matched = matchPropertyName(candidate, { fallbackToCurrent: false });
+    if (matched && getAllCommunityNames().some(name => name === matched)) return matched;
+  }
+  return inferAtlasWorkbookCommunityName(fileName, row, getCell);
+}
+
 async function handleAtlasAdvancedWorkbook(file, options = {}) {
   if (typeof XLSX === "undefined") {
     csvError = "XLSX parser is unavailable because the XLSX library did not load.";
@@ -23134,8 +23164,7 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
 
       const mappedFromId = communityMap[communityId.toUpperCase()] || {};
       const mappedName = forcedTarget.community
-        || matchPropertyName(communityNameRaw || mappedFromId.name || mappedFromId.shortName || communityId, { fallbackToCurrent: false })
-        || inferAtlasWorkbookCommunityName(file.name, row, getCell);
+        || resolveAtlasWorkbookCommunityName(communityId, communityNameRaw, mappedFromId, file.name, row, getCell);
       if (!mappedName) { skipped += 1; continue; }
 
       const detectedMonthIdx = parseAtlasMonthIndex(reportMonthRaw);
@@ -23155,7 +23184,7 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
       const leadSourceTotal = leadSourceValues.some(value => value !== null)
         ? leadSourceValues.reduce((sum, value) => sum + (value ?? 0), 0)
         : null;
-      const guestCardsValue = getCell(row, "leads") || getCell(row, "traffic") || getCell(row, "new_leads") || "";
+      const guestCardsValue = getFirstNumericCell(row, ["leads", "traffic", "new_leads"]);
 
       included += 1;
       const mappedRow = {
@@ -23165,7 +23194,7 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
         leased: getCell(row, "leased_units") ?? "",
         move_outs: getCell(row, "move_outs") ?? "",
         move_ins: getCell(row, "move_ins") ?? "",
-        guest_cards: guestCardsValue || (leadSourceTotal ?? ""),
+        guest_cards: guestCardsValue ?? leadSourceTotal ?? "",
         walk_in: leadWalkInsValue ?? "",
         off_site_event: offSiteEventValue ?? "",
         phone_calls: leadCallsValue ?? "",
