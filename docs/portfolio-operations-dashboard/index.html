@@ -6993,6 +6993,24 @@ function getScoutPhotoAssetForScope(scope = null) {
   };
 }
 
+function getScoutConversationalReply(question = "") {
+  const lower = String(question ?? "").trim().toLowerCase();
+  if (!lower) return null;
+  if (/\b(thank you|thanks|thank u|thx)\b/.test(lower)) {
+    return {
+      body: "You're welcome.",
+      photo: null
+    };
+  }
+  if (/\b(stupid|idiot|dumb|useless|shut up|i hate you|you suck|moron)\b/.test(lower)) {
+    return {
+      body: "That wasn't very nice of you. I'm telling my creator.",
+      photo: null
+    };
+  }
+  return null;
+}
+
 function answerScoutPortfolioQuestion(question = "", scope = null) {
   const resolvedScope = scope || getScoutQuestionScope(question);
   const aggregate = resolvedScope.aggregate;
@@ -7114,6 +7132,8 @@ function answerScoutCommunityQuestion(question = "", scope = null) {
 }
 
 function generateScoutAnswer(question = "") {
+  const conversationalReply = getScoutConversationalReply(question);
+  if (conversationalReply) return conversationalReply;
   const scope = getScoutQuestionScope(question);
   const body = scope.type === "portfolio"
     ? answerScoutPortfolioQuestion(question, scope)
