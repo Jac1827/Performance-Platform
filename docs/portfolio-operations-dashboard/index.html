@@ -2375,6 +2375,16 @@ function defaultDlrBoxScoreSnapshot() {
     importedAt: "",
     reportDateIso: "",
     reportDateLabel: "",
+    totalUnits: null,
+    rentableUnits: null,
+    occupiedUnits: null,
+    vacantUnits: null,
+    availableUnits: null,
+    occupiedNoNoticeUnits: null,
+    leasedUnits: null,
+    exposureUnits: null,
+    notExposedLeasedUnits: null,
+    trendUnits: null,
     newLeads: null,
     guestCards: null,
     walkIn: null,
@@ -2413,6 +2423,16 @@ function normalizeDlrBoxScoreSnapshot(input = {}) {
     importedAt: String(input.importedAt ?? defaults.importedAt).trim(),
     reportDateIso: String(input.reportDateIso ?? defaults.reportDateIso).trim(),
     reportDateLabel: String(input.reportDateLabel ?? defaults.reportDateLabel).trim(),
+    totalUnits: normalizeOptionalNumber(input.totalUnits),
+    rentableUnits: normalizeOptionalNumber(input.rentableUnits),
+    occupiedUnits: normalizeOptionalNumber(input.occupiedUnits),
+    vacantUnits: normalizeOptionalNumber(input.vacantUnits),
+    availableUnits: normalizeOptionalNumber(input.availableUnits),
+    occupiedNoNoticeUnits: normalizeOptionalNumber(input.occupiedNoNoticeUnits),
+    leasedUnits: normalizeOptionalNumber(input.leasedUnits),
+    exposureUnits: normalizeOptionalNumber(input.exposureUnits),
+    notExposedLeasedUnits: normalizeOptionalNumber(input.notExposedLeasedUnits),
+    trendUnits: normalizeOptionalNumber(input.trendUnits),
     newLeads: normalizeOptionalNumber(input.newLeads),
     guestCards: normalizeOptionalNumber(input.guestCards),
     walkIn: normalizeOptionalNumber(input.walkIn),
@@ -2453,6 +2473,16 @@ function hasDlrBoxScoreSnapshot(snapshot) {
       normalized.reportDateLabel ||
       normalized.sourceFileName ||
       [
+      normalized.totalUnits,
+      normalized.rentableUnits,
+      normalized.occupiedUnits,
+      normalized.vacantUnits,
+      normalized.availableUnits,
+      normalized.occupiedNoNoticeUnits,
+      normalized.leasedUnits,
+      normalized.exposureUnits,
+      normalized.notExposedLeasedUnits,
+      normalized.trendUnits,
       normalized.newLeads,
       normalized.guestCards,
       normalized.walkIn,
@@ -11259,6 +11289,95 @@ function buildBoxScoreSheetCandidates(workbook) {
   }));
 }
 
+function extractAvailabilityTotalsFromRows(rows = []) {
+  for (let idx = 0; idx < rows.length; idx += 1) {
+    const row = Array.isArray(rows[idx]) ? rows[idx].map(cell => String(cell ?? "").trim()) : [];
+    if (!row.some(cell => /availability\s*\(as of/i.test(cell))) continue;
+    let headerIdx = -1;
+    for (let probe = idx; probe < Math.min(rows.length, idx + 6); probe += 1) {
+      const headerRow = Array.isArray(rows[probe]) ? rows[probe].map(cell => String(cell ?? "").trim().toLowerCase()) : [];
+      if (headerRow.includes("unit type") && headerRow.includes("units") && headerRow.includes("occupied") && headerRow.includes("leased")) {
+        headerIdx = probe;
+        break;
+      }
+    }
+    if (headerIdx === -1) continue;
+    let totalIdx = -1;
+    for (let probe = headerIdx + 1; probe < Math.min(rows.length, headerIdx + 8); probe += 1) {
+      const label = String(rows[probe]?.[0] ?? "").trim();
+      if (/^total:?$/i.test(label)) {
+        totalIdx = probe;
+        break;
+      }
+    }
+    if (totalIdx === -1) continue;
+    const headers = (rows[headerIdx] ?? []).map(cell => String(cell ?? "").trim().toLowerCase());
+    const totalRow = rows[totalIdx] ?? [];
+    const findHeader = (...patterns) => headers.findIndex(header => patterns.some(pattern => header === pattern || header.includes(pattern)));
+    const valueAt = idx => Number.isInteger(idx) && idx >= 0 && idx < totalRow.length ? parseOptionalWorkbookMetric(totalRow[idx]) : null;
+    const trendUnitsIdx = headers.findIndex(header => /not exposed leased units/i.test(header));
+    return {
+      totalUnits: valueAt(findHeader("units")),
+      rentableUnits: valueAt(findHeader("rentable units")),
+      occupiedUnits: valueAt(findHeader("occupied")),
+      vacantUnits: valueAt(findHeader("vacant")),
+      availableUnits: valueAt(findHeader("available")),
+      occupiedNoNoticeUnits: valueAt(findHeader("occupied no notice")),
+      leasedUnits: valueAt(headers.findIndex(header => /availability .* leased units/i.test(header))),
+      exposureUnits: valueAt(headers.findIndex(header => /availability .* exposure units/i.test(header))),
+      notExposedLeasedUnits: valueAt(trendUnitsIdx),
+      trendUnits: valueAt(trendUnitsIdx)
+    };
+  }
+  return null;
+}
+
+function extractLeadActivityTotalsFromRows(rows = []) {
+  for (let idx = 0; idx < rows.length; idx += 1) {
+    const row = Array.isArray(rows[idx]) ? rows[idx].map(cell => String(cell ?? "").trim()) : [];
+    if (!row.some(cell => /^lead activity\b/i.test(cell))) continue;
+    let headerIdx = -1;
+    for (let probe = idx + 1; probe < Math.min(rows.length, idx + 6); probe += 1) {
+      const headerRow = Array.isArray(rows[probe]) ? rows[probe].map(cell => String(cell ?? "").trim().toLowerCase()) : [];
+      if (headerRow.includes("new leads") && headerRow.includes("walk in") && (headerRow.includes("call") || headerRow.includes("calls"))) {
+        headerIdx = probe;
+        break;
+      }
+    }
+    if (headerIdx === -1) continue;
+    let totalIdx = -1;
+    for (let probe = headerIdx + 1; probe < Math.min(rows.length, headerIdx + 8); probe += 1) {
+      const label = String(rows[probe]?.[0] ?? "").trim();
+      if (/^total:?$/i.test(label)) {
+        totalIdx = probe;
+        break;
+      }
+    }
+    if (totalIdx === -1) continue;
+    const headers = (rows[headerIdx] ?? []).map(cell => String(cell ?? "").trim().toLowerCase());
+    const totalRow = rows[totalIdx] ?? [];
+    const findHeader = (...patterns) => headers.findIndex(header => patterns.some(pattern => header === pattern || header.includes(pattern)));
+    const valueAt = idx => Number.isInteger(idx) && idx >= 0 && idx < totalRow.length ? parseOptionalWorkbookMetric(totalRow[idx]) : null;
+    return {
+      newLeads: valueAt(findHeader("new leads")),
+      email: valueAt(findHeader("email")),
+      call: valueAt(findHeader("call")),
+      online: valueAt(findHeader("online")),
+      walkIn: valueAt(findHeader("walk in")),
+      offSiteEvent: valueAt(findHeader("off site event")),
+      chat: valueAt(findHeader("chat")),
+      text: valueAt(findHeader("text")),
+      other: valueAt(findHeader("other")),
+      activityEmails: valueAt(findHeader("emails")),
+      activityCalls: valueAt(findHeader("calls")),
+      activityChats: null,
+      activityTexts: null,
+      firstVisitsTours: 0
+    };
+  }
+  return null;
+}
+
 function findDailyBoxScoreColumnIndex(rows = []) {
   for (const row of rows.slice(0, 12)) {
     const cells = (row ?? []).map(cell => String(cell ?? "").trim().toLowerCase());
@@ -11411,8 +11530,21 @@ function buildDailyBoxScoreSnapshotFromRows(rows = [], fileName = "", rawText = 
     reportDateIso: reportDate ? buildDlrDateInputValue(reportDate) : "",
     reportDateLabel: reportDate ? formatPresentationDate(reportDate) : ""
   });
-  const leadActivityTotals = extractLeadActivityTotals(rawText);
+  const availabilityTotals = extractAvailabilityTotalsFromRows(rows);
+  const leadActivityTotals = extractLeadActivityTotalsFromRows(rows) || extractLeadActivityTotals(rawText);
   const leadConversionTotals = extractLeadConversionTotalsFromRows(rows) || extractLeadConversionTotals(rawText);
+  if (availabilityTotals) {
+    dailySnapshot.totalUnits = availabilityTotals.totalUnits;
+    dailySnapshot.rentableUnits = availabilityTotals.rentableUnits;
+    dailySnapshot.occupiedUnits = availabilityTotals.occupiedUnits;
+    dailySnapshot.vacantUnits = availabilityTotals.vacantUnits;
+    dailySnapshot.availableUnits = availabilityTotals.availableUnits;
+    dailySnapshot.occupiedNoNoticeUnits = availabilityTotals.occupiedNoNoticeUnits;
+    dailySnapshot.leasedUnits = availabilityTotals.leasedUnits;
+    dailySnapshot.exposureUnits = availabilityTotals.exposureUnits;
+    dailySnapshot.notExposedLeasedUnits = availabilityTotals.notExposedLeasedUnits;
+    dailySnapshot.trendUnits = availabilityTotals.trendUnits;
+  }
   if (leadActivityTotals) {
     dailySnapshot.newLeads = leadActivityTotals.newLeads;
     dailySnapshot.walkIn = leadActivityTotals.walkIn;
@@ -11436,19 +11568,19 @@ function buildDailyBoxScoreSnapshotFromRows(rows = [], fileName = "", rawText = 
     dailySnapshot.cancelled = (leadConversionTotals.completedCancelled || 0) + (leadConversionTotals.approvedCancelled || 0);
     dailySnapshot.leasesSigned = Math.max(leadConversionTotals.leaseCompleted || 0, leadConversionTotals.leaseApproved || 0);
   }
-  dailySnapshot.walkIn = extractMetricFromRowsOrText(rows, rawText, ["walk in", "walk-in"], ["Walk In"]) ?? dailySnapshot.walkIn;
-  dailySnapshot.offSiteEvent = extractMetricFromRowsOrText(rows, rawText, ["off site event", "off-site event"], ["Off Site Event"]) ?? dailySnapshot.offSiteEvent;
-  dailySnapshot.phoneCalls = extractMetricFromRowsOrText(rows, rawText, ["phone calls", "phone call"], ["Phone Calls"]) ?? dailySnapshot.phoneCalls;
-  dailySnapshot.emailsOnline = extractMetricFromRowsOrText(rows, rawText, ["emails/online", "emails online", "email/online"], ["Emails/Online"]) ?? dailySnapshot.emailsOnline;
-  dailySnapshot.textChatOther = extractMetricFromRowsOrText(rows, rawText, ["text/chat/other", "text chat other", "chat other"], ["Text/Chat/Other"]) ?? dailySnapshot.textChatOther;
-  dailySnapshot.newLeads = extractMetricFromRowsOrText(rows, rawText, ["new leads", "new lead"], ["New Leads"]) ?? dailySnapshot.newLeads;
-  dailySnapshot.activityEmails = extractMetricFromRowsOrText(rows, rawText, ["activity emails", "emails"], ["Emails"]) ?? dailySnapshot.activityEmails;
-  dailySnapshot.activityCalls = extractMetricFromRowsOrText(rows, rawText, ["activity calls", "calls"], ["Calls"]) ?? dailySnapshot.activityCalls;
-  dailySnapshot.activityChats = extractMetricFromRowsOrText(rows, rawText, ["activity chats", "chats"], ["Chats"]) ?? dailySnapshot.activityChats;
-  dailySnapshot.activityTexts = extractMetricFromRowsOrText(rows, rawText, ["activity texts", "texts"], ["Texts"]) ?? dailySnapshot.activityTexts;
-  dailySnapshot.firstVisitsTours = extractMetricFromRowsOrText(rows, rawText, ["first visits/tours", "first visits", "first visit tours"], ["First Visits/Tours"]) ?? dailySnapshot.firstVisitsTours;
-  dailySnapshot.guestCards = extractMetricFromRowsOrText(rows, rawText, ["guest cards", "guest card", "total leads", "leads"], ["Guest Cards"]) ?? dailySnapshot.guestCards;
-  dailySnapshot.tours = extractMetricFromRowsOrText(rows, rawText, ["tours", "tour"], ["Tours"]) ?? dailySnapshot.tours;
+  if (dailySnapshot.walkIn === null || dailySnapshot.walkIn === undefined) dailySnapshot.walkIn = extractMetricFromRowsOrText(rows, rawText, ["walk in", "walk-in"], ["Walk In"]);
+  if (dailySnapshot.offSiteEvent === null || dailySnapshot.offSiteEvent === undefined) dailySnapshot.offSiteEvent = extractMetricFromRowsOrText(rows, rawText, ["off site event", "off-site event"], ["Off Site Event"]);
+  if (dailySnapshot.phoneCalls === null || dailySnapshot.phoneCalls === undefined) dailySnapshot.phoneCalls = extractMetricFromRowsOrText(rows, rawText, ["phone calls", "phone call"], ["Phone Calls"]);
+  if (dailySnapshot.emailsOnline === null || dailySnapshot.emailsOnline === undefined) dailySnapshot.emailsOnline = extractMetricFromRowsOrText(rows, rawText, ["emails/online", "emails online", "email/online"], ["Emails/Online"]);
+  if (dailySnapshot.textChatOther === null || dailySnapshot.textChatOther === undefined) dailySnapshot.textChatOther = extractMetricFromRowsOrText(rows, rawText, ["text/chat/other", "text chat other", "chat other"], ["Text/Chat/Other"]);
+  if (dailySnapshot.newLeads === null || dailySnapshot.newLeads === undefined) dailySnapshot.newLeads = extractMetricFromRowsOrText(rows, rawText, ["new leads", "new lead"], ["New Leads"]);
+  if (dailySnapshot.activityEmails === null || dailySnapshot.activityEmails === undefined) dailySnapshot.activityEmails = extractMetricFromRowsOrText(rows, rawText, ["activity emails", "emails"], ["Emails"]);
+  if (dailySnapshot.activityCalls === null || dailySnapshot.activityCalls === undefined) dailySnapshot.activityCalls = extractMetricFromRowsOrText(rows, rawText, ["activity calls", "calls"], ["Calls"]);
+  if (dailySnapshot.activityChats === null || dailySnapshot.activityChats === undefined) dailySnapshot.activityChats = extractMetricFromRowsOrText(rows, rawText, ["activity chats", "chats"], ["Chats"]);
+  if (dailySnapshot.activityTexts === null || dailySnapshot.activityTexts === undefined) dailySnapshot.activityTexts = extractMetricFromRowsOrText(rows, rawText, ["activity texts", "texts"], ["Texts"]);
+  if (dailySnapshot.firstVisitsTours === null || dailySnapshot.firstVisitsTours === undefined) dailySnapshot.firstVisitsTours = extractMetricFromRowsOrText(rows, rawText, ["first visits/tours", "first visits", "first visit tours"], ["First Visits/Tours"]);
+  if (dailySnapshot.guestCards === null || dailySnapshot.guestCards === undefined) dailySnapshot.guestCards = extractMetricFromRowsOrText(rows, rawText, ["guest cards", "guest card", "total leads", "leads"], ["Guest Cards"]);
+  if (dailySnapshot.tours === null || dailySnapshot.tours === undefined) dailySnapshot.tours = extractMetricFromRowsOrText(rows, rawText, ["tours", "tour"], ["Tours"]);
   if (!leadConversionTotals) {
     dailySnapshot.applications = mergePreferredBoxScoreCount(dailySnapshot.applications, extractMetricFromRowsOrText(rows, rawText, ["gross new applications", "applications", "apps"], ["Gross New Applications", "Net New Applications"]));
     dailySnapshot.applicationsApproved = mergePreferredBoxScoreCount(dailySnapshot.applicationsApproved, extractMetricFromRowsOrText(rows, rawText, ["applications approved", "approved applications", "approvals"], ["Approved Applications"]));
@@ -11475,6 +11607,16 @@ function buildDailyBoxScoreSnapshotFromRows(rows = [], fileName = "", rawText = 
 
 function scoreDailyBoxScoreSnapshot(snapshot) {
   return [
+    snapshot.totalUnits,
+    snapshot.rentableUnits,
+    snapshot.occupiedUnits,
+    snapshot.vacantUnits,
+    snapshot.availableUnits,
+    snapshot.occupiedNoNoticeUnits,
+    snapshot.leasedUnits,
+    snapshot.exposureUnits,
+    snapshot.notExposedLeasedUnits,
+    snapshot.trendUnits,
     snapshot.guestCards,
     snapshot.walkIn,
     snapshot.offSiteEvent,
@@ -21197,6 +21339,7 @@ function buildDlrInvestorNotes({
   dailyTraffic,
   mtdTraffic,
   prevMonthTraffic,
+  trafficMetricsSourceMode = "dashboard_mtd",
   occupancyPct,
   leasedPct,
   trendingOccupancyPct,
@@ -21215,7 +21358,9 @@ function buildDlrInvestorNotes({
   const appVolumeDelta = (mtdTraffic.applications || 0) - (prevMonthTraffic.applications || 0);
   const approvalDelta = (mtdTraffic.approvals || 0) - (prevMonthTraffic.approvals || 0);
   const tourDelta = (mtdTraffic.tours || 0) - (prevMonthTraffic.tours || 0);
-  const netAbsorption = (mtdTraffic.moveIns || 0) - (mtdTraffic.moveOuts || 0);
+  const netAbsorption = trafficMetricsSourceMode === "daily_box_score"
+    ? (dailyTraffic.moveIns || 0) - (dailyTraffic.moveOuts || 0)
+    : (mtdTraffic.moveIns || 0) - (mtdTraffic.moveOuts || 0);
   const budgetRentDelta = (Number(avgInPlaceRent) || 0) - (Number(avgBudgetRent) || 0);
   const tours = [
     `Report-period activity reflects ${reportDateLabel || monthLabel}.`,
@@ -21327,6 +21472,10 @@ function buildDlrEmailSnapshotSvg(report) {
 function buildDlrEmailPlainTextBody(report) {
   const today = report.dailyTraffic || {};
   const mtd = report.trafficMetrics || {};
+  const useDailyTraffic = report.trafficMetrics?.sourceMode === "daily_box_score";
+  const moveInsLine = useDailyTraffic
+    ? `Move-Ins: ${today.moveIns || 0} | Move-Outs: ${today.moveOuts || 0} | Renewals: ${today.renewals || 0}`
+    : `Move-Ins: ${mtd.moveIns || 0} | Move-Outs: ${mtd.moveOuts || 0} | Renewals: ${mtd.renewals || 0}`;
   const bulletLines = (report.notes?.wins?.length ? report.notes.wins : report.notes?.highlights || []).map(line => `- ${line}`);
   const marketingLines = report.marketing?.ready ? ["", "Marketing", report.marketing.narrative] : [];
   return [
@@ -21336,7 +21485,7 @@ function buildDlrEmailPlainTextBody(report) {
     `Occupancy: ${formatDlrPercent(report.occupancyPct, 1)} | Leased: ${formatDlrPercent(report.leasedPct, 1)} | 90-Day Projection: ${formatDlrPercent(report.trendingOccupancyPct, 1)}`,
     `Today's Activity: ${today.guestCards || 0} leads | ${today.tours || 0} tours | ${today.applications || 0} apps | ${today.approvals || 0} approved`,
     `Month to Date: ${mtd.rolledGuestCards || 0} leads | ${mtd.tours || 0} tours | ${mtd.applications || 0} apps | ${mtd.approvals || 0} approved`,
-    `Move-Ins: ${mtd.moveIns || 0} | Move-Outs: ${mtd.moveOuts || 0} | Renewals: ${mtd.renewals || 0}`,
+    moveInsLine,
     "",
     "Highlights & Wins",
     ...(bulletLines.length ? bulletLines : ["- Investor-facing highlights will populate here as activity is saved."]),
@@ -21483,18 +21632,26 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   const dlrSummary = getCommunityDlrSummary(communityName);
   const dailyBoxScore = normalizeDlrBoxScoreSnapshot(dlrSummary.dailyBoxScore);
   const hasDailyBoxScore = hasDlrBoxScoreSnapshot(dailyBoxScore);
+  const dailyBoxScoreDate = parseDlrSpecificDate(dailyBoxScore.reportDateIso);
+  const hasMatchingDailyBoxScore = hasDailyBoxScore && (!dailyBoxScoreDate || (dailyBoxScoreDate.getMonth() === clampNumber(monthIdx, 0, 11) && dailyBoxScoreDate.getFullYear() === Number(year)));
   const prop = getPropertyByName(communityName);
-  const totalUnits = getTotalUnitsFor(prop, record.customUnits);
+  const totalUnits = hasMatchingDailyBoxScore && Number.isFinite(Number(dailyBoxScore.totalUnits))
+    ? Math.max(0, Number(dailyBoxScore.totalUnits) || 0)
+    : getTotalUnitsFor(prop, record.customUnits);
   const corporateUnits = getCorporateLeaseUnitsForRecord(record, totalUnits);
   const scopeMonthlyData = Array.isArray(record.monthlyData) && record.monthlyData.length === 12 ? record.monthlyData : defaultMonthly();
   const scopeSeasonal = Array.isArray(record.seasonal) && record.seasonal.length === 12 ? record.seasonal : [...DEFAULT_SEASONAL];
   const normalizedMonthIdx = clampNumber(monthIdx, 0, 11);
   const scopeCurrentMonth = Number.isInteger(record.currentMonth) ? record.currentMonth : DEFAULT_CURRENT_MONTH;
   const reportMetricMonthIdx = normalizedMonthIdx;
-  const reportAnchorOccupiedUnits = reportMetricMonthIdx === scopeCurrentMonth
+  const reportAnchorOccupiedUnits = hasMatchingDailyBoxScore && Number.isFinite(Number(dailyBoxScore.occupiedUnits))
+    ? Math.max(0, Number(dailyBoxScore.occupiedUnits) || 0)
+    : reportMetricMonthIdx === scopeCurrentMonth
     ? Math.max(0, Number(record.currentOccupied) || 0)
     : estimateSnapshotUnitsForRecordMonth(record, totalUnits, reportMetricMonthIdx, "occupiedSnapshot");
-  const reportAnchorLeasedUnits = reportMetricMonthIdx === scopeCurrentMonth
+  const reportAnchorLeasedUnits = hasMatchingDailyBoxScore && Number.isFinite(Number(dailyBoxScore.leasedUnits))
+    ? Math.max(0, Number(dailyBoxScore.leasedUnits) || 0)
+    : reportMetricMonthIdx === scopeCurrentMonth
     ? Math.max(0, Number(record.currentLeased) || 0)
     : estimateSnapshotUnitsForRecordMonth(record, totalUnits, reportMetricMonthIdx, "leasedSnapshot");
   const schedule = computeScheduleFromContext({
@@ -21538,9 +21695,15 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
     });
   const occupiedUnits = reportAnchorOccupiedUnits;
   const leasedUnits = reportAnchorLeasedUnits;
-  const occupancyPct = getOccupancyPctFromUnits(occupiedUnits, totalUnits, corporateUnits);
-  const leasedPct = getOccupancyPctFromUnits(leasedUnits, totalUnits, corporateUnits);
-  const projectedEndingOccupancy = computeProjectedEndingPhysicalOccupancy(record, totalUnits, reportMetricMonthIdx, 3);
+  const occupancyPct = hasMatchingDailyBoxScore && Number.isFinite(Number(dailyBoxScore.occupiedUnits)) && totalUnits > 0
+    ? (occupiedUnits / totalUnits) * 100
+    : getOccupancyPctFromUnits(occupiedUnits, totalUnits, corporateUnits);
+  const leasedPct = hasMatchingDailyBoxScore && Number.isFinite(Number(dailyBoxScore.leasedUnits)) && totalUnits > 0
+    ? (leasedUnits / totalUnits) * 100
+    : getOccupancyPctFromUnits(leasedUnits, totalUnits, corporateUnits);
+  const projectedEndingOccupancy = hasMatchingDailyBoxScore && Number.isFinite(Number(dailyBoxScore.trendUnits)) && totalUnits > 0
+    ? { occupiedUnits: Math.max(0, Number(dailyBoxScore.trendUnits) || 0), pct: (Math.max(0, Number(dailyBoxScore.trendUnits) || 0) / totalUnits) * 100 }
+    : computeProjectedEndingPhysicalOccupancy(record, totalUnits, reportMetricMonthIdx, 3);
   const trendingOccupancyPct = Number(projectedEndingOccupancy.pct ?? occupancyPct) || occupancyPct;
   const budgetOccPct = getBudgetOccPctForMonth(monthEntry, record.savedBudgetTargets, reportMetricMonthIdx) || Number(scheduleRow.budgetOcc) || 0;
   const moveInsNeeded = Number(scheduleRow.netOccLeases) || 0;
@@ -21585,7 +21748,7 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
     pendingDecision: prevAppMetrics.pendingDecision,
     leases: prevAppMetrics.leases
   };
-  const dailyLeadSources = hasDailyBoxScore
+  const dailyLeadSources = hasMatchingDailyBoxScore
     ? {
         walkIn: Math.max(0, Number(dailyBoxScore.walkIn) || 0),
         offSiteEvent: Math.max(0, Number(dailyBoxScore.offSiteEvent) || 0),
@@ -21594,7 +21757,7 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
         textChatOther: Math.max(0, Number(dailyBoxScore.textChatOther) || 0)
       }
     : { walkIn: 0, offSiteEvent: 0, phoneCalls: 0, emailsOnline: 0, textChatOther: 0 };
-  const dailyGuestCards = hasDailyBoxScore
+  const dailyGuestCards = hasMatchingDailyBoxScore
     ? (
         dailyBoxScore.newLeads !== null && dailyBoxScore.newLeads !== undefined
           ? Math.max(0, Number(dailyBoxScore.newLeads) || 0)
@@ -21603,14 +21766,14 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
             : Object.values(dailyLeadSources).reduce((sum, value) => sum + Math.max(0, Number(value) || 0), 0))
       )
     : 0;
-  const dailyApprovals = hasDailyBoxScore ? Math.max(0, Number(dailyBoxScore.applicationsApproved) || 0) : 0;
-  const dailyDenied = hasDailyBoxScore ? Math.max(0, Number(dailyBoxScore.denied) || 0) : 0;
-  const dailyCancelled = hasDailyBoxScore ? Math.max(0, Number(dailyBoxScore.cancelled) || 0) : 0;
-  const dailyPendingDecisionRaw = hasDailyBoxScore ? Math.max(0, Number(dailyBoxScore.pendingDecision) || 0) : 0;
-  const dailyApplicationsRaw = hasDailyBoxScore ? Math.max(0, Number(dailyBoxScore.applications) || 0) : 0;
+  const dailyApprovals = hasMatchingDailyBoxScore ? Math.max(0, Number(dailyBoxScore.applicationsApproved) || 0) : 0;
+  const dailyDenied = hasMatchingDailyBoxScore ? Math.max(0, Number(dailyBoxScore.denied) || 0) : 0;
+  const dailyCancelled = hasMatchingDailyBoxScore ? Math.max(0, Number(dailyBoxScore.cancelled) || 0) : 0;
+  const dailyPendingDecisionRaw = hasMatchingDailyBoxScore ? Math.max(0, Number(dailyBoxScore.pendingDecision) || 0) : 0;
+  const dailyApplicationsRaw = hasMatchingDailyBoxScore ? Math.max(0, Number(dailyBoxScore.applications) || 0) : 0;
   const inferredDailyApplications = dailyApprovals + dailyDenied + dailyCancelled;
-  const dailyApplications = hasDailyBoxScore ? Math.max(dailyApplicationsRaw, inferredDailyApplications) : 0;
-  const dailyPendingDecision = hasDailyBoxScore
+  const dailyApplications = hasMatchingDailyBoxScore ? Math.max(dailyApplicationsRaw, inferredDailyApplications) : 0;
+  const dailyPendingDecision = hasMatchingDailyBoxScore
     ? Math.max(dailyPendingDecisionRaw, Math.max(dailyApplications - dailyApprovals - dailyDenied - dailyCancelled, 0))
     : 0;
   const dailyTraffic = {
@@ -21621,21 +21784,21 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
     textChatOther: dailyLeadSources.textChatOther,
     guestCards: dailyGuestCards,
     newLeads: dailyGuestCards,
-    tours: hasDailyBoxScore ? Math.max(0, Number(dailyBoxScore.firstVisitsTours ?? dailyBoxScore.tours) || 0) : 0,
+    tours: hasMatchingDailyBoxScore ? Math.max(0, Number(dailyBoxScore.firstVisitsTours ?? dailyBoxScore.tours) || 0) : 0,
     applications: dailyApplications,
     approvals: dailyApprovals,
     denials: dailyDenied,
     cancelled: dailyCancelled,
     pendingDecision: dailyPendingDecision,
-    leases: hasDailyBoxScore ? Math.max(0, Number(dailyBoxScore.leasesSigned) || 0) : 0,
-    moveIns: hasDailyBoxScore ? Math.max(0, Number(dailyBoxScore.moveIns) || 0) : 0,
-    moveOuts: hasDailyBoxScore ? Math.max(0, Number(dailyBoxScore.moveOuts) || 0) : 0,
-    renewals: hasDailyBoxScore ? Math.max(0, Number(dailyBoxScore.renewals) || 0) : 0,
-    activityEmails: hasDailyBoxScore ? Math.max(0, Number(dailyBoxScore.activityEmails) || 0) : 0,
-    activityCalls: hasDailyBoxScore ? Math.max(0, Number(dailyBoxScore.activityCalls) || 0) : 0,
-    activityChats: hasDailyBoxScore ? Math.max(0, Number(dailyBoxScore.activityChats) || 0) : 0,
-    activityTexts: hasDailyBoxScore ? Math.max(0, Number(dailyBoxScore.activityTexts) || 0) : 0,
-    firstVisitsTours: hasDailyBoxScore ? Math.max(0, Number(dailyBoxScore.firstVisitsTours ?? dailyBoxScore.tours) || 0) : 0
+    leases: hasMatchingDailyBoxScore ? Math.max(0, Number(dailyBoxScore.leasesSigned) || 0) : 0,
+    moveIns: hasMatchingDailyBoxScore ? Math.max(0, Number(dailyBoxScore.moveIns) || 0) : 0,
+    moveOuts: hasMatchingDailyBoxScore ? Math.max(0, Number(dailyBoxScore.moveOuts) || 0) : 0,
+    renewals: hasMatchingDailyBoxScore ? Math.max(0, Number(dailyBoxScore.renewals) || 0) : 0,
+    activityEmails: hasMatchingDailyBoxScore ? Math.max(0, Number(dailyBoxScore.activityEmails) || 0) : 0,
+    activityCalls: hasMatchingDailyBoxScore ? Math.max(0, Number(dailyBoxScore.activityCalls) || 0) : 0,
+    activityChats: hasMatchingDailyBoxScore ? Math.max(0, Number(dailyBoxScore.activityChats) || 0) : 0,
+    activityTexts: hasMatchingDailyBoxScore ? Math.max(0, Number(dailyBoxScore.activityTexts) || 0) : 0,
+    firstVisitsTours: hasMatchingDailyBoxScore ? Math.max(0, Number(dailyBoxScore.firstVisitsTours ?? dailyBoxScore.tours) || 0) : 0
   };
   const currentNer = (Number(monthEntry.rentRollTotal) || 0) > 0 && occupiedUnits > 0
     ? Number(monthEntry.rentRollTotal) / occupiedUnits
@@ -21655,6 +21818,7 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
     dailyTraffic,
     mtdTraffic,
     prevMonthTraffic,
+    trafficMetricsSourceMode: hasMatchingDailyBoxScore ? "daily_box_score" : "dashboard_mtd",
     occupancyPct,
     leasedPct,
     trendingOccupancyPct,
@@ -21669,10 +21833,10 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   const resolvedNoteState = resolveDlrEditableNotes(dlrSummary, generatedNotes);
   const notes = resolvedNoteState.notes;
   const marketing = resolveDlrMarketingState(dlrSummary);
-  const reportDateIso = hasDailyBoxScore
+  const reportDateIso = hasMatchingDailyBoxScore
     ? (dailyBoxScore.reportDateIso || dlrSummary.reportDateIso)
     : dlrSummary.reportDateIso;
-  const reportDateLabel = hasDailyBoxScore
+  const reportDateLabel = hasMatchingDailyBoxScore
     ? (dailyBoxScore.reportDateLabel || dlrSummary.reportDateLabel)
     : dlrSummary.reportDateLabel;
   const reportPeriodLabel = reportDateLabel || dlrSummary.reportPeriodLabel || `${formatDlrMonthYear(reportMetricMonthIdx, year)} operating snapshot`;
@@ -21697,7 +21861,7 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
     moveInsNeeded,
     trafficMetrics: {
       ...mtdTraffic,
-      sourceMode: hasDailyBoxScore ? "daily_box_score" : "dashboard_mtd"
+      sourceMode: hasMatchingDailyBoxScore ? "daily_box_score" : "dashboard_mtd"
     },
     dailyTraffic,
     pricing: {
@@ -21724,7 +21888,7 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
     notes,
     editableNotes: resolvedNoteState.editorValues,
     marketing,
-    sourceSummary: `${communityName} · ${reportPeriodLabel} · ${hasDailyBoxScore ? "today's leasing activity imported from box score with month-to-date metrics sourced from ATLAS RISE" : "generated from ATLAS RISE saved month-to-date data"}`,
+    sourceSummary: `${communityName} · ${reportPeriodLabel} · ${hasMatchingDailyBoxScore ? "today's leasing activity imported from box score with month-to-date metrics sourced from ATLAS RISE" : "generated from ATLAS RISE saved month-to-date data"}`,
     floorPlanVarianceRows: floorPlanVarianceData.rows,
     unmatchedMarketFloorPlans: floorPlanVarianceData.unmatchedRates,
     marketSurveyUpdatedOn: surveyData.updatedOn
@@ -21824,7 +21988,9 @@ function renderDashboardDlrActivityMiniTable(report) {
 }
 
 function buildDlrInvestorOverviewDocument(report) {
-  const netAbsorption = (Number(report.trafficMetrics?.moveIns) || 0) - (Number(report.trafficMetrics?.moveOuts) || 0);
+  const netAbsorption = report.trafficMetrics?.sourceMode === "daily_box_score"
+    ? (Number(report.dailyTraffic?.moveIns) || 0) - (Number(report.dailyTraffic?.moveOuts) || 0)
+    : (Number(report.trafficMetrics?.moveIns) || 0) - (Number(report.trafficMetrics?.moveOuts) || 0);
   const communityRecord = getPropertyRecordForApply(report.communityName);
   const communityPhoto = normalizeCommunityPhotoBank(communityRecord?.photoBank)[0]?.src || "";
   const photoHeroHtml = communityPhoto ? `<div class="section dlr-photo-hero">
