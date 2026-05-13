@@ -8170,13 +8170,12 @@ function attachEventListeners() {
     processMarketSurveyFiles(files);
     e.target.value = "";
   });
-  const dlrBoxScoreInput = document.getElementById("dlr-box-score-input");
-  if (dlrBoxScoreInput) dlrBoxScoreInput.addEventListener("change", function(e) {
+  document.querySelectorAll("#dlr-box-score-input, .dlr-box-score-input").forEach(dlrBoxScoreInput => dlrBoxScoreInput.addEventListener("change", function(e) {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
     processDlrBoxScoreFiles(files);
     e.target.value = "";
-  });
+  }));
 }
 
 function getImportTargetMonth() {
@@ -11536,6 +11535,11 @@ async function processDlrBoxScoreFiles(files) {
       }, { render: false });
       const parsedDate = parseDlrSpecificDate(snapshot.reportDateIso);
       if (parsedDate) {
+        if (normalizeReportHubType(reportHubType) === "dlr") {
+          reportHubMonth = parsedDate.getMonth();
+          reportHubYear = parsedDate.getFullYear();
+          persistOpsGlobalData();
+        }
         historicalImportTarget = normalizeHistoricalImportTarget({
           ...historicalImportTarget,
           community: targetCommunity,
@@ -16357,6 +16361,9 @@ function renderPortfolioHomeTab() {
 
 function renderReportingTab() {
   ensureValidReportHubAction();
+  if (normalizeReportHubType(reportHubType) === "dlr") {
+    syncDlrTargetFromReportHub({ preserveCommunity: true });
+  }
   const reportHubContacts = ensureReportHubRecipientSelection();
   const reportHubActionOptions = getReportHubActionOptions();
   const reportBuilderDetails = buildPortfolioDetailsForMonth(getReportHubMonthIndex());
@@ -16449,7 +16456,7 @@ function renderReportingTab() {
       <button class="btn btn-gray btn-sm" onclick="openMonthlyInvestorPresentation(false)">👁 Preview Deck</button>
       <button class="btn btn-blue btn-sm" onclick="openMonthlyInvestorPresentation(true)">🖨 Investor PDF / Print</button>
       <button class="btn btn-gray btn-sm" onclick="exportMonthlyInvestorPresentationPptx()">🪄 Export for Canva</button>
-      <button class="btn btn-gray btn-sm" onclick="openDlrInvestorOverview(true)">📘 Export DLR</button>
+      <button class="btn btn-gray btn-sm" onclick="setReportHubType('dlr')">📘 Build DLR</button>
     </div>
   </div>`;
   const editableRecommendationDetails = (reportHubPerspective === "csuite" || reportHubPerspective === "regional")
@@ -16539,6 +16546,7 @@ function renderReportingTab() {
       <div class="bonus-assignment-chip-wrap">${reportHubRecipientsHtml}</div>
     </div>
     ${recommendationsEditorHtml}
+    ${reportHubType === "dlr" ? renderDlrReportingWorkspace() : ""}
   </div>
   <div class="card mb4">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
@@ -16557,7 +16565,7 @@ function renderReportingTab() {
       ${bonusPayoutCard}
       <div class="report-hub-card">
         <h3>Data Import access</h3>
-        <p>DLR box score imports and market survey uploads stay in Data Import so reporting and ingestion are easier to navigate separately.</p>
+        <p>Market survey uploads stay in Data Import. DLR daily box score uploads now appear here only when the DLR report type is selected.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button type="button" class="btn btn-blue btn-sm" onmousedown="return queueCurrentWorkspaceTab(7)">Open Data Import Workspace</button>
         </div>
@@ -20383,8 +20391,10 @@ function buildReportHubEmailDraft(type = reportHubType) {
     };
   }
   if (normalizedType === "dlr") {
+    syncDlrTargetFromReportHub({ preserveCommunity: true });
     const report = buildDashboardDlrInvestorOverview();
     if (!report) return null;
+    if (!requireDlrDailyBoxScoreForReport(report)) return null;
     return {
       to,
       subject: `${report.communityName} DLR | ${report.reportPeriodLabel}`,
@@ -20419,13 +20429,172 @@ function getPrimaryReportCommunityName() {
   return scoped[0]?.name || getProp().name;
 }
 
-function syncDlrTargetFromReportHub() {
+function getDlrReportCommunityName() {
+  return matchPropertyName(historicalImportTarget.community, { fallbackToCurrent: false }) || getPrimaryReportCommunityName();
+}
+
+function syncDlrTargetFromReportHub(options = {}) {
+  const communityName = options.community
+    ? (matchPropertyName(options.community, { fallbackToCurrent: false }) || getPrimaryReportCommunityName())
+    : (options.preserveCommunity === false ? getPrimaryReportCommunityName() : getDlrReportCommunityName());
   historicalImportTarget = normalizeHistoricalImportTarget({
     ...historicalImportTarget,
-    community: getPrimaryReportCommunityName(),
+    community: communityName,
     month: getReportHubMonthIndex(),
     year: getReportHubYear()
   });
+}
+
+function setReportingDlrCommunity(value) {
+  syncDlrTargetFromReportHub({ community: value });
+  renderTab();
+}
+
+function setReportingDlrDate(value) {
+  const parsed = parseDlrSpecificDate(value);
+  if (parsed) {
+    reportHubMonth = parsed.getMonth();
+    reportHubYear = parsed.getFullYear();
+    persistOpsGlobalData();
+  }
+  setDlrReportDateFromInput(value);
+}
+
+function isDlrDailyBoxScoreReady(report) {
+  return !!report && report.trafficMetrics?.sourceMode === "daily_box_score" && !!(report.dailyBoxScoreSourceFile || report.dailyBoxScoreImportedAt);
+}
+
+function requireDlrDailyBoxScoreForReport(report, options = {}) {
+  if (isDlrDailyBoxScoreReady(report)) return true;
+  if (options.alert !== false) {
+    const communityName = report?.communityName || getDlrReportCommunityName();
+    const reportDate = report?.reportDateLabel || report?.reportPeriodLabel || "the selected DLR date";
+    alert(`Upload a daily box score for ${communityName} before exporting this DLR. The DLR report now uses the uploaded daily box score for ${reportDate} instead of falling back to saved month-to-date traffic.`);
+  }
+  return false;
+}
+
+function focusReportingDlrPreview() {
+  const target = document.getElementById("reporting-dlr-preview") || document.getElementById("reporting-dlr-workspace");
+  if (target?.scrollIntoView) target.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderDlrReportingWorkspace() {
+  const communityName = getDlrReportCommunityName();
+  const monthIdx = getReportHubMonthIndex();
+  const year = getReportHubYear();
+  const report = buildDashboardDlrInvestorOverview(communityName, monthIdx, year);
+  if (!report) {
+    return `<div id="reporting-dlr-workspace" class="report-hub-card" style="margin-top:14px">
+      <div class="alert-red">Save community data first, then the DLR workspace can build a preview from the selected daily box score.</div>
+    </div>`;
+  }
+  const communityOptions = getAllCommunityNames();
+  const dateInput = escapeHtml(buildDlrDateInputValue(report.reportDateIso));
+  const reportDateLabel = report.reportDateLabel || report.reportPeriodLabel || "Select the daily report date";
+  const sourceLine = report.dailyBoxScoreSourceFile
+    ? `${report.dailyBoxScoreSourceFile}${report.dailyBoxScoreImportedAt ? ` · uploaded ${formatSavedTimestampLabel(report.dailyBoxScoreImportedAt)}` : ""}`
+    : "No daily box score uploaded yet";
+  const ready = isDlrDailyBoxScoreReady(report);
+  const sourceModeText = ready
+    ? "Today's leasing activity is sourced from the uploaded daily box score."
+    : "Upload the daily box score to activate the export, print, email, and editable HTML controls.";
+  return `<div id="reporting-dlr-workspace" class="report-hub-card" style="margin-top:14px">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+      <div>
+        <div class="card-title" style="margin-bottom:6px">DLR Daily Box Score Setup</div>
+        <p>The DLR reports one community and one daily box score at a time. Pick the community, set the DLR date, upload the daily box score, then review the in-screen preview below before exporting.</p>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-gray btn-sm" onclick="draftDlrOutlookEmail()" ${ready ? "" : "disabled"}>✉ Draft Outlook Email</button>
+        <button class="btn btn-gray btn-sm" onclick="downloadDlrInvestorOverviewHtml()" ${ready ? "" : "disabled"}>⬇ Editable HTML</button>
+        <button class="btn btn-blue btn-sm" onclick="openDlrInvestorOverview(true)" ${ready ? "" : "disabled"}>🖨 Export DLR / Print</button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:12px">
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px">
+        <div class="card-title" style="margin-bottom:6px">Community</div>
+        <select onchange="setReportingDlrCommunity(this.value)">
+          ${communityOptions.map(name => `<option value="${escapeHtml(name)}" ${name===communityName?"selected":""}>${escapeHtml(name)}</option>`).join("")}
+        </select>
+        <div style="font-size:0.64rem;color:var(--muted);margin-top:6px">DLR exports are single-community only.</div>
+        <div style="font-size:0.64rem;color:#4493f8;margin-top:4px">${getInvestorRecipientCountForCommunity(communityName)} investor recipient${getInvestorRecipientCountForCommunity(communityName) === 1 ? "" : "s"} assigned for this community.</div>
+      </div>
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px">
+        <div class="card-title" style="margin-bottom:6px">DLR Date</div>
+        <input type="date" value="${dateInput}" onchange="setReportingDlrDate(this.value)">
+        <div style="font-size:0.64rem;color:var(--muted);margin-top:6px">${escapeHtml(reportDateLabel)}</div>
+      </div>
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px">
+        <div class="card-title" style="margin-bottom:6px">Daily Box Score Upload</div>
+        <label class="btn btn-gray btn-sm" style="cursor:pointer">⬆ Upload Daily Box Score
+          <input type="file" accept=".csv,.pdf,.xlsx,.xls,.xlsm" class="dlr-box-score-input" style="display:none" multiple>
+        </label>
+        <div style="font-size:0.64rem;color:var(--muted);margin-top:8px">${escapeHtml(sourceLine)}</div>
+      </div>
+    </div>
+    <div class="${ready ? "alert-green" : "alert-red"}" style="margin-bottom:12px">${escapeHtml(sourceModeText)}</div>
+    <div id="reporting-dlr-preview">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px">
+        <div class="bonus-framework-stat"><div class="k">Occupancy</div><div class="v" style="font-size:1rem">${formatDlrPercent(report.occupancyPct)}</div></div>
+        <div class="bonus-framework-stat"><div class="k">Leased</div><div class="v" style="font-size:1rem">${formatDlrPercent(report.leasedPct)}</div></div>
+        <div class="bonus-framework-stat"><div class="k">90-Day Projection</div><div class="v" style="font-size:1rem">${formatDlrPercent(report.trendingOccupancyPct)}</div></div>
+        <div class="bonus-framework-stat"><div class="k">Retention</div><div class="v" style="font-size:1rem">${formatDlrPercent(report.renewalSnapshot?.retentionRate,0)}</div></div>
+        <div class="bonus-framework-stat"><div class="k">Projected Attrition</div><div class="v" style="font-size:1rem">${formatDlrMetricValue(report.renewalSnapshot?.projectedAttrition)}</div></div>
+        <div class="bonus-framework-stat"><div class="k">Move-In Goal / Week</div><div class="v" style="font-size:1rem">${formatDlrMetricValue(report.moveInGoalPerWeek)}</div></div>
+        <div class="bonus-framework-stat"><div class="k">Property Status</div><div class="v" style="font-size:1rem">${escapeHtml(report.status || "—")}</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1.2fr 1fr;gap:12px;margin-bottom:12px">
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px">
+          <div class="card-title" style="margin-bottom:8px">Activity Snapshot</div>
+          ${renderDashboardDlrActivityMiniTable(report)}
+        </div>
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px">
+          <div class="card-title" style="margin-bottom:8px">Pricing & Renewal Snapshot</div>
+          <div style="font-size:0.72rem;line-height:1.7">
+            <div>Total Units: <strong>${formatDlrMetricValue(report.pricing?.totalUnits)}</strong></div>
+            <div>Leased Units: <strong>${formatDlrMetricValue(report.pricing?.leasedUnits)}</strong></div>
+            <div>Occupied Units: <strong>${formatDlrMetricValue(report.pricing?.occupiedUnits)}</strong></div>
+            <div>Avg Budget Rent: <strong>${formatDlrCurrency(report.pricing?.avgBudgetRent)}</strong></div>
+            <div>Avg In-Place Rent: <strong>${formatDlrCurrency(report.pricing?.avgInPlaceRent)}</strong></div>
+            <div>Avg Net Effective Rent: <strong>${formatDlrCurrency(report.pricing?.avgNetEffectiveRent)}</strong></div>
+            <div>Renewals Signed: <strong>${formatDlrMetricValue(report.renewalSnapshot?.signed)}</strong></div>
+            <div>Undecided / M2M: <strong>${formatDlrMetricValue(report.renewalSnapshot?.undecided)}</strong></div>
+          </div>
+          <div style="font-size:0.64rem;color:var(--muted);margin-top:8px">Built from saved ATLAS RISE values for ${escapeHtml(report.reportMonthLabel)} · ${escapeHtml(sourceModeText)} · generated ${escapeHtml(formatSavedTimestampLabel(report.generatedAt))}</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px">
+          <div class="card-title" style="margin-bottom:8px">Forward Look</div>
+          <div style="margin-bottom:10px">${buildDlrForwardLookChart(report)}</div>
+          <div style="display:grid;grid-template-columns:repeat(${Math.max(report.forwardLook.length,1)},1fr);gap:8px">
+            ${report.forwardLook.map(row => `<div style="background:var(--bg2);border:1px solid var(--border2);border-radius:8px;padding:10px">
+              <div style="font-size:0.68rem;font-weight:700;color:#4493f8">${escapeHtml(row.label)}</div>
+              <div style="font-size:0.64rem;color:var(--muted);margin-top:6px">Expirations ${formatDlrMetricValue(row.leaseExpirations)}</div>
+              <div style="font-size:0.64rem;color:var(--muted)">Pending outs ${formatDlrMetricValue(row.pendingMoveOuts)}</div>
+              <div style="font-size:0.64rem;color:var(--muted)">Pending ins ${formatDlrMetricValue(row.pendingMoveIns)}</div>
+              <div style="font-size:0.64rem;color:var(--muted)">Budget occ ${formatDlrPercent(row.budgetedOccupancy)}</div>
+              <div style="font-size:0.64rem;color:var(--muted)">Projected occ ${formatDlrPercent(row.projectedOccupancy)}</div>
+            </div>`).join("") || `<div style="font-size:0.68rem;color:var(--muted)">No forward-looking dashboard months are available yet.</div>`}
+          </div>
+        </div>
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <div class="card-title" style="margin-bottom:0">Leasing Notes</div>
+            <button class="btn btn-gray btn-sm" onclick="resetDlrEditableNotes()">Reset To Generated Notes</button>
+          </div>
+          <div style="font-size:0.66rem;color:var(--muted);margin-bottom:10px">Edit these notes before you export, print, or draft the DLR email. Your edits flow into the investor-facing output for this selected community.</div>
+          <div style="display:grid;gap:10px">
+            ${DLR_EDITABLE_NOTE_SECTIONS.map(section => `<label style="display:block">
+              <div style="font-size:0.68rem;font-weight:700;color:var(--text);margin-bottom:4px">${escapeHtml(section.label)}</div>
+              <textarea id="${getDlrEditableNoteFieldId(section.key)}" rows="${section.key === "wins" ? 4 : 5}" onchange="persistDlrEditableNoteField(${JSON.stringify(section.key)}, this.value)" style="width:100%;min-height:${section.key === "wins" ? "96px" : "112px"};padding:10px 12px;border:1px solid var(--border2);border-radius:10px;background:var(--bg2);color:var(--text);font:inherit;line-height:1.55;resize:vertical">${escapeHtml(report.editableNotes?.[section.key] || "")}</textarea>
+            </label>`).join("")}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`;
 }
 
 async function runReportHubAction() {
@@ -20436,8 +20605,10 @@ async function runReportHubAction() {
     if (["investor_snapshot", "investor_marketing_report", "regional_progress_report"].includes(type)) return openPortfolioPerformanceReport(false);
     if (type === "monthly_investor_deck") return openMonthlyInvestorPresentation(false);
     if (type === "dlr") {
-      syncDlrTargetFromReportHub();
-      return openDlrInvestorOverview(false);
+      syncDlrTargetFromReportHub({ preserveCommunity: true });
+      renderTab();
+      focusReportingDlrPreview();
+      return;
     }
     return openBonusPayoutReport(false);
   }
@@ -20446,7 +20617,7 @@ async function runReportHubAction() {
     if (["investor_snapshot", "investor_marketing_report", "regional_progress_report"].includes(type)) return openPortfolioPerformanceReport(true);
     if (type === "monthly_investor_deck") return openMonthlyInvestorPresentation(true);
     if (type === "dlr") {
-      syncDlrTargetFromReportHub();
+      syncDlrTargetFromReportHub({ preserveCommunity: true });
       return openDlrInvestorOverview(true);
     }
     return openBonusPayoutReport(true);
@@ -20459,7 +20630,7 @@ async function runReportHubAction() {
   if (reportHubAction === "export_canva") return exportMonthlyInvestorPresentationPptx();
   if (reportHubAction === "export_html") {
     if (type === "monthly_investor_deck") return downloadMonthlyInvestorPresentationBrief();
-    syncDlrTargetFromReportHub();
+    syncDlrTargetFromReportHub({ preserveCommunity: true });
     return downloadDlrInvestorOverviewHtml();
   }
   if (reportHubAction === "email") {
@@ -20982,6 +21153,7 @@ async function copyDlrEmailAssetsToClipboard(report) {
 async function draftDlrOutlookEmail() {
   const report = buildDashboardDlrInvestorOverview();
   if (!report) return;
+  if (!requireDlrDailyBoxScoreForReport(report)) return;
   const toLine = getDlrInvestorRecipientLine(report);
   const copiedRichContent = await copyDlrEmailAssetsToClipboard(report).catch(() => false);
   const subject = `ATLAS RISE DLR Investor Overview | ${report.communityName} | ${report.reportDateLabel || report.reportMonthLabel}`;
@@ -21571,8 +21743,10 @@ function buildDlrInvestorOverviewDocument(report) {
 
 function openDlrInvestorOverview(printImmediately = false) {
   const report = buildDashboardDlrInvestorOverview();
+  if (!report) return;
+  if (!requireDlrDailyBoxScoreForReport(report)) return;
   const win = window.open("", "_blank");
-  if (!win || !report) return;
+  if (!win) return;
   const matchedCommunity = matchPropertyName(report.communityName, { fallbackToCurrent: false }) || report.communityName;
   const record = getPropertyRecordForApply(matchedCommunity);
   if (record) {
@@ -21598,6 +21772,7 @@ function openDlrInvestorOverview(printImmediately = false) {
 function downloadDlrInvestorOverviewHtml() {
   const report = buildDashboardDlrInvestorOverview();
   if (!report) return;
+  if (!requireDlrDailyBoxScoreForReport(report)) return;
   const matchedCommunity = matchPropertyName(report.communityName, { fallbackToCurrent: false }) || report.communityName;
   const record = getPropertyRecordForApply(matchedCommunity);
   if (record) {
@@ -22271,14 +22446,6 @@ function renderCSVTab() {
       collapsedPreview: "Copy Bundle in Playground, then Import Bundle on live"
     }),
     renderWindowshadeCard({
-      key: "import_dlr_summary",
-      title: "Daily Leasing Report",
-      subtitle: "Generate a DLR-style investor overview from saved dashboard data.",
-      countLabel: historicalDlrSummary ? `${historicalCommunity} · ${buildHistoricalMonthLabel(historicalMonthIdx, historicalYear)}` : "No data",
-      bodyHtml: dlrExecutiveHTML,
-      collapsedPreview: historicalDlrSummary ? `${historicalDlrSummary.reportMonthLabel} · ${historicalDlrSummary.status}` : "Generate DLR overview"
-    }),
-    renderWindowshadeCard({
       key: "import_report_export",
       title: "Reporting Moved",
       subtitle: "The report builder, weekly leadership exports, and bonus payout reporting now live in the Reporting tab.",
@@ -22286,7 +22453,7 @@ function renderCSVTab() {
       bodyHtml: `<div class="report-hub-grid">
         <div class="report-hub-card">
           <h3>Cleaner reporting workflow</h3>
-          <p>We moved the main reporting controls out of Data Import so ingestion and reporting are easier to maneuver separately. Historical imports, DLR support, and survey uploads stay here.</p>
+          <p>We moved the main reporting controls out of Data Import so ingestion and reporting are easier to maneuver separately. DLR box score upload and preview now appear in Reporting when DLR is selected.</p>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button type="button" class="btn btn-blue btn-sm" onmousedown="return queueCurrentWorkspaceTab(8)">Open Reporting Hub</button>
             <button class="btn btn-gray btn-sm" onclick="openPortfolioPerformanceReport(true)">Quick Portfolio PDF</button>
