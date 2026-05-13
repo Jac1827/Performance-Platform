@@ -3375,6 +3375,12 @@ function normalizeSavedCommunityRecord(propName, data) {
   const legacyBonusRolesByQ = input.bonusRoles && !input.bonusRolesByQ
     ? { Q1: input.bonusRoles, Q2: input.bonusRoles, Q3: input.bonusRoles, Q4: input.bonusRoles }
     : input.bonusRolesByQ;
+  const normalizedMonthlyData = Array.isArray(input.monthlyData) && input.monthlyData.length === 12
+    ? input.monthlyData.map((entry, idx) => {
+        const merged = { ...defaults.monthlyData[idx], ...(entry ?? {}) };
+        return applyFlorenceVillaMay2026MonthlyCorrections(propName, idx, 2026, merged);
+      })
+    : defaults.monthlyData;
   return {
     ...defaults,
     currentOccupied: Number(input.currentOccupied ?? defaults.currentOccupied),
@@ -3383,9 +3389,7 @@ function normalizeSavedCommunityRecord(propName, data) {
     leasedGoal: Number(input.leasedGoal ?? defaults.leasedGoal),
     currentMonth: Number(input.currentMonth ?? defaults.currentMonth),
     conversionRate: Number(input.conversionRate ?? defaults.conversionRate),
-    monthlyData: Array.isArray(input.monthlyData) && input.monthlyData.length === 12
-      ? input.monthlyData.map((entry, idx) => ({ ...defaults.monthlyData[idx], ...(entry ?? {}) }))
-      : defaults.monthlyData,
+    monthlyData: normalizedMonthlyData,
     savedBudgetTargets: normalizedSavedBudgetTargets,
     seasonal: Array.isArray(input.seasonal) && input.seasonal.length === 12 ? input.seasonal : defaults.seasonal,
     importMonthOverride: Number.isInteger(input.importMonthOverride) ? input.importMonthOverride : Number(input.importMonthOverride ?? defaults.importMonthOverride),
