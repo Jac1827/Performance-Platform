@@ -7248,7 +7248,9 @@ function getScoutShortcutIntent(question = "") {
 
 function getScoutMetricIntent(question = "") {
   const lower = String(question ?? "").toLowerCase();
+  if (/\boccupied units?\b|\boccupied count\b|\bhow many occupied\b/.test(lower)) return "occupied_units";
   if (/\bphysical occupancy\b|\boccupancy\b|\bocc\b/.test(lower)) return "physical_occupancy";
+  if (/\bleased units?\b|\bleased count\b|\bhow many leased\b/.test(lower)) return "leased_units";
   if (/\bleased occupancy\b|\bleased\b/.test(lower)) return "leased_occupancy";
   if (/\bguest cards?\b|\bleads?\b|\btraffic\b/.test(lower)) return "guest_cards";
   if (/\btours?\b/.test(lower)) return "tours";
@@ -7388,6 +7390,8 @@ function answerScoutPortfolioQuestion(question = "", scope = null) {
   const lower = String(question ?? "").toLowerCase();
   const metricIntent = getScoutMetricIntent(question);
   if (metricIntent) {
+    if (metricIntent === "occupied_units") return formatScoutMetricAnswer("Portfolio occupied units", `${Math.round(aggregate.occupied ?? 0)}`, monthLabel, "the live ATLAS portfolio snapshot");
+    if (metricIntent === "leased_units") return formatScoutMetricAnswer("Portfolio leased units", `${Math.round(aggregate.leased ?? 0)}`, monthLabel, "the live ATLAS portfolio snapshot");
     if (metricIntent === "physical_occupancy") return formatScoutMetricAnswer("Portfolio physical occupancy", `${getSummaryOccPct(aggregate).toFixed(1)}%`, monthLabel, "the live ATLAS portfolio snapshot");
     if (metricIntent === "leased_occupancy") return formatScoutMetricAnswer("Portfolio leased occupancy", `${getSummaryLeasedPct(aggregate).toFixed(1)}%`, monthLabel, "the live ATLAS portfolio snapshot");
     if (metricIntent === "guest_cards") return formatScoutMetricAnswer("Portfolio guest cards", `${Math.round(aggregate.guestCards ?? 0)}`, monthLabel, "saved Traffic & Funnel data across the current scope");
@@ -7447,6 +7451,8 @@ function answerScoutCommunityQuestion(question = "", scope = null) {
   const lower = String(question ?? "").toLowerCase();
   const metricIntent = getScoutMetricIntent(question);
   if (metricIntent) {
+    if (metricIntent === "occupied_units") return formatScoutMetricAnswer(`${detail.name} occupied units`, `${Math.round(summary.occupied ?? 0)}`, monthLabel, "the saved ATLAS community record");
+    if (metricIntent === "leased_units") return formatScoutMetricAnswer(`${detail.name} leased units`, `${Math.round(summary.leased ?? 0)}`, monthLabel, "the saved ATLAS community record");
     if (metricIntent === "physical_occupancy") return formatScoutMetricAnswer(`${detail.name} physical occupancy`, `${getSummaryOccPct(summary).toFixed(1)}%`, monthLabel, "the saved ATLAS community record");
     if (metricIntent === "leased_occupancy") return formatScoutMetricAnswer(`${detail.name} leased occupancy`, `${getSummaryLeasedPct(summary).toFixed(1)}%`, monthLabel, "the saved ATLAS community record");
     if (metricIntent === "guest_cards") return formatScoutMetricAnswer(`${detail.name} guest cards`, `${Math.round(summary.guestCards ?? 0)}`, monthLabel, "the saved Traffic & Funnel data");
@@ -10796,6 +10802,28 @@ function extractRenewalSheetSummary(rows) {
   return detailSummary.expirations > 0 && detailTotal >= labeledTotal ? detailSummary : labeledSummary;
 }
 
+function getRenewalWorkbookPropertyName(workbook) {
+  const setupRows = getWorkbookSheetRows(workbook, [/^setup$/i]);
+  const setupPropertyName = findWorksheetRowValue(setupRows, /property name/i);
+  const matchedProperty = matchPropertyName(setupPropertyName, { fallbackToCurrent: false });
+  return matchedProperty || getProp().name;
+}
+
+function applyRenewalSummaryToRecord(record, monthIdx, summary) {
+  if (!record) return;
+  if (!Array.isArray(record.monthlyData) || record.monthlyData.length !== 12) record.monthlyData = defaultMonthly();
+  if (!record.monthlyData[monthIdx]) record.monthlyData[monthIdx] = defaultMonthly()[monthIdx];
+  record.monthlyData[monthIdx] = {
+    ...record.monthlyData[monthIdx],
+    renewalExpirations: summary.expirations,
+    renewalSigned: summary.renewalsSigned,
+    renewalNTV: summary.ntv,
+    renewalTransfers: summary.transfers,
+    renewalUndecided: summary.undecided,
+    renewalEarlyTermination: summary.earlyTermination
+  };
+}
+
 function applyRenewalSummaryToMonth(monthIdx, summary) {
   if (!monthlyData[monthIdx]) monthlyData[monthIdx] = defaultMonthly()[monthIdx];
   monthlyData[monthIdx] = {
@@ -10822,23 +10850,40 @@ async function handleRenewalWorkbook(file) {
     return;
   }
   const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+  const targetPropertyName = getRenewalWorkbookPropertyName(workbook);
+  const targetRecord = getPropertyRecordForApply(targetPropertyName);
+  const setupRows = getWorkbookSheetRows(workbook, [/^setup$/i]);
+  const setupMonthYear = findWorksheetRowValue(setupRows, /month\s*\/\s*year/i);
+  const setupYear = parseYearFromValue(setupMonthYear, new Date().getFullYear());
   let appliedMonths = 0;
   workbook.SheetNames.forEach(sheetName => {
     const monthIdx = parseMonthIndexValue(sheetName);
     if (monthIdx === null || monthIdx < 0 || monthIdx > 11) return;
-    const sheetYear = parseYearFromValue(sheetName);
+    const sheetYear = parseYearFromValue(sheetName, setupYear);
     const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "" });
     const summary = extractRenewalSheetSummary(rows);
     if ([summary.expirations, summary.renewalsSigned, summary.ntv, summary.transfers, summary.undecided, summary.earlyTermination].every(v => v === 0)) return;
-    applyRenewalSummaryToMonth(monthIdx, summary);
-    stampRenewalImportForMonth(monthIdx, file.name, sheetYear);
-    renewalImportLog.push(`✅ ${file.name} → ${MONTHS[monthIdx]} ${sheetYear} renewals mapped (${summary.expirations} expirations, ${summary.renewalsSigned} signed, ${summary.ntv} NTV, ${summary.transfers} transfers, ${summary.undecided} undecided / M2M).`);
+    applyRenewalSummaryToRecord(targetRecord, monthIdx, summary);
+    setRecordPeriodImportStamp(targetRecord, "renewals", buildPeriodKey(monthIdx, sheetYear), {
+      importedAt: new Date().toISOString(),
+      sourceFileName: file.name,
+      sourceSheetName: sheetName,
+      propertyName: targetPropertyName
+    });
+    renewalImportLog.push(`✅ ${targetPropertyName} · ${file.name} → ${MONTHS[monthIdx]} ${sheetYear} renewals mapped (${summary.expirations} expirations, ${summary.renewalsSigned} signed, ${summary.ntv} NTV, ${summary.transfers} transfers, ${summary.undecided} undecided / M2M${summary.earlyTermination > 0 ? `, ${summary.earlyTermination} early terminations` : ""}).`);
     appliedMonths++;
   });
   if (appliedMonths === 0) {
-    renewalImportLog.push(`⚠️ ${file.name} did not contain any month sheets the dashboard could map. Use month-named tabs like "Mar 2026" or update the summary labels.`);
+    renewalImportLog.push(`⚠️ ${targetPropertyName} · ${file.name} did not contain any month sheets the dashboard could map. Use month-named tabs like "Mar 2026" or update the summary labels.`);
   } else {
-    renewalImportSourceLabel = file.name;
+    const normalizedTargetRecord = normalizeSavedCommunityRecord(targetPropertyName, targetRecord);
+    savedData[targetPropertyName] = normalizedTargetRecord;
+    if (targetPropertyName === getProp().name) {
+      monthlyData = normalizedTargetRecord.monthlyData;
+      importTracking = normalizedTargetRecord.importTracking;
+    }
+    renewalImportSourceLabel = `${targetPropertyName} · ${file.name}`;
+    renewalImportLog.push(`📘 ${targetPropertyName} renewal tracker imported from ${file.name}.`);
   }
 }
 
@@ -11777,36 +11822,10 @@ async function parseDailyBoxScoreFile(file) {
   return best?.snapshot ?? null;
 }
 
-async function isRonaldoMonthlyTemplateWorkbook(file) {
-  const lowerName = String(file?.name ?? "").toLowerCase();
-  if (!file || !(lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls") || lowerName.endsWith(".xlsm"))) return false;
-  if (typeof XLSX === "undefined") return false;
-  try {
-    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
-    return Array.isArray(workbook.SheetNames) && workbook.SheetNames.some(name => normalizeAtlasColumnKey(name) === "monthly_upload");
-  } catch {
-    return false;
-  }
-}
-
 async function processDlrBoxScoreFiles(files) {
   const targetCommunity = getHistoricalImportCommunityName();
   const acceptedFiles = Array.from(files || []);
   if (acceptedFiles.length === 0) return;
-  if (await Promise.all(acceptedFiles.map(file => isRonaldoMonthlyTemplateWorkbook(file))).then(results => results.some(Boolean))) {
-    csvError = "";
-    csvLog = [];
-    await processRonaldoMonthlyBackfillFiles(acceptedFiles, {
-      forcedMonthIdx: getHistoricalImportMonthIndex(),
-      forcedYear: getHistoricalImportYear()
-    });
-    csvLog = [
-      "✅ Ronaldo monthly template detected in the DLR uploader and routed to the bulk community backfill.",
-      ...csvLog
-    ].slice(0, 10);
-    renderTab();
-    return;
-  }
   const messages = [];
   for (const file of acceptedFiles) {
     try {
@@ -13082,7 +13101,7 @@ function renderRenewalsTab() {
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
       <div>
         <h2 style="font-size:0.9rem;font-weight:600;margin-bottom:4px">🔁 Renewal Management</h2>
-        <p style="font-size:0.72rem;color:var(--muted)">Upload the Renewal Management Tool workbook for this community, then review or fine-tune the monthly renewal summary below. These renewal counts now feed lease need calculations so undecided expirations show up in pace planning.</p>
+        <p style="font-size:0.72rem;color:var(--muted)">Upload the Renewal Management Tool workbook for one community at a time. ATLAS reads the property name from the SETUP tab, then maps each month tab into that community’s saved renewal history so the renewals tab and portfolio rollup stay aligned.</p>
       </div>
     </div>
     <label class="csv-dropzone" style="cursor:pointer">
@@ -20998,13 +21017,13 @@ function renderDlrReportingWorkspace() {
     : "No daily box score uploaded yet";
   const ready = isDlrDailyBoxScoreReady(report);
   const sourceModeText = ready
-    ? "Today's leasing activity is sourced from the uploaded daily box score. If you drop in a Ronaldo monthly template workbook, ATLAS will switch to the bulk community backfill path automatically."
-    : "Upload the daily box score to activate the export, print, email, and editable HTML controls, or drop a Ronaldo monthly template workbook to build all community DLR records in bulk.";
+    ? "Today's leasing activity is sourced from the uploaded daily box score."
+    : "Upload the daily box score to activate the export, print, email, and editable HTML controls.";
   return `<div id="reporting-dlr-workspace" class="report-hub-card" style="margin-top:14px">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
       <div>
         <div class="card-title" style="margin-bottom:6px">DLR Daily Box Score Setup</div>
-        <p>The DLR reports one community and one daily box score at a time. Pick the community, set the DLR date, upload the daily box score, or drop a Ronaldo monthly template workbook to fan that upload out across every community record before exporting.</p>
+        <p>The DLR reports one community and one daily box score at a time. Pick the community, set the DLR date, upload the daily box score, then review the in-screen preview below before exporting.</p>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-gray btn-sm" onclick="draftDlrOutlookEmail()" ${ready ? "" : "disabled"}>✉ Draft Outlook Email</button>
@@ -21028,7 +21047,7 @@ function renderDlrReportingWorkspace() {
       </div>
       <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px">
         <div class="card-title" style="margin-bottom:6px">Daily Box Score Upload</div>
-        <label class="btn btn-gray btn-sm" style="cursor:pointer">⬆ Upload Daily Box Score / Bulk Template
+        <label class="btn btn-gray btn-sm" style="cursor:pointer">⬆ Upload Daily Box Score
           <input type="file" accept=".csv,.pdf,.xlsx,.xls,.xlsm" class="dlr-box-score-input" style="display:none" multiple>
         </label>
         <div style="font-size:0.64rem;color:var(--muted);margin-top:8px">${escapeHtml(sourceLine)}</div>
@@ -22425,7 +22444,7 @@ function renderCSVTab() {
           <div class="v" style="font-size:1rem">${escapeHtml(dlrReportDateLabel)}</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
             <input type="date" value="${dlrReportDateInput}" onchange="setDlrReportDateFromInput(this.value)" style="max-width:180px">
-            <label class="btn btn-gray btn-sm" style="cursor:pointer">⬆ Upload Daily Box Score / Bulk Template
+            <label class="btn btn-gray btn-sm" style="cursor:pointer">⬆ Upload Daily Box Score
               <input type="file" accept=".csv,.pdf,.xlsx,.xls,.xlsm" id="dlr-box-score-input" style="display:none" multiple>
             </label>
           </div>
