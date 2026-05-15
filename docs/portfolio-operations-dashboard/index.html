@@ -8317,6 +8317,13 @@ function attachEventListeners() {
     processRenewalFiles(files);
     e.target.value = "";
   });
+  const portfolioRenewalInput = document.getElementById("portfolio-renewal-input");
+  if (portfolioRenewalInput) portfolioRenewalInput.addEventListener("change", function(e) {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    processRenewalFiles(files);
+    e.target.value = "";
+  });
   const marketSurveyInput = document.getElementById("market-survey-input");
   if (marketSurveyInput) marketSurveyInput.addEventListener("change", function(e) {
     const files = Array.from(e.target.files || []);
@@ -8820,9 +8827,24 @@ function renderPortfolioScopedImportTab() {
     </label>
     <div style="font-size:0.66rem;color:var(--muted);margin-top:8px">Use this when Ronaldo fills out the template and you want the import to populate every relevant community month record in one pass.</div>
   </div>`;
+  const renewalTrackerUploadHTML = `<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+      <div>
+        <div class="card-title" style="margin-bottom:6px">Renewal Tracker Upload</div>
+        <div style="font-size:0.68rem;color:var(--muted)">Upload one community renewal workbook at a time. ATLAS reads the SETUP tab for the property name, then maps each month tab into that community's saved renewal history and the portfolio renewals rollup.</div>
+      </div>
+    </div>
+    <label class="csv-dropzone" style="padding:20px;cursor:pointer">
+      <div class="csv-drop-icon">🔁</div>
+      <div style="font-size:0.82rem;color:#4493f8;font-weight:600">Click to upload a renewal tracker workbook</div>
+      <div style="font-size:0.7rem;color:var(--muted);margin-top:4px">Supports <span class="mono">.xlsx</span>, <span class="mono">.xlsm</span>, and <span class="mono">.xls</span>. Each month tab is imported into the matching renewal month for that property.</div>
+      <input type="file" accept=".xlsx,.xls,.xlsm" id="portfolio-renewal-input" multiple/>
+    </label>
+  </div>`;
   const bodyHtml = `<div class="tbl-wrap">
     ${renderDashboardDataMigrationPanel()}
     ${monthlyTemplateBackfillHTML}
+    ${renewalTrackerUploadHTML}
     <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
         <div>
