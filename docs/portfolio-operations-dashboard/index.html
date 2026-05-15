@@ -8790,8 +8790,8 @@ function renderPortfolioScopedImportTab() {
   const monthlyTemplateBackfillHTML = `<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
       <div>
-        <div class="card-title" style="margin-bottom:6px">Ronaldo Monthly Backfill</div>
-        <div style="font-size:0.68rem;color:var(--muted)">Upload the completed <span class="mono">ATLAS_Advanced_Monthly_Upload_Template.xlsx</span> workbook or the report-generator section exports here. It writes the selected month into every saved community record so Overview, Traffic, Renewals, Reputation, and DLR rollups stay aligned. Supporting box-score CSV/PDF files can be attached in the same drop as validation references.</div>
+        <div class="card-title" style="margin-bottom:6px">Ronaldo Monthly Backfill / Bulk DLR</div>
+        <div style="font-size:0.68rem;color:var(--muted)">Upload the completed <span class="mono">ATLAS_Advanced_Monthly_Upload_Template.xlsx</span> workbook or report-generator exports here. It writes the selected month into every saved community record so Overview, Traffic, Renewals, Reputation, and DLR rollups stay aligned. This is the same bulk path used by the DLR upload when a Ronaldo template workbook is dropped.</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end">
         <div>
@@ -8809,7 +8809,7 @@ function renderPortfolioScopedImportTab() {
     <label class="csv-dropzone" style="padding:20px;cursor:pointer">
       <div class="csv-drop-icon">⬆</div>
       <div style="font-size:0.82rem;color:#4493f8;font-weight:600">Click to upload the monthly template, generator workbook, and optional box-score references</div>
-      <div style="font-size:0.7rem;color:var(--muted);margin-top:4px">Supports <span class="mono">.xlsx</span>, <span class="mono">.xlsm</span>, <span class="mono">.xls</span>, <span class="mono">.csv</span>, and <span class="mono">.pdf</span>. The workbook is applied to the target month; generator sheet exports and box-score files are mapped into the same community month record.</div>
+      <div style="font-size:0.7rem;color:var(--muted);margin-top:4px">Supports <span class="mono">.xlsx</span>, <span class="mono">.xlsm</span>, <span class="mono">.xls</span>, <span class="mono">.csv</span>, and <span class="mono">.pdf</span>. The workbook is applied to the target month; generator sheet exports and box-score files are mapped into the same community month record to create DLR-ready data in bulk.</div>
       <input type="file" accept=".xlsx,.xls,.xlsm,.csv,.pdf" id="ronaldo-monthly-upload-input" multiple onchange="processRonaldoMonthlyBackfillFiles(this.files); this.value = ''"/>
     </label>
     <div style="font-size:0.66rem;color:var(--muted);margin-top:8px">Use this when Ronaldo fills out the template and you want the import to populate every relevant community month record in one pass.</div>
@@ -11777,10 +11777,36 @@ async function parseDailyBoxScoreFile(file) {
   return best?.snapshot ?? null;
 }
 
+async function isRonaldoMonthlyTemplateWorkbook(file) {
+  const lowerName = String(file?.name ?? "").toLowerCase();
+  if (!file || !(lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls") || lowerName.endsWith(".xlsm"))) return false;
+  if (typeof XLSX === "undefined") return false;
+  try {
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+    return Array.isArray(workbook.SheetNames) && workbook.SheetNames.some(name => normalizeAtlasColumnKey(name) === "monthly_upload");
+  } catch {
+    return false;
+  }
+}
+
 async function processDlrBoxScoreFiles(files) {
   const targetCommunity = getHistoricalImportCommunityName();
   const acceptedFiles = Array.from(files || []);
   if (acceptedFiles.length === 0) return;
+  if (await Promise.all(acceptedFiles.map(file => isRonaldoMonthlyTemplateWorkbook(file))).then(results => results.some(Boolean))) {
+    csvError = "";
+    csvLog = [];
+    await processRonaldoMonthlyBackfillFiles(acceptedFiles, {
+      forcedMonthIdx: getHistoricalImportMonthIndex(),
+      forcedYear: getHistoricalImportYear()
+    });
+    csvLog = [
+      "✅ Ronaldo monthly template detected in the DLR uploader and routed to the bulk community backfill.",
+      ...csvLog
+    ].slice(0, 10);
+    renderTab();
+    return;
+  }
   const messages = [];
   for (const file of acceptedFiles) {
     try {
@@ -20972,13 +20998,13 @@ function renderDlrReportingWorkspace() {
     : "No daily box score uploaded yet";
   const ready = isDlrDailyBoxScoreReady(report);
   const sourceModeText = ready
-    ? "Today's leasing activity is sourced from the uploaded daily box score."
-    : "Upload the daily box score to activate the export, print, email, and editable HTML controls.";
+    ? "Today's leasing activity is sourced from the uploaded daily box score. If you drop in a Ronaldo monthly template workbook, ATLAS will switch to the bulk community backfill path automatically."
+    : "Upload the daily box score to activate the export, print, email, and editable HTML controls, or drop a Ronaldo monthly template workbook to build all community DLR records in bulk.";
   return `<div id="reporting-dlr-workspace" class="report-hub-card" style="margin-top:14px">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
       <div>
         <div class="card-title" style="margin-bottom:6px">DLR Daily Box Score Setup</div>
-        <p>The DLR reports one community and one daily box score at a time. Pick the community, set the DLR date, upload the daily box score, then review the in-screen preview below before exporting.</p>
+        <p>The DLR reports one community and one daily box score at a time. Pick the community, set the DLR date, upload the daily box score, or drop a Ronaldo monthly template workbook to fan that upload out across every community record before exporting.</p>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-gray btn-sm" onclick="draftDlrOutlookEmail()" ${ready ? "" : "disabled"}>✉ Draft Outlook Email</button>
@@ -21002,7 +21028,7 @@ function renderDlrReportingWorkspace() {
       </div>
       <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px">
         <div class="card-title" style="margin-bottom:6px">Daily Box Score Upload</div>
-        <label class="btn btn-gray btn-sm" style="cursor:pointer">⬆ Upload Daily Box Score
+        <label class="btn btn-gray btn-sm" style="cursor:pointer">⬆ Upload Daily Box Score / Bulk Template
           <input type="file" accept=".csv,.pdf,.xlsx,.xls,.xlsm" class="dlr-box-score-input" style="display:none" multiple>
         </label>
         <div style="font-size:0.64rem;color:var(--muted);margin-top:8px">${escapeHtml(sourceLine)}</div>
@@ -22141,7 +22167,7 @@ function buildDlrInvestorOverviewDocument(report) {
         </div>
       </div>
       <div style="text-align:right;font-size:11px;color:#64748b">
-        <div style="display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;background:${report.status === "On Track" ? "#dcfce7" : report.status === "Watch" ? "#fef3c7" : "#fee2e2"};color:${report.status === "On Track" ? "#166534" : report.status === "Watch" ? "#92400e" : "#991b1b"};font-weight:700;margin-bottom:8px">${escapeHtml(report.status)} · Budget ${formatDlrPercent(report.budgetOccPct)}</div>
+        <div style="display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;background:${report.status === "On Track" ? "#dcfce7" : report.status === "Watch" ? "#fef3c7" : "#fee2e2"};color:${report.status === "On Track" ? "#166534" : report.status === "Watch" ? "#92400e" : "#991b1b"};font-weight:700;margin-bottom:8px">${escapeHtml(report.status)} · Saved Budget ${formatDlrPercent(report.budgetOccPct)}</div>
         <div>Generated ${escapeHtml(formatPresentationTimestamp(report.generatedAt))}</div>
         <div>${escapeHtml(report.sourceSummary)}</div>
       </div>
@@ -22399,11 +22425,11 @@ function renderCSVTab() {
           <div class="v" style="font-size:1rem">${escapeHtml(dlrReportDateLabel)}</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
             <input type="date" value="${dlrReportDateInput}" onchange="setDlrReportDateFromInput(this.value)" style="max-width:180px">
-            <label class="btn btn-gray btn-sm" style="cursor:pointer">⬆ Upload Daily Box Score
+            <label class="btn btn-gray btn-sm" style="cursor:pointer">⬆ Upload Daily Box Score / Bulk Template
               <input type="file" accept=".csv,.pdf,.xlsx,.xls,.xlsm" id="dlr-box-score-input" style="display:none" multiple>
             </label>
           </div>
-          <div style="font-size:0.64rem;color:var(--muted);margin-top:6px">The uploaded box score sets the report-period date and today’s leasing activity for this DLR, while occupancy, pricing, renewals, and the forward look continue to pull from the saved ATLAS RISE month-to-date data.</div>
+          <div style="font-size:0.64rem;color:var(--muted);margin-top:6px">The uploaded box score sets the report-period date and today’s leasing activity for this DLR, while occupancy, pricing, renewals, and the forward look continue to pull from the saved ATLAS RISE month-to-date data. Budget occupancy is read from the saved budget column in the community overview monthly leasing schedule.</div>
           <div style="font-size:0.64rem;color:var(--muted);margin-top:4px">${escapeHtml(dlrSourceLine)}</div>
         </div>
         <div class="bonus-framework-stat"><div class="k">Occupancy</div><div class="v" style="font-size:1rem">${formatDlrPercent(historicalDlrSummary.occupancyPct)}</div></div>
@@ -22444,7 +22470,7 @@ function renderCSVTab() {
               <div style="font-size:0.64rem;color:var(--muted);margin-top:6px">Expirations ${formatDlrMetricValue(row.leaseExpirations)}</div>
               <div style="font-size:0.64rem;color:var(--muted)">Pending outs ${formatDlrMetricValue(row.pendingMoveOuts)}</div>
               <div style="font-size:0.64rem;color:var(--muted)">Pending ins ${formatDlrMetricValue(row.pendingMoveIns)}</div>
-              <div style="font-size:0.64rem;color:var(--muted)">Budget occ ${formatDlrPercent(row.budgetedOccupancy)}</div>
+              <div style="font-size:0.64rem;color:var(--muted)">Saved budget occ ${formatDlrPercent(row.budgetedOccupancy)}</div>
               <div style="font-size:0.64rem;color:var(--muted)">Projected occ ${formatDlrPercent(row.projectedOccupancy)}</div>
             </div>`).join("") || `<div style="font-size:0.68rem;color:var(--muted)">No forward-looking dashboard months are available yet.</div>`}
           </div>
@@ -23926,11 +23952,11 @@ async function processRonaldoMonthlyReferenceFiles(files, options = {}) {
   return { rows, notes };
 }
 
-async function processRonaldoMonthlyBackfillFiles(files) {
+async function processRonaldoMonthlyBackfillFiles(files, options = {}) {
   const accepted = Array.from(files || []);
   if (accepted.length === 0) return;
-  const targetMonthIdx = getMonthlyTemplateImportMonthIndex();
-  const targetYear = getMonthlyTemplateImportYear();
+  const targetMonthIdx = Number.isInteger(options.forcedMonthIdx) ? options.forcedMonthIdx : getMonthlyTemplateImportMonthIndex();
+  const targetYear = Number.isInteger(options.forcedYear) ? options.forcedYear : getMonthlyTemplateImportYear();
   const workbookFiles = accepted.filter(file => {
     const lowerName = String(file?.name ?? "").toLowerCase();
     return lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls") || lowerName.endsWith(".xlsm");
