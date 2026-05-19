@@ -7812,6 +7812,12 @@ function renderTab() {
 function saveBudgetCurve() {
   savedBudgetTargets = monthlyData.map(m => normalizeBudgetOccupancyPct(m.budgetOcc));
   visibleCurves.budget = true;
+  savedData[getProp().name] = getCurrentCommunityRecord();
+  const savedResult = persistSaved();
+  if (savedResult?.ok === false) {
+    alert(`⚠️ ${savedResult.message}`);
+    return;
+  }
   alert(`✅ Budget curve saved for ${getProp().name}!`);
   renderTab();
 }
