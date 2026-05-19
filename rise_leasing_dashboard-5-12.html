@@ -11595,6 +11595,67 @@ function extractAvailabilityTotalsFromRows(rows = []) {
   return null;
 }
 
+function extractAvailabilityFloorPlanRowsFromRows(rows = [], fileName = "") {
+  for (let idx = 0; idx < rows.length; idx += 1) {
+    const row = Array.isArray(rows[idx]) ? rows[idx].map(cell => String(cell ?? "").trim()) : [];
+    if (!row.some(cell => /availability\s*\(as of/i.test(cell))) continue;
+    let headerIdx = -1;
+    for (let probe = idx; probe < Math.min(rows.length, idx + 6); probe += 1) {
+      const headerRow = Array.isArray(rows[probe]) ? rows[probe].map(cell => String(cell ?? "").trim().toLowerCase()) : [];
+      if (headerRow.includes("unit type") && headerRow.includes("units") && headerRow.includes("occupied") && headerRow.includes("leased")) {
+        headerIdx = probe;
+        break;
+      }
+    }
+    if (headerIdx === -1) continue;
+    const headers = (rows[headerIdx] ?? []).map(cell => String(cell ?? "").trim().toLowerCase());
+    const exactHeaderIndices = label => headers.reduce((matches, header, headerIdx) => {
+      if (header === label) matches.push(headerIdx);
+      return matches;
+    }, []);
+    const unitTypeIdx = headers.findIndex(header => header === "unit type");
+    const sqftIdx = headers.findIndex(header => header === "avg. sqft");
+    const budgetRentIdx = headers.findIndex(header => header === "avg. market rent (budgeted)");
+    const unitsIdx = headers.findIndex(header => header === "units");
+    const rentableUnitsIdx = headers.findIndex(header => header === "rentable units");
+    const occupiedCountIdx = exactHeaderIndices("occupied").find(matchIdx => matchIdx !== unitTypeIdx) ?? -1;
+    const occupiedPctCandidates = exactHeaderIndices("occupied").filter(matchIdx => matchIdx !== occupiedCountIdx);
+    const leasedPctCandidates = exactHeaderIndices("leased");
+    const leasedUnitsIdx = headers.findIndex(header => /availability .* leased units/i.test(header));
+    const floorPlanRows = [];
+    for (let rowIdx = headerIdx + 1; rowIdx < rows.length; rowIdx += 1) {
+      const sourceRow = Array.isArray(rows[rowIdx]) ? rows[rowIdx] : [];
+      const label = String(sourceRow[unitTypeIdx] ?? "").trim();
+      if (!label) continue;
+      if (/^total:?$/i.test(label)) break;
+      const units = normalizeWorkbookNumber(sourceRow[rentableUnitsIdx >= 0 ? rentableUnitsIdx : unitsIdx]);
+      const occupiedCount = normalizeWorkbookNumber(sourceRow[occupiedCountIdx]);
+      const leasedUnits = leasedUnitsIdx >= 0 ? normalizeWorkbookNumber(sourceRow[leasedUnitsIdx]) : 0;
+      const firstPctValue = candidateIndices => candidateIndices.reduce((resolved, candidateIdx) => {
+        if (resolved != null) return resolved;
+        const numeric = parseOptionalWorkbookMetric(sourceRow[candidateIdx]);
+        if (numeric == null) return null;
+        return normalizeWorkbookPercent(numeric);
+      }, null);
+      const fallbackOccupancyPct = units > 0 && occupiedCount > 0 ? (occupiedCount / units) * 100 : null;
+      const fallbackLeasedPct = units > 0 && leasedUnits > 0 ? (leasedUnits / units) * 100 : null;
+      floorPlanRows.push({
+        id: makeFloorPlanId(),
+        name: label,
+        sqft: sqftIdx >= 0 ? normalizeWorkbookNumber(sourceRow[sqftIdx]) || null : null,
+        budgetRent: budgetRentIdx >= 0 ? normalizeWorkbookNumber(sourceRow[budgetRentIdx]) || null : null,
+        units: units || null,
+        occupancyPct: firstPctValue(occupiedPctCandidates) ?? fallbackOccupancyPct,
+        leasedPct: firstPctValue(leasedPctCandidates) ?? fallbackLeasedPct,
+        marketedRentSource: fileName,
+        sourceSheet: fileName
+      });
+    }
+    if (floorPlanRows.length > 0) return floorPlanRows;
+  }
+  return [];
+}
+
 function extractLeadActivityTotalsFromRows(rows = []) {
   for (let idx = 0; idx < rows.length; idx += 1) {
     const row = Array.isArray(rows[idx]) ? rows[idx].map(cell => String(cell ?? "").trim()) : [];
@@ -11633,9 +11694,44 @@ function extractLeadActivityTotalsFromRows(rows = []) {
       other: valueAt(findHeader("other")),
       activityEmails: valueAt(findHeader("emails")),
       activityCalls: valueAt(findHeader("calls")),
-      activityChats: null,
-      activityTexts: null,
-      firstVisitsTours: 0
+      activityChats: valueAt(findHeader("chats")),
+      activityTexts: valueAt(findHeader("texts")),
+      firstVisitsTours: valueAt(findHeader("first visits/tours", "tours"))
+    };
+  }
+  return null;
+}
+
+function extractPropertyPulseTotalsFromRows(rows = []) {
+  for (let idx = 0; idx < rows.length; idx += 1) {
+    const row = Array.isArray(rows[idx]) ? rows[idx].map(cell => String(cell ?? "").trim()) : [];
+    if (!row.some(cell => /^property pulse\b/i.test(cell))) continue;
+    let headerIdx = -1;
+    for (let probe = idx + 1; probe < Math.min(rows.length, idx + 6); probe += 1) {
+      const headerRow = Array.isArray(rows[probe]) ? rows[probe].map(cell => String(cell ?? "").trim().toLowerCase()) : [];
+      if (headerRow.includes("move-ins") && headerRow.includes("move-outs") && headerRow.includes("renewal leases approved")) {
+        headerIdx = probe;
+        break;
+      }
+    }
+    if (headerIdx === -1) continue;
+    let totalIdx = -1;
+    for (let probe = headerIdx + 1; probe < Math.min(rows.length, headerIdx + 8); probe += 1) {
+      const label = String(rows[probe]?.[0] ?? "").trim();
+      if (/^total:?$/i.test(label)) {
+        totalIdx = probe;
+        break;
+      }
+    }
+    if (totalIdx === -1) continue;
+    const headers = (rows[headerIdx] ?? []).map(cell => String(cell ?? "").trim().toLowerCase());
+    const totalRow = rows[totalIdx] ?? [];
+    const findHeader = (...patterns) => headers.findIndex(header => patterns.some(pattern => header === pattern || header.includes(pattern)));
+    const valueAt = targetIdx => Number.isInteger(targetIdx) && targetIdx >= 0 && targetIdx < totalRow.length ? parseOptionalWorkbookMetric(totalRow[targetIdx]) : null;
+    return {
+      moveIns: valueAt(findHeader("move-ins")),
+      moveOuts: valueAt(findHeader("move-outs")),
+      renewals: valueAt(findHeader("renewal leases approved", "renewals"))
     };
   }
   return null;
@@ -11794,6 +11890,7 @@ function buildDailyBoxScoreSnapshotFromRows(rows = [], fileName = "", rawText = 
     reportDateLabel: reportDate ? formatPresentationDate(reportDate) : ""
   });
   const availabilityTotals = extractAvailabilityTotalsFromRows(rows);
+  const propertyPulseTotals = extractPropertyPulseTotalsFromRows(rows);
   const leadActivityTotals = extractLeadActivityTotalsFromRows(rows) || extractLeadActivityTotals(rawText);
   const leadConversionTotals = extractLeadConversionTotalsFromRows(rows) || extractLeadConversionTotals(rawText);
   if (availabilityTotals) {
@@ -11831,6 +11928,11 @@ function buildDailyBoxScoreSnapshotFromRows(rows = [], fileName = "", rawText = 
     dailySnapshot.cancelled = (leadConversionTotals.completedCancelled || 0) + (leadConversionTotals.approvedCancelled || 0);
     dailySnapshot.leasesSigned = Math.max(leadConversionTotals.leaseCompleted || 0, leadConversionTotals.leaseApproved || 0);
   }
+  if (propertyPulseTotals) {
+    dailySnapshot.moveIns = propertyPulseTotals.moveIns;
+    dailySnapshot.moveOuts = propertyPulseTotals.moveOuts;
+    dailySnapshot.renewals = propertyPulseTotals.renewals;
+  }
   if (dailySnapshot.walkIn === null || dailySnapshot.walkIn === undefined) dailySnapshot.walkIn = extractMetricFromRowsOrText(rows, rawText, ["walk in", "walk-in"], ["Walk In"]);
   if (dailySnapshot.offSiteEvent === null || dailySnapshot.offSiteEvent === undefined) dailySnapshot.offSiteEvent = extractMetricFromRowsOrText(rows, rawText, ["off site event", "off-site event"], ["Off Site Event"]);
   if (dailySnapshot.phoneCalls === null || dailySnapshot.phoneCalls === undefined) dailySnapshot.phoneCalls = extractMetricFromRowsOrText(rows, rawText, ["phone calls", "phone call"], ["Phone Calls"]);
@@ -11851,10 +11953,10 @@ function buildDailyBoxScoreSnapshotFromRows(rows = [], fileName = "", rawText = 
     dailySnapshot.cancelled = mergePreferredBoxScoreCount(dailySnapshot.cancelled, extractMetricFromRowsOrText(rows, rawText, ["cancelled", "canceled"], ["Cancelled"]));
     dailySnapshot.pendingDecision = mergePreferredBoxScoreCount(dailySnapshot.pendingDecision, extractMetricFromRowsOrText(rows, rawText, ["pending decision", "pending decisions", "pipeline", "application started"], ["Pipeline (Application Started)", "Pending Decision"]));
   }
-  dailySnapshot.leasesSigned = mergePreferredBoxScoreCount(dailySnapshot.leasesSigned, extractMetricFromRowsOrText(rows, rawText, ["leases signed", "signed leases", "leases"], ["Leases Signed"]));
-  dailySnapshot.moveIns = mergePreferredBoxScoreCount(dailySnapshot.moveIns, extractMetricFromRowsOrText(rows, rawText, ["move-ins", "move ins"], ["Move-Ins"]));
-  dailySnapshot.moveOuts = mergePreferredBoxScoreCount(dailySnapshot.moveOuts, extractMetricFromRowsOrText(rows, rawText, ["move-outs", "move outs"], ["Move-Outs"]));
-  dailySnapshot.renewals = mergePreferredBoxScoreCount(dailySnapshot.renewals, extractMetricFromRowsOrText(rows, rawText, ["renewals", "renewals signed"], ["Renewals"]));
+  if (dailySnapshot.leasesSigned === null || dailySnapshot.leasesSigned === undefined) dailySnapshot.leasesSigned = extractMetricFromRowsOrText(rows, rawText, ["leases signed", "signed leases", "leases"], ["Leases Signed"]);
+  if (dailySnapshot.moveIns === null || dailySnapshot.moveIns === undefined) dailySnapshot.moveIns = extractMetricFromRowsOrText(rows, rawText, ["move-ins", "move ins"], ["Move-Ins"]);
+  if (dailySnapshot.moveOuts === null || dailySnapshot.moveOuts === undefined) dailySnapshot.moveOuts = extractMetricFromRowsOrText(rows, rawText, ["move-outs", "move outs"], ["Move-Outs"]);
+  if (dailySnapshot.renewals === null || dailySnapshot.renewals === undefined) dailySnapshot.renewals = extractMetricFromRowsOrText(rows, rawText, ["renewals", "renewals signed"], ["Renewals"]);
   const leadSourceRollup = [
     dailySnapshot.walkIn,
     dailySnapshot.offSiteEvent,
@@ -11915,7 +12017,10 @@ async function parseDailyBoxScoreFile(file) {
       fullText += textContent.items.map(item => item.str).join(" ") + "\n";
     }
     const rows = fullText.split(/\r?\n/).map(line => [line]);
-    return buildDailyBoxScoreSnapshotFromRows(rows, file.name, fullText);
+    return {
+      snapshot: buildDailyBoxScoreSnapshotFromRows(rows, file.name, fullText),
+      floorPlanRows: []
+    };
   }
   if (typeof XLSX === "undefined") {
     throw new Error("The XLSX library did not load, so the daily box score parser is unavailable.");
@@ -11926,14 +12031,21 @@ async function parseDailyBoxScoreFile(file) {
   const candidates = buildBoxScoreSheetCandidates(workbook).map(candidate => {
     const rawText = candidate.rows.map(row => (row ?? []).join(" ")).join("\n");
     const snapshot = buildDailyBoxScoreSnapshotFromRows(candidate.rows, file.name, rawText);
+    const floorPlanRows = extractAvailabilityFloorPlanRowsFromRows(candidate.rows, file.name);
     return {
       ...candidate,
       snapshot,
+      floorPlanRows,
       score: scoreDailyBoxScoreSnapshot(snapshot)
     };
   });
   const best = chooseBestDailyBoxScoreSnapshot(candidates);
-  return best?.snapshot ?? null;
+  return best
+    ? {
+        snapshot: best.snapshot,
+        floorPlanRows: Array.isArray(best.floorPlanRows) ? best.floorPlanRows : []
+      }
+    : null;
 }
 
 async function processDlrBoxScoreFiles(files) {
@@ -11943,10 +12055,38 @@ async function processDlrBoxScoreFiles(files) {
   const messages = [];
   for (const file of acceptedFiles) {
     try {
-      const snapshot = await parseDailyBoxScoreFile(file);
+      const parsed = await parseDailyBoxScoreFile(file);
+      const snapshot = parsed?.snapshot ?? null;
+      const importedFloorPlanRows = Array.isArray(parsed?.floorPlanRows) ? parsed.floorPlanRows : [];
       if (!snapshot || !hasDlrBoxScoreSnapshot(snapshot)) {
         messages.push(`⚠️ ${file.name} did not surface any recognizable daily leasing metrics for the DLR.`);
         continue;
+      }
+      const targetRecord = getPropertyRecordForApply(targetCommunity);
+      if (importedFloorPlanRows.length > 0) {
+        const existingPlans = normalizeCommunityFloorPlans(targetRecord.communityFloorPlans);
+        const existingByName = new Map(existingPlans.map(plan => [normalizeFloorPlanLookupName(plan.name), plan]));
+        const nextPlans = importedFloorPlanRows.map(rate => {
+          const existing = existingByName.get(normalizeFloorPlanLookupName(rate.name));
+          return {
+            id: existing?.id || rate.id || makeFloorPlanId(),
+            name: String(existing?.name || rate.name || "").trim(),
+            sqft: existing?.sqft ?? rate.sqft ?? null,
+            budgetRent: existing?.budgetRent ?? rate.budgetRent ?? null,
+            marketedRent: existing?.marketedRent ?? null,
+            occupancyPct: rate.occupancyPct ?? existing?.occupancyPct ?? null,
+            leasedPct: rate.leasedPct ?? existing?.leasedPct ?? null,
+            marketedRentSource: existing?.marketedRentSource || rate.marketedRentSource || file.name,
+            beds: existing?.beds ?? null,
+            baths: existing?.baths ?? null,
+            units: existing?.units ?? rate.units ?? null
+          };
+        });
+        existingPlans.forEach(plan => {
+          if (nextPlans.some(entry => normalizeFloorPlanLookupName(entry.name) === normalizeFloorPlanLookupName(plan.name))) return;
+          nextPlans.push({ ...plan });
+        });
+        targetRecord.communityFloorPlans = normalizeCommunityFloorPlans(nextPlans);
       }
       updateCommunityDlrSummary(targetCommunity, summary => {
         const nextSummary = normalizeDlrSummary(summary);
@@ -11972,7 +12112,10 @@ async function processDlrBoxScoreFiles(files) {
           year: parsedDate.getFullYear()
         });
       }
-      messages.push(`✅ ${file.name} mapped into the DLR for ${targetCommunity}${snapshot.reportDateLabel ? ` · ${snapshot.reportDateLabel}` : ""}.`);
+      const refreshedRecord = getPropertyRecordForApply(targetCommunity);
+      savedData[targetCommunity] = normalizeSavedCommunityRecord(targetCommunity, refreshedRecord);
+      persistSaved();
+      messages.push(`✅ ${file.name} mapped into the DLR for ${targetCommunity}${snapshot.reportDateLabel ? ` · ${snapshot.reportDateLabel}` : ""}${importedFloorPlanRows.length > 0 ? ` and refreshed ${importedFloorPlanRows.length} floor plan occupancy row${importedFloorPlanRows.length === 1 ? "" : "s"}` : ""}.`);
     } catch (error) {
       messages.push(`⚠️ ${file.name} could not be read for the DLR: ${error?.message || error}`);
     }
@@ -22159,9 +22302,13 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   const dailyPendingDecisionRaw = hasMatchingDailyBoxScore ? Math.max(0, Number(dailyBoxScore.pendingDecision) || 0) : 0;
   const dailyApplicationsRaw = hasMatchingDailyBoxScore ? Math.max(0, Number(dailyBoxScore.applications) || 0) : 0;
   const inferredDailyApplications = dailyApprovals + dailyDenied + dailyCancelled;
-  const dailyApplications = hasMatchingDailyBoxScore ? Math.max(dailyApplicationsRaw, inferredDailyApplications) : 0;
+  const dailyApplications = hasMatchingDailyBoxScore
+    ? ((dailyBoxScore.applications !== null && dailyBoxScore.applications !== undefined) ? dailyApplicationsRaw : inferredDailyApplications)
+    : 0;
   const dailyPendingDecision = hasMatchingDailyBoxScore
-    ? Math.max(dailyPendingDecisionRaw, Math.max(dailyApplications - dailyApprovals - dailyDenied - dailyCancelled, 0))
+    ? ((dailyBoxScore.pendingDecision !== null && dailyBoxScore.pendingDecision !== undefined)
+      ? dailyPendingDecisionRaw
+      : Math.max(dailyApplications - dailyApprovals - dailyDenied - dailyCancelled, 0))
     : 0;
   const dailyTraffic = {
     walkIn: dailyLeadSources.walkIn,
