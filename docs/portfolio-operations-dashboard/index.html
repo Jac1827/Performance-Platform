@@ -3071,6 +3071,17 @@ function normalizeBudgetOccupancyPct(value) {
   return Math.min(100, Math.max(0, Math.round(parsed * 10) / 10));
 }
 
+function deriveSavedBudgetTargetsFromMonthlyData(monthEntries, existingTargets) {
+  const normalizedExisting = Array.from({ length: 12 }, (_, idx) =>
+    normalizeBudgetOccupancyPct(Array.isArray(existingTargets) ? existingTargets[idx] : 0)
+  );
+  const hasExistingTargets = normalizedExisting.some(value => value > 0);
+  if (hasExistingTargets) return normalizedExisting;
+  return Array.from({ length: 12 }, (_, idx) =>
+    normalizeBudgetOccupancyPct(Array.isArray(monthEntries) ? monthEntries[idx]?.budgetOcc : 0)
+  );
+}
+
 function getSavedBudgetOccPct(savedTargets, monthIdx) {
   if (!Array.isArray(savedTargets) || monthIdx < 0 || monthIdx > 11) return 0;
   return normalizeBudgetOccupancyPct(savedTargets[monthIdx]);
@@ -3356,9 +3367,6 @@ function defaultSavedCommunityRecord(propName = getProp().name) {
 function normalizeSavedCommunityRecord(propName, data) {
   const defaults = defaultSavedCommunityRecord(propName);
   const input = data ?? {};
-  const normalizedSavedBudgetTargets = Array.from({ length: 12 }, (_, idx) =>
-    normalizeBudgetOccupancyPct(Array.isArray(input.savedBudgetTargets) ? input.savedBudgetTargets[idx] : defaults.savedBudgetTargets[idx])
-  );
   const propertyConfig = normalizePropertyTeamConfig(input.propertyTeamConfig);
   const communityProfiles = normalizeCommunityTeamProfiles(input.communityTeamProfiles, propertyConfig);
   const legacyPropertyTurnover = normalizePropertyTurnoverConfig(input.propertyTurnoverConfig);
@@ -3367,6 +3375,13 @@ function normalizeSavedCommunityRecord(propName, data) {
   const legacyBonusRolesByQ = input.bonusRoles && !input.bonusRolesByQ
     ? { Q1: input.bonusRoles, Q2: input.bonusRoles, Q3: input.bonusRoles, Q4: input.bonusRoles }
     : input.bonusRolesByQ;
+  const normalizedMonthlyData = Array.isArray(input.monthlyData) && input.monthlyData.length === 12
+    ? input.monthlyData.map((entry, idx) => ({ ...defaults.monthlyData[idx], ...(entry ?? {}) }))
+    : defaults.monthlyData;
+  const normalizedSavedBudgetTargets = deriveSavedBudgetTargetsFromMonthlyData(
+    normalizedMonthlyData,
+    Array.isArray(input.savedBudgetTargets) ? input.savedBudgetTargets : defaults.savedBudgetTargets
+  );
   return {
     ...defaults,
     currentOccupied: Number(input.currentOccupied ?? defaults.currentOccupied),
@@ -3375,9 +3390,7 @@ function normalizeSavedCommunityRecord(propName, data) {
     leasedGoal: Number(input.leasedGoal ?? defaults.leasedGoal),
     currentMonth: Number(input.currentMonth ?? defaults.currentMonth),
     conversionRate: Number(input.conversionRate ?? defaults.conversionRate),
-    monthlyData: Array.isArray(input.monthlyData) && input.monthlyData.length === 12
-      ? input.monthlyData.map((entry, idx) => ({ ...defaults.monthlyData[idx], ...(entry ?? {}) }))
-      : defaults.monthlyData,
+    monthlyData: normalizedMonthlyData,
     savedBudgetTargets: normalizedSavedBudgetTargets,
     seasonal: Array.isArray(input.seasonal) && input.seasonal.length === 12 ? input.seasonal : defaults.seasonal,
     importMonthOverride: Number.isInteger(input.importMonthOverride) ? input.importMonthOverride : Number(input.importMonthOverride ?? defaults.importMonthOverride),
