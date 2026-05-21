@@ -22220,9 +22220,14 @@ function resolveDlrSummaryUnits(summary, totalUnits, metric = "occupied") {
 
 function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommunityName(), monthIdx = getHistoricalImportMonthIndex(), year = getHistoricalImportYear()) {
   const communityName = matchPropertyName(propName, { fallbackToCurrent: false }) || getProp().name;
+  const normalizedMonthIdx = clampNumber(monthIdx, 0, 11);
   const record = getCommunityRecordForScope(communityName);
-  const reportDetail = buildPortfolioDetailsForMonth(clampNumber(monthIdx, 0, 11), { [communityName]: record })[0] || null;
+  const reportDetail = buildPortfolioDetailsForMonth(normalizedMonthIdx, { [communityName]: record })[0] || null;
   const reportSummary = reportDetail?.summary || {};
+  const previousReportDetail = normalizedMonthIdx > 0
+    ? (buildPortfolioDetailsForMonth(normalizedMonthIdx - 1, { [communityName]: record })[0] || null)
+    : null;
+  const previousReportSummary = previousReportDetail?.summary || {};
   const surveyData = normalizeMarketSurveyData(record.marketSurveyData);
   const dlrSummary = getCommunityDlrSummary(communityName);
   const dailyBoxScore = normalizeDlrBoxScoreSnapshot(dlrSummary.dailyBoxScore);
@@ -22234,7 +22239,6 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   const corporateUnits = getCorporateLeaseUnitsForRecord(record, totalUnits);
   const scopeMonthlyData = Array.isArray(record.monthlyData) && record.monthlyData.length === 12 ? record.monthlyData : defaultMonthly();
   const scopeSeasonal = Array.isArray(record.seasonal) && record.seasonal.length === 12 ? record.seasonal : [...DEFAULT_SEASONAL];
-  const normalizedMonthIdx = clampNumber(monthIdx, 0, 11);
   const scopeCurrentMonth = Number.isInteger(record.currentMonth) ? record.currentMonth : DEFAULT_CURRENT_MONTH;
   const reportMetricMonthIdx = normalizedMonthIdx;
   const reportAnchorOccupiedUnits = reportMetricMonthIdx === scopeCurrentMonth
@@ -22294,6 +22298,16 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   const mtdTraffic = buildDlrTrafficMetricsFromSummary({}, monthEntry, {}, {
     preferDailyBoxScore: false
   });
+  mtdTraffic.guestCards = Math.max(0, Number(reportSummary.guestCards ?? mtdTraffic.guestCards) || 0);
+  mtdTraffic.rolledGuestCards = mtdTraffic.guestCards;
+  mtdTraffic.tours = Math.max(0, Number(reportSummary.tours ?? mtdTraffic.tours) || 0);
+  mtdTraffic.applications = Math.max(0, Number(reportSummary.applications ?? mtdTraffic.applications) || 0);
+  mtdTraffic.approvals = Math.max(0, Number(reportSummary.applicationsApproved ?? mtdTraffic.approvals) || 0);
+  mtdTraffic.denials = Math.max(0, Number(reportSummary.applicationsDenied ?? mtdTraffic.denials) || 0);
+  mtdTraffic.cancelled = Math.max(0, Number(reportSummary.applicationsCancelled ?? mtdTraffic.cancelled) || 0);
+  mtdTraffic.pendingDecision = Math.max(0, Number(reportSummary.applicationsPendingDecision ?? mtdTraffic.pendingDecision) || 0);
+  mtdTraffic.leases = Math.max(0, Number(reportSummary.leasesSigned ?? mtdTraffic.leases) || 0);
+  mtdTraffic.renewals = Math.max(0, Number(reportSummary.renewalsSigned ?? mtdTraffic.renewals) || 0);
   mtdTraffic.moveIns = Math.max(0, Number(reportSummary.moveIns ?? monthEntry.moveIns) || 0);
   mtdTraffic.moveOuts = Math.max(0, Number(reportSummary.moveOuts ?? getEffectiveMoveOutsForMonth(reportMetricMonthIdx, scopeMonthlyData).effective) || 0);
   mtdTraffic.monthAbsorption = Number(reportSummary.monthAbsorption ?? (mtdTraffic.moveIns - mtdTraffic.moveOuts)) || 0;
@@ -22303,6 +22317,18 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   const prevMonthTraffic = buildDlrTrafficMetricsFromSummary({}, prevMonthEntry, {}, {
     preferDailyBoxScore: false
   });
+  prevMonthTraffic.guestCards = Math.max(0, Number(previousReportSummary.guestCards ?? prevMonthTraffic.guestCards) || 0);
+  prevMonthTraffic.rolledGuestCards = prevMonthTraffic.guestCards;
+  prevMonthTraffic.tours = Math.max(0, Number(previousReportSummary.tours ?? prevMonthTraffic.tours) || 0);
+  prevMonthTraffic.applications = Math.max(0, Number(previousReportSummary.applications ?? prevMonthTraffic.applications) || 0);
+  prevMonthTraffic.approvals = Math.max(0, Number(previousReportSummary.applicationsApproved ?? prevMonthTraffic.approvals) || 0);
+  prevMonthTraffic.denials = Math.max(0, Number(previousReportSummary.applicationsDenied ?? prevMonthTraffic.denials) || 0);
+  prevMonthTraffic.cancelled = Math.max(0, Number(previousReportSummary.applicationsCancelled ?? prevMonthTraffic.cancelled) || 0);
+  prevMonthTraffic.pendingDecision = Math.max(0, Number(previousReportSummary.applicationsPendingDecision ?? prevMonthTraffic.pendingDecision) || 0);
+  prevMonthTraffic.leases = Math.max(0, Number(previousReportSummary.leasesSigned ?? prevMonthTraffic.leases) || 0);
+  prevMonthTraffic.renewals = Math.max(0, Number(previousReportSummary.renewalsSigned ?? prevMonthTraffic.renewals) || 0);
+  prevMonthTraffic.moveIns = Math.max(0, Number(previousReportSummary.moveIns ?? prevMonthTraffic.moveIns) || 0);
+  prevMonthTraffic.moveOuts = Math.max(0, Number(previousReportSummary.moveOuts ?? prevMonthTraffic.moveOuts) || 0);
   const dailyLeadSources = hasMatchingDailyBoxScore
     ? {
         walkIn: Math.max(0, Number(dailyBoxScore.walkIn) || 0),
@@ -22362,6 +22388,11 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   const currentNer = (Number(monthEntry.rentRollTotal) || 0) > 0 && occupiedUnits > 0
     ? Number(monthEntry.rentRollTotal) / occupiedUnits
     : (Number(monthEntry.nerActual) || 0);
+  const resolvedRentRollTotal = Number(monthEntry.rentRollTotal) > 0
+    ? Number(monthEntry.rentRollTotal)
+    : (Number(reportSummary.currentNer ?? currentNer) > 0 && occupiedUnits > 0
+      ? Number(reportSummary.currentNer ?? currentNer) * occupiedUnits
+      : 0);
   const floorPlanRentMetrics = getCommunityFloorPlanRentMetrics(record, surveyData);
   const resolvedAvgInPlaceRent = Number(monthEntry.marketRent) || floorPlanRentMetrics.marketRent || Number(dlrSummary.pricing?.avgInPlaceRent) || 0;
   const resolvedAvgBudgetRent = Number(monthEntry.proformaRent) || floorPlanRentMetrics.budgetRent || Number(dlrSummary.pricing?.avgBudgetRent) || 0;
@@ -22430,8 +22461,8 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
       occupiedUnits,
       avgBudgetRent: resolvedAvgBudgetRent || null,
       avgInPlaceRent: resolvedAvgInPlaceRent || null,
-      avgNetEffectiveRent: currentNer || null,
-      rentRollTotal: Number(monthEntry.rentRollTotal) || null,
+      avgNetEffectiveRent: Number(reportSummary.currentNer ?? currentNer) || null,
+      rentRollTotal: resolvedRentRollTotal || null,
       concessions: Number(monthEntry.concessions) || null
     },
     forwardLook: nextRows,
