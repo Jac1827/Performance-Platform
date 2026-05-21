@@ -20324,6 +20324,14 @@ async function getPhotoAssetDataForPptx(asset, cache = new Map()) {
   return data;
 }
 
+async function resolveDlrInvestorOverviewPhotoSrc(asset) {
+  const photo = normalizePhotoAsset(asset);
+  if (!photo) return "";
+  const resolvedData = await getPhotoAssetDataForPptx(photo);
+  if (resolvedData) return resolvedData;
+  return String(photo.previewSrc || photo.src || "");
+}
+
 function getMonthlyInvestorPresentationPrimaryPhotoAsset(report) {
   for (const detail of (report?.details ?? [])) {
     const photo = getDetailPhotoBank(detail)[0];
@@ -22230,6 +22238,7 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   const communityName = matchPropertyName(propName, { fallbackToCurrent: false }) || getProp().name;
   const normalizedMonthIdx = clampNumber(monthIdx, 0, 11);
   const record = getCommunityRecordForScope(communityName);
+  const primaryCommunityPhotoAsset = normalizeCommunityPhotoBank(record?.photoBank)[0] || null;
   const reportDetail = buildPortfolioDetailsForMonth(normalizedMonthIdx, { [communityName]: record })[0] || null;
   const reportSummary = reportDetail?.summary || {};
   const previousReportDetail = normalizedMonthIdx > 0
@@ -22487,6 +22496,8 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
     notes,
     editableNotes: resolvedNoteState.editorValues,
     marketing,
+    communityPhotoAsset: primaryCommunityPhotoAsset,
+    communityPhotoPreviewSrc: String(primaryCommunityPhotoAsset?.previewSrc || primaryCommunityPhotoAsset?.src || ""),
     sourceSummary: `${communityName} · ${reportPeriodLabel} · ${hasMatchingDailyBoxScore ? "today's leasing activity imported from box score with month-to-date metrics sourced from ATLAS RISE" : "generated from ATLAS RISE saved month-to-date data"}`,
     floorPlanVarianceRows: floorPlanVarianceData.rows,
     unmatchedMarketFloorPlans: floorPlanVarianceData.unmatchedRates,
@@ -22588,8 +22599,7 @@ function renderDashboardDlrActivityMiniTable(report) {
 
 function buildDlrInvestorOverviewDocument(report) {
   const netAbsorption = Number(report.monthAbsorption ?? ((Number(report.trafficMetrics?.moveIns) || 0) - (Number(report.trafficMetrics?.moveOuts) || 0))) || 0;
-  const communityRecord = getPropertyRecordForApply(report.communityName);
-  const communityPhoto = normalizeCommunityPhotoBank(communityRecord?.photoBank)[0]?.src || "";
+  const communityPhoto = String(report.communityPhotoSrc || report.communityPhotoPreviewSrc || "");
   const photoHeroHtml = communityPhoto ? `<div class="section dlr-photo-hero">
     <img src="${communityPhoto}" alt="" class="dlr-photo-hero-img">
     <div class="dlr-photo-hero-overlay"></div>
@@ -22597,6 +22607,7 @@ function buildDlrInvestorOverviewDocument(report) {
       <div class="dlr-photo-kicker">Community field view</div>
       <div class="dlr-photo-title">${escapeHtml(report.communityName)}</div>
       <div class="dlr-photo-sub">Used as a high-level visual anchor for the leasing report, with metrics kept front and center below.</div>
+      <div class="dlr-photo-pill">Investor Packet Visual</div>
     </div>
   </div>` : "";
   const heroCards = [
@@ -22651,6 +22662,7 @@ function buildDlrInvestorOverviewDocument(report) {
     .dlr-photo-kicker{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:#bfdbfe;margin-bottom:8px}
     .dlr-photo-title{font-size:30px;font-weight:800;margin-bottom:8px}
     .dlr-photo-sub{font-size:13px;line-height:1.6;color:#e2e8f0}
+    .dlr-photo-pill{display:inline-flex;align-items:center;gap:8px;margin-top:14px;padding:8px 12px;border-radius:999px;background:rgba(255,255,255,.14);border:1px solid rgba(191,219,254,.35);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#dbeafe}
     .grid-2{display:grid;grid-template-columns:1.1fr 0.9fr;gap:14px}
     .grid-equal{display:grid;grid-template-columns:1fr 1fr;gap:14px}
     @media print { body{padding:18px} .grid-2,.grid-equal{grid-template-columns:1fr 1fr} }
@@ -22733,10 +22745,11 @@ function buildDlrInvestorOverviewDocument(report) {
   </body></html>`;
 }
 
-function openDlrInvestorOverview(printImmediately = false) {
+async function openDlrInvestorOverview(printImmediately = false) {
   const report = buildDashboardDlrInvestorOverview();
   if (!report) return;
   if (!requireDlrDailyBoxScoreForReport(report)) return;
+  report.communityPhotoSrc = await resolveDlrInvestorOverviewPhotoSrc(report.communityPhotoAsset);
   const win = window.open("", "_blank");
   if (!win) return;
   const matchedCommunity = matchPropertyName(report.communityName, { fallbackToCurrent: false }) || report.communityName;
@@ -22761,10 +22774,11 @@ function openDlrInvestorOverview(printImmediately = false) {
   }
 }
 
-function downloadDlrInvestorOverviewHtml() {
+async function downloadDlrInvestorOverviewHtml() {
   const report = buildDashboardDlrInvestorOverview();
   if (!report) return;
   if (!requireDlrDailyBoxScoreForReport(report)) return;
+  report.communityPhotoSrc = await resolveDlrInvestorOverviewPhotoSrc(report.communityPhotoAsset);
   const matchedCommunity = matchPropertyName(report.communityName, { fallbackToCurrent: false }) || report.communityName;
   const record = getPropertyRecordForApply(matchedCommunity);
   if (record) {
