@@ -134,10 +134,6 @@ function normalizeScope(scope) {
   return String(scope || "").trim() || "atlas_performance_v1";
 }
 
-function makeSyncKey(scope) {
-  return `shared-sync:${normalizeScope(scope)}`;
-}
-
 function makeSyncRecord({ scope, payload, source, updatedAt }) {
   return {
     scope: normalizeScope(scope),
@@ -151,44 +147,62 @@ async function handleSyncRequest(request, env) {
   const url = new URL(request.url);
   const scope = normalizeScope(url.searchParams.get("scope"));
 
-  if (request.method === "OPTIONS") {
-    return noContent();
+  if (!env.SYNC_STATE) {
+    return apiResponse({ ok: false, error: "Sync storage is not configured" }, { status: 503 });
   }
 
-  if (request.method === "GET") {
-    const raw = await env.SYNC_STATE.get(makeSyncKey(scope));
-    const record = raw ? JSON.parse(raw) : null;
-    return apiResponse({ ok: true, record });
+  const syncId = env.SYNC_STATE.idFromName(scope);
+  const syncObject = env.SYNC_STATE.get(syncId);
+  return syncObject.fetch(request);
+}
+
+export class PerformanceSyncState {
+  constructor(state) {
+    this.state = state;
   }
 
-  if (request.method === "POST") {
-    const body = await readJsonBody(request);
-    if (!body || typeof body !== "object") {
-      return apiResponse({ ok: false, error: "Invalid JSON body" }, { status: 400 });
+  async fetch(request) {
+    const url = new URL(request.url);
+    const scope = normalizeScope(url.searchParams.get("scope"));
+
+    if (request.method === "OPTIONS") {
+      return noContent();
     }
 
-    if (String(body.writeToken || "") !== SYNC_WRITE_TOKEN) {
-      return apiResponse({ ok: false, error: "Unauthorized" }, { status: 401 });
+    if (request.method === "GET") {
+      const record = (await this.state.storage.get("record")) || null;
+      return apiResponse({ ok: true, record });
     }
 
-    const record = makeSyncRecord({
-      scope: body.scope ?? scope,
-      payload: body.payload,
-      source: body.source,
-      updatedAt: body.updatedAt,
+    if (request.method === "POST") {
+      const body = await readJsonBody(request);
+      if (!body || typeof body !== "object") {
+        return apiResponse({ ok: false, error: "Invalid JSON body" }, { status: 400 });
+      }
+
+      if (String(body.writeToken || "") !== SYNC_WRITE_TOKEN) {
+        return apiResponse({ ok: false, error: "Unauthorized" }, { status: 401 });
+      }
+
+      const record = makeSyncRecord({
+        scope: body.scope ?? scope,
+        payload: body.payload,
+        source: body.source,
+        updatedAt: body.updatedAt,
+      });
+
+      await this.state.storage.put("record", record);
+      return apiResponse({ ok: true, record });
+    }
+
+    return new Response("Method Not Allowed", {
+      status: 405,
+      headers: {
+        allow: "GET, POST, OPTIONS",
+        "access-control-allow-origin": "*",
+      },
     });
-
-    await env.SYNC_STATE.put(makeSyncKey(record.scope), JSON.stringify(record));
-    return apiResponse({ ok: true, record });
   }
-
-  return new Response("Method Not Allowed", {
-    status: 405,
-    headers: {
-      allow: "GET, POST, OPTIONS",
-      "access-control-allow-origin": "*",
-    },
-  });
 }
 
 export default {
