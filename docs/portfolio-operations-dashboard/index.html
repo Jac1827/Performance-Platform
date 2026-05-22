@@ -934,7 +934,17 @@ const scoutAssistantState = {
 };
 const PORTFOLIO_SCOPE_LABEL = "ATLAS RISE Portfolio";
 const ATLAS_COMMUNITY_ID_ALIASES = {
-  STA: "St Augustine"
+  BAR: "Bartram Park",
+  BAY: "Baymeadows",
+  CIT: "Citrus Ridge",
+  DOR: "Doro",
+  FLO: "Florence Villa",
+  GKP: "Glen Kernan Park",
+  NOC: "Nocatee",
+  SER: "Sereno",
+  STA: "St Augustine",
+  SUT: "Sutton House",
+  VIE: "Viera"
 };
 const WEEKLY_SNAPSHOT_STORAGE_KEY = "rise_weekly_portfolio_snapshot_v1";
 const OPS_GLOBAL_STORAGE_KEY = "rise_ops_global_v1";
@@ -24375,13 +24385,35 @@ function normalizeRonaldoBackfillNumber(value) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+function getKnownAtlasCommunityName(value = "") {
+  const cleaned = normalizeAtlasWorkbookText(value);
+  if (!cleaned) return "";
+  const candidates = [ATLAS_COMMUNITY_ID_ALIASES[cleaned.toUpperCase()], cleaned].filter(Boolean);
+  for (const candidate of candidates) {
+    const matched = matchPropertyName(candidate, { fallbackToCurrent: false });
+    if (matched && getAllCommunityNames().some(name => name === matched)) return matched;
+  }
+  return "";
+}
+
+function getRonaldoDefaultCommunityForTarget(target = {}) {
+  return getKnownAtlasCommunityName(target.community) || (isPortfolioWorkspaceSelected() ? "" : getProp().name);
+}
+
+function getRonaldoAggregateTarget(target = {}, sourceLabel = "") {
+  const community = getKnownAtlasCommunityName(target.community)
+    || getKnownAtlasCommunityName(sourceLabel)
+    || getRonaldoDefaultCommunityForTarget(target);
+  return community ? { ...target, community } : { ...target };
+}
+
 function getRonaldoGeneratorSheetKind(name) {
   const key = normalizeAtlasColumnKey(name);
   if (!key) return null;
   if (key.includes("monthly_upload")) return "monthly_upload";
   if (key.includes("availability")) return "availability";
   if (key.includes("lead_activity") || (key.includes("lead") && key.includes("activity"))) return "lead_activity";
-  if (key.includes("lead_conversions") || key.includes("conversion")) return "lead_conversions";
+  if (key.includes("lead_conversions") || key.includes("application_monthly") || key.includes("application") || key.includes("conversion")) return "lead_conversions";
   if (key.includes("make_ready")) return "make_ready_status";
   if (key.includes("property_pulse") || key.includes("pulse")) return "property_pulse";
   if (key.includes("community_master")) return "community_master";
@@ -24579,14 +24611,14 @@ function parseRonaldoLeadActivityRows(rows = [], target = {}) {
 
 function parseRonaldoLeadConversionRows(rows = [], target = {}) {
   const { indices } = getRonaldoGeneratorRowHeaders(rows);
-  const completed = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["application_completed"]));
-  const partial = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["application_partially_completed"]));
-  const completedCancelled = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["application_completed_cancelled"]));
-  const denied = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["application_denied"]));
-  const approved = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["application_approved"]));
-  const approvedCancelled = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["application_approved_cancelled"]));
-  const leaseCompleted = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["lease_completed"]));
-  const leaseApproved = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["lease_approved"]));
+  const completed = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["application_completed", "applications_completed"]));
+  const partial = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["application_partially_completed", "applications_partially_completed"]));
+  const completedCancelled = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["application_completed_cancelled", "applications_completed_cancelled"]));
+  const denied = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["application_denied", "applications_denied"]));
+  const approved = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["application_approved", "applications_approved"]));
+  const approvedCancelled = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["application_approved_cancelled", "applications_approved_cancelled"]));
+  const leaseCompleted = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["lease_completed", "lease_conversions_completed"]));
+  const leaseApproved = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["lease_approved", "lease_conversions_approved"]));
   return makeRonaldoBackfillRow(target, {
     applications: Number.isFinite(completed) ? completed : "",
     applications_approved: approved ?? "",
@@ -24660,12 +24692,112 @@ function parseRonaldoGeneratorDetailRows(rows = [], kind, target = {}, sourceLab
   return row && hasRonaldoBackfillValues(row) ? row : null;
 }
 
+function getRonaldoRowCell(row = [], idx = -1) {
+  return Number.isInteger(idx) && idx >= 0 ? row[idx] : "";
+}
+
+function ronaldoRowsHaveCommunityRouting(rows = []) {
+  const { normalized } = getRonaldoGeneratorRowHeaders(rows);
+  const communityKeys = new Set([
+    "community_id",
+    "community_name",
+    "source_property_name",
+    "source_property",
+    "property_name",
+    "property",
+    "source_sheet"
+  ]);
+  return normalized.some(key => communityKeys.has(key));
+}
+
+function canRouteRonaldoGeneratorDetailRows(rows = [], target = {}, sourceLabel = "") {
+  return ronaldoRowsHaveCommunityRouting(rows)
+    || Boolean(getKnownAtlasCommunityName(sourceLabel))
+    || Boolean(getRonaldoDefaultCommunityForTarget(target));
+}
+
 function resolveRonaldoCommunityFromRow(row = {}, communityMap = {}, forcedTarget = {}) {
+  const forcedCommunity = getKnownAtlasCommunityName(forcedTarget.community);
+  if (forcedCommunity) return forcedCommunity;
   const communityId = String(row.community_id ?? "").trim();
   const communityNameRaw = String(row.community_name ?? "").trim();
   const mappedFromId = communityId ? (communityMap[communityId.toUpperCase()] || {}) : {};
-  return forcedTarget.community
-    || matchPropertyName(communityNameRaw || mappedFromId.name || mappedFromId.shortName || communityId, { fallbackToCurrent: false });
+  return getKnownAtlasCommunityName(communityNameRaw)
+    || getKnownAtlasCommunityName(mappedFromId.name)
+    || getKnownAtlasCommunityName(mappedFromId.shortName)
+    || getKnownAtlasCommunityName(communityId);
+}
+
+function processRonaldoGeneratorDetailRowsByCommunity(rows = [], kind, target = {}, sourceLabel = "", communityMap = {}) {
+  if (!Array.isArray(rows) || rows.length < 2) return [];
+  const dataRows = rows.filter(row => Array.isArray(row) && row.some(cell => String(cell ?? "").trim() !== ""));
+  if (dataRows.length < 2) return [];
+  const { headerRow, indices } = getRonaldoGeneratorRowHeaders(dataRows);
+  const communityIdIdx = findRonaldoHeaderIndex(indices, ["community_id"]);
+  const communityNameIdx = findRonaldoHeaderIndex(indices, ["community_name", "source_property_name", "source_property", "property_name", "property", "source_sheet"]);
+  const reportMonthIdx = findRonaldoHeaderIndex(indices, ["report_month", "reporting_month", "period", "month"]);
+  const sourceCommunity = getKnownAtlasCommunityName(sourceLabel);
+  const defaultCommunity = getRonaldoDefaultCommunityForTarget(target);
+  const hasCommunityRouting = ronaldoRowsHaveCommunityRouting(dataRows);
+  if (!hasCommunityRouting && !sourceCommunity && !defaultCommunity) return [];
+  const grouped = new Map();
+  dataRows.slice(1).forEach(row => {
+    if (!Array.isArray(row) || !row.some(cell => String(cell ?? "").trim() !== "")) return;
+    const rowMarker = normalizeAtlasColumnKey(row[0]);
+    if (rowMarker === "report_month" || rowMarker === "community_id") return;
+    const mappedName = resolveRonaldoCommunityFromRow({
+      community_id: getRonaldoRowCell(row, communityIdIdx),
+      community_name: getRonaldoRowCell(row, communityNameIdx)
+    }, communityMap, target) || sourceCommunity || defaultCommunity;
+    const community = getKnownAtlasCommunityName(mappedName);
+    if (!community) return;
+    const reportMonthRaw = getRonaldoRowCell(row, reportMonthIdx);
+    const detectedMonthIdx = parseAtlasMonthIndex(reportMonthRaw);
+    const detectedYear = inferAtlasWorkbookYear(reportMonthRaw);
+    const monthIdx = target.monthIdx ?? (importRoutingMode === "force_override"
+      ? getImportTargetMonth()
+      : (detectedMonthIdx ?? getImportTargetMonth()));
+    if (monthIdx == null || monthIdx < 0 || monthIdx > 11) return;
+    const year = target.year ?? detectedYear ?? new Date().getFullYear();
+    const key = `${community}::${monthIdx}::${year}`;
+    const group = grouped.get(key) || {
+      community,
+      monthIdx,
+      year,
+      rows: [headerRow]
+    };
+    group.rows.push(row);
+    grouped.set(key, group);
+  });
+  return Array.from(grouped.values())
+    .map(group => parseRonaldoGeneratorDetailRows(group.rows, kind, {
+      ...target,
+      community: group.community,
+      monthIdx: group.monthIdx,
+      year: group.year
+    }, sourceLabel))
+    .filter(Boolean);
+}
+
+function mapRonaldoGeneratorDetailRows(rows = [], kind, target = {}, sourceLabel = "", notes = [], communityMap = {}) {
+  const mappedRows = processRonaldoGeneratorDetailRowsByCommunity(rows, kind, target, sourceLabel, communityMap);
+  const kindLabel = String(kind || "").replace(/_/g, " ");
+  if (mappedRows.length > 0) {
+    if (notes) notes.push(`✅ ${sourceLabel} mapped as ${kindLabel} across ${mappedRows.length} community-month row${mappedRows.length === 1 ? "" : "s"}.`);
+    return mappedRows;
+  }
+  if (!canRouteRonaldoGeneratorDetailRows(rows, target, sourceLabel)) {
+    if (notes) notes.push(`⚠️ ${sourceLabel} skipped: it has no Community_ID / Community_Name route while portfolio scope is selected.`);
+    return [];
+  }
+  const aggregateTarget = getRonaldoAggregateTarget(target, sourceLabel);
+  if (!aggregateTarget.community) return [];
+  const row = parseRonaldoGeneratorDetailRows(rows, kind, aggregateTarget, sourceLabel);
+  if (row) {
+    if (notes) notes.push(`✅ ${sourceLabel} mapped as ${kindLabel}.`);
+    return [row];
+  }
+  return [];
 }
 
 function buildRonaldoLeadSourceMonthRow(row = {}, target = {}) {
@@ -24956,7 +25088,7 @@ async function processRonaldoMonthlyReferenceFiles(files, options = {}) {
   const accepted = Array.from(files || []);
   if (accepted.length === 0) return { rows: [], notes: [] };
   const forcedTarget = getForcedImportTarget(options);
-  const targetCommunity = forcedTarget.community || getProp().name;
+  const targetCommunity = getRonaldoDefaultCommunityForTarget(forcedTarget);
   const notes = [`📎 Received ${accepted.length} supporting generator / box-score file${accepted.length === 1 ? "" : "s"} for validation.`];
   const rows = [];
   for (const file of accepted) {
@@ -24990,6 +25122,10 @@ async function processRonaldoMonthlyReferenceFiles(files, options = {}) {
       if (lowerName.endsWith(".pdf")) {
         const snapshot = await parseDailyBoxScoreFile(file);
         if (snapshot && hasDlrBoxScoreSnapshot(snapshot)) {
+          if (!targetCommunity) {
+            notes.push(`⚠️ ${file.name} has no portfolio-safe community route. Select a community first or use a file that includes Community_ID / Community_Name.`);
+            continue;
+          }
           const pdfRow = makeRonaldoBackfillRow(forcedTarget, {
             property: targetCommunity,
             guest_cards: snapshot.guestCards ?? snapshot.newLeads ?? "",
@@ -25037,17 +25173,12 @@ async function processRonaldoMonthlyReferenceFiles(files, options = {}) {
         if (kind && kind !== "monthly_upload" && kind !== "community_master") {
           const csvSheet = workbook.Sheets[sheetNames[0]];
           const csvRows = XLSX.utils.sheet_to_json(csvSheet, { header: 1, defval: "", raw: false });
-          const row = parseRonaldoGeneratorDetailRows(csvRows, kind, forcedTarget, file.name);
-          if (row) fileRows.push(row);
+          fileRows.push(...mapRonaldoGeneratorDetailRows(csvRows, kind, forcedTarget, file.name, notes, {}));
         }
       } else {
         for (const { sheetName, kind } of detailSheetKinds) {
           const sheetRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "", raw: false });
-          const row = parseRonaldoGeneratorDetailRows(sheetRows, kind, forcedTarget, `${file.name} · ${sheetName}`);
-          if (row) {
-            fileRows.push(row);
-            notes.push(`✅ ${file.name} · ${sheetName} mapped as ${kind.replace(/_/g, " ")}.`);
-          }
+          fileRows.push(...mapRonaldoGeneratorDetailRows(sheetRows, kind, forcedTarget, `${file.name} · ${sheetName}`, notes, {}));
         }
       }
       if (fileRows.length === 0) {
@@ -25055,11 +25186,7 @@ async function processRonaldoMonthlyReferenceFiles(files, options = {}) {
           const sheetRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "", raw: false });
           const inferredKind = detectRonaldoGeneratorSheetKindFromRows(sheetRows);
           if (!inferredKind || inferredKind === "monthly_upload" || inferredKind === "community_master") continue;
-          const row = parseRonaldoGeneratorDetailRows(sheetRows, inferredKind, forcedTarget, `${file.name} · ${sheetName}`);
-          if (row) {
-            fileRows.push(row);
-            notes.push(`✅ ${file.name} · ${sheetName} inferred as ${inferredKind.replace(/_/g, " ")}.`);
-          }
+          fileRows.push(...mapRonaldoGeneratorDetailRows(sheetRows, inferredKind, forcedTarget, `${file.name} · ${sheetName}`, notes, {}));
         }
       }
       if (fileRows.length === 0) {
@@ -26148,7 +26275,7 @@ async function handleCSVFile(file, options = {}) {
         renewalUndecided: ["renewal_undecided","undecided","pending","pending_m2m","undecided_m2m"],
         renewalEarlyTermination: ["renewal_early_termination","early_termination","early_terminations","early_term"],
         month: ["month","period","date","reporting_month"],
-        property: ["property","property_name","community","community_name","site"],
+        property: ["property","property_name","community","community_name","community_id","site"],
       };
       const findVal = (row, keys) => { for (const k of keys) { if (row[k] !== undefined && row[k] !== "") return row[k]; } return null; };
       const log = [];
@@ -26163,7 +26290,7 @@ async function handleCSVFile(file, options = {}) {
           ? getImportTargetMonth()
           : (parseMonthIndexValue(monthStr) ?? getImportTargetMonth()));
         const rawProperty = findVal(row, fieldMap.property);
-        const propertyName = forcedTarget.community || matchPropertyName(rawProperty, { fallbackToCurrent: false });
+        const propertyName = forcedTarget.community || getKnownAtlasCommunityName(rawProperty) || matchPropertyName(rawProperty, { fallbackToCurrent: false });
         if (!propertyName) {
           if (monthIdx >= 0) log.push(`Skipped ${MONTHS[monthIdx]} row: missing property/community value`);
           else log.push("Skipped row: missing property/community value");
