@@ -218,7 +218,16 @@ export default {
       });
     }
 
-    if (url.pathname === "/api/health" || url.pathname === "/api/state") {
+    if (url.pathname === "/api/health") {
+      return apiResponse({
+        ok: true,
+        service: "rise-performance-platform-site",
+        storage: Boolean(env.SYNC_STATE),
+        time: new Date().toISOString(),
+      });
+    }
+
+    if (url.pathname === "/api/state") {
       return handleSyncRequest(request, env);
     }
 
