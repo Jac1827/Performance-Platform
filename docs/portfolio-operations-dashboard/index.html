@@ -921,6 +921,35 @@ const PORTFOLIO_SCOPE_LABEL = "ATLAS RISE Portfolio";
 const ATLAS_COMMUNITY_ID_ALIASES = {
   STA: "St Augustine"
 };
+const RONALDO_PORTFOLIO_BOX_SCORE_COMMUNITY_ORDER = [
+  "Glen Kernan Park",
+  "Nocatee",
+  "Bartram Park",
+  "Baymeadows",
+  "Citrus Ridge",
+  "Doro",
+  "Florence Villa",
+  "Sereno",
+  "St Augustine",
+  "Viera"
+];
+const RONALDO_PORTFOLIO_BOX_SCORE_EXPECTED_UNITS = {
+  "Glen Kernan Park": 308,
+  Nocatee: 178,
+  "Bartram Park": 297,
+  Baymeadows: 331,
+  "Citrus Ridge": 222,
+  Doro: 247,
+  "Florence Villa": 224,
+  Sereno: 320,
+  "St Augustine": 272,
+  Viera: 166
+};
+const RONALDO_PORTFOLIO_BOX_SCORE_ROW_COUNTS = {
+  lead_activity: [6, 11, 20, 13, 3, 16, 3, 10, 3, 10],
+  lead_conversions: [4, 6, 14, 11, 3, 10, 2, 6, 2, 6],
+  make_ready_status: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+};
 const WEEKLY_SNAPSHOT_STORAGE_KEY = "rise_weekly_portfolio_snapshot_v1";
 const OPS_GLOBAL_STORAGE_KEY = "rise_ops_global_v1";
 const OPS_WORKSPACE_CONTEXT_KEY = "rise_ops_workspace_context_v1";
@@ -24027,15 +24056,30 @@ function handleDrop(e) {
 }
 
 async function processImportFiles(files) {
+  const ronaldoReferenceFiles = [];
   for (const file of files) {
     const lowerName = file.name.toLowerCase();
     if (file.type === "application/pdf" || lowerName.endsWith(".pdf")) {
       await handlePDF(file);
     } else if (file.type === "text/csv" || lowerName.endsWith(".csv")) {
-      await handleCSVFile(file);
+      const generatorKind = getRonaldoGeneratorSheetKind(file.name);
+      if (generatorKind && generatorKind !== "monthly_upload" && generatorKind !== "community_master") {
+        ronaldoReferenceFiles.push(file);
+      } else {
+        await handleCSVFile(file);
+      }
     } else if (lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls") || lowerName.endsWith(".xlsm")) {
       await handleAtlasAdvancedWorkbook(file);
     }
+  }
+  if (ronaldoReferenceFiles.length > 0) {
+    const existingLog = Array.isArray(csvLog) ? [...csvLog] : [];
+    const referenceResult = await processRonaldoMonthlyReferenceFiles(ronaldoReferenceFiles, {
+      forcedMonthIdx: getImportTargetMonth(),
+      forcedYear: new Date().getFullYear()
+    });
+    csvLog = [...referenceResult.notes, ...csvLog, ...existingLog];
+    renderTab();
   }
 }
 
@@ -24129,6 +24173,18 @@ function findRonaldoHeaderIndex(indices, aliases = [], occurrence = 0) {
   return uniqueMatches[occurrence] ?? -1;
 }
 
+function findExactRonaldoHeaderIndex(indices, aliases = [], occurrence = 0) {
+  const searchAliases = Array.isArray(aliases) ? aliases : [aliases];
+  const flattened = searchAliases.map(alias => normalizeAtlasColumnKey(alias)).filter(Boolean);
+  const allMatches = [];
+  Object.entries(indices ?? {}).forEach(([key, positions]) => {
+    if (!flattened.includes(key)) return;
+    allMatches.push(...positions);
+  });
+  const uniqueMatches = [...new Set(allMatches)].sort((a, b) => a - b);
+  return uniqueMatches[occurrence] ?? -1;
+}
+
 function sumRonaldoColumn(rows = [], idx = -1) {
   if (!Number.isInteger(idx) || idx < 0) return null;
   let total = 0;
@@ -24198,10 +24254,149 @@ function hasRonaldoBackfillValues(row = {}) {
   return Object.entries(row).some(([key, value]) => key !== "property" && key !== "month" && value !== "" && value !== null && value !== undefined);
 }
 
+function getRonaldoPortfolioBoxScoreCommunityOrder() {
+  const available = new Set(getAllCommunityNames());
+  return RONALDO_PORTFOLIO_BOX_SCORE_COMMUNITY_ORDER
+    .map(name => matchPropertyName(name, { fallbackToCurrent: false }))
+    .filter(name => name && available.has(name));
+}
+
+function getRonaldoPortfolioExpectedUnits(communityName) {
+  const exact = RONALDO_PORTFOLIO_BOX_SCORE_EXPECTED_UNITS[communityName];
+  if (Number.isFinite(exact) && exact > 0) return exact;
+  const record = normalizeSavedCommunityRecord(communityName, savedData[communityName]);
+  const prop = getPropertyByName(communityName);
+  const totalUnits = getTotalUnitsFor(prop, record.customUnits);
+  return Number.isFinite(totalUnits) && totalUnits > 0 ? Math.round(totalUnits) : null;
+}
+
+function buildRonaldoPortfolioSplitRows(headerRow, dataRows = []) {
+  return [headerRow, ...dataRows];
+}
+
+function splitRonaldoRowsByExpectedUnits(rows = []) {
+  const dataRows = rows.filter(row => Array.isArray(row) && row.some(cell => String(cell ?? "").trim() !== ""));
+  if (dataRows.length < 2) return [];
+  const { headerRow, indices } = getRonaldoGeneratorRowHeaders(dataRows);
+  const unitsIdx = findExactRonaldoHeaderIndex(indices, ["units"], 0);
+  if (unitsIdx < 0) return [];
+  const order = getRonaldoPortfolioBoxScoreCommunityOrder();
+  if (order.length !== RONALDO_PORTFOLIO_BOX_SCORE_COMMUNITY_ORDER.length) return [];
+  const groups = [];
+  let cursor = 1;
+  for (const community of order) {
+    const expectedUnits = getRonaldoPortfolioExpectedUnits(community);
+    if (!Number.isFinite(expectedUnits) || expectedUnits <= 0) return [];
+    const groupRows = [];
+    let totalUnits = 0;
+    while (cursor < dataRows.length && totalUnits < expectedUnits) {
+      const row = dataRows[cursor];
+      const units = normalizeRonaldoBackfillNumber(row[unitsIdx]);
+      if (!Number.isFinite(units)) return [];
+      groupRows.push(row);
+      totalUnits += units;
+      cursor += 1;
+    }
+    if (Math.round(totalUnits) !== Math.round(expectedUnits)) return [];
+    groups.push({ community, rows: buildRonaldoPortfolioSplitRows(headerRow, groupRows) });
+  }
+  return cursor === dataRows.length ? groups : [];
+}
+
+function splitRonaldoRowsByUnknownSentinel(rows = [], kind = "") {
+  const dataRows = rows.filter(row => Array.isArray(row) && row.some(cell => String(cell ?? "").trim() !== ""));
+  if (dataRows.length < 2) return [];
+  const { headerRow, indices } = getRonaldoGeneratorRowHeaders(dataRows);
+  const unitTypeIdx = findExactRonaldoHeaderIndex(indices, ["unit_type"], 0);
+  if (unitTypeIdx < 0) return [];
+  const order = getRonaldoPortfolioBoxScoreCommunityOrder();
+  if (order.length !== RONALDO_PORTFOLIO_BOX_SCORE_COMMUNITY_ORDER.length) return [];
+  const groups = [];
+  let start = 1;
+  for (let idx = 1; idx < dataRows.length; idx += 1) {
+    const unitType = String(dataRows[idx]?.[unitTypeIdx] ?? "").trim().toLowerCase();
+    if (unitType !== "unknown") continue;
+    groups.push({
+      community: order[groups.length],
+      rows: buildRonaldoPortfolioSplitRows(headerRow, dataRows.slice(start, idx + 1))
+    });
+    start = idx + 1;
+  }
+  if (groups.length === order.length && start === dataRows.length) return groups;
+  return splitRonaldoRowsByFixedCounts(dataRows, order, kind);
+}
+
+function splitRonaldoRowsByFixedCounts(dataRows = [], order = [], kind = "") {
+  const counts = RONALDO_PORTFOLIO_BOX_SCORE_ROW_COUNTS[kind] || [];
+  if (!Array.isArray(counts) || counts.length === 0 || counts.length !== order.length || dataRows.length < 2) return [];
+  const dataCount = dataRows.length - 1;
+  const expectedCount = counts.reduce((sum, count) => sum + count, 0);
+  if (dataCount !== expectedCount) return [];
+  const headerRow = dataRows[0];
+  const groups = [];
+  let cursor = 1;
+  counts.forEach((count, idx) => {
+    groups.push({
+      community: order[idx],
+      rows: buildRonaldoPortfolioSplitRows(headerRow, dataRows.slice(cursor, cursor + count))
+    });
+    cursor += count;
+  });
+  return groups;
+}
+
+function splitRonaldoPortfolioGeneratorRows(rows = [], kind = "", target = {}) {
+  if (target.community) return [];
+  if (kind === "availability" || kind === "property_pulse") return splitRonaldoRowsByExpectedUnits(rows);
+  const dataRows = rows.filter(row => Array.isArray(row) && row.some(cell => String(cell ?? "").trim() !== ""));
+  const order = getRonaldoPortfolioBoxScoreCommunityOrder();
+  if (order.length !== RONALDO_PORTFOLIO_BOX_SCORE_COMMUNITY_ORDER.length || dataRows.length < 2) return [];
+  if (kind === "lead_activity") return splitRonaldoRowsByUnknownSentinel(dataRows, kind);
+  if (kind === "lead_conversions" || kind === "make_ready_status") return splitRonaldoRowsByFixedCounts(dataRows, order, kind);
+  return [];
+}
+
+function isLikelyRonaldoPortfolioGeneratorRows(rows = [], kind = "", target = {}) {
+  if (target.community) return false;
+  const dataRows = rows.filter(row => Array.isArray(row) && row.some(cell => String(cell ?? "").trim() !== ""));
+  if (dataRows.length < 2) return false;
+  const order = getRonaldoPortfolioBoxScoreCommunityOrder();
+  if (order.length !== RONALDO_PORTFOLIO_BOX_SCORE_COMMUNITY_ORDER.length) return false;
+  if (kind === "availability" || kind === "property_pulse") {
+    const { indices } = getRonaldoGeneratorRowHeaders(dataRows);
+    const unitsIdx = findExactRonaldoHeaderIndex(indices, ["units"], 0);
+    if (unitsIdx < 0) return false;
+    const exportedUnits = sumRonaldoColumn(dataRows, unitsIdx);
+    const expectedUnits = order
+      .map(getRonaldoPortfolioExpectedUnits)
+      .filter(value => Number.isFinite(value))
+      .reduce((sum, value) => sum + value, 0);
+    return Math.round(exportedUnits ?? 0) === Math.round(expectedUnits);
+  }
+  const fixedCounts = RONALDO_PORTFOLIO_BOX_SCORE_ROW_COUNTS[kind] || [];
+  const fixedCountTotal = fixedCounts.reduce((sum, count) => sum + count, 0);
+  if (fixedCountTotal > 0 && fixedCountTotal === dataRows.length - 1) return true;
+  if (kind === "lead_activity") {
+    const { indices } = getRonaldoGeneratorRowHeaders(dataRows);
+    const unitTypeIdx = findExactRonaldoHeaderIndex(indices, ["unit_type"], 0);
+    if (unitTypeIdx < 0) return false;
+    const unknownRows = dataRows.slice(1).filter(row => String(row[unitTypeIdx] ?? "").trim().toLowerCase() === "unknown").length;
+    return unknownRows >= order.length;
+  }
+  return false;
+}
+
+function parseRonaldoPortfolioGeneratorRows(rows = [], kind = "", target = {}) {
+  return splitRonaldoPortfolioGeneratorRows(rows, kind, target)
+    .map(group => parseRonaldoGeneratorDetailRows(group.rows, kind, { ...target, community: group.community }))
+    .filter(row => row && hasRonaldoBackfillValues(row));
+}
+
 function parseRonaldoAvailabilityRows(rows = [], target = {}) {
   const { indices } = getRonaldoGeneratorRowHeaders(rows);
   const totalUnitsIdx = findRonaldoHeaderIndex(indices, ["units"]);
   const rentableUnitsIdx = findRonaldoHeaderIndex(indices, ["rentable_units"]);
+  const leasedUnitsIdx = findExactRonaldoHeaderIndex(indices, ["leased_units", "total_leased", "units_leased", "leased_count"]);
   const occupiedCountIdx = findRonaldoHeaderIndex(indices, ["occupied"], 0);
   const vacantCountIdx = findRonaldoHeaderIndex(indices, ["vacant"], 0);
   const availableCountIdx = findRonaldoHeaderIndex(indices, ["available"], 0);
@@ -24219,11 +24414,11 @@ function parseRonaldoAvailabilityRows(rows = [], target = {}) {
   const occupiedNoNotice = sumRonaldoColumn(rows, occupiedNoNoticeIdx);
   const noticeRented = sumRonaldoColumn(rows, noticeRentedIdx);
   const vacantRented = sumRonaldoColumn(rows, vacantRentedIdx);
+  const leased = sumRonaldoColumn(rows, leasedUnitsIdx);
   const marketRent = weightedAverageRonaldoColumn(rows, avgBudgetRentIdx, rentableUnitsIdx) ?? weightedAverageRonaldoColumn(rows, avgBudgetRentIdx, totalUnitsIdx);
   const budgetRent = weightedAverageRonaldoColumn(rows, avgScheduledRentIdx, rentableUnitsIdx) ?? weightedAverageRonaldoColumn(rows, avgScheduledRentIdx, totalUnitsIdx);
   const ner = weightedAverageRonaldoColumn(rows, avgNetEffRentIdx, rentableUnitsIdx) ?? weightedAverageRonaldoColumn(rows, avgNetEffRentIdx, totalUnitsIdx);
   const occupiedPct = Number.isFinite(occupied) && Number.isFinite(rentableUnits) && rentableUnits > 0 ? (occupied / rentableUnits) * 100 : null;
-  const leased = [occupied, noticeRented, vacantRented].every(value => Number.isFinite(value)) ? occupied + noticeRented + vacantRented : null;
   const concessions = Number.isFinite(budgetRent) && Number.isFinite(ner) ? Math.max(0, budgetRent - ner) : null;
   const budgetNer = Number.isFinite(ner) ? ner : null;
   const rentRollTotal = Number.isFinite(budgetRent) && Number.isFinite(rentableUnits) ? budgetRent * rentableUnits : null;
@@ -24310,7 +24505,6 @@ function parseRonaldoPropertyPulseRows(rows = [], target = {}) {
   const renewalTransfers = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["renewal_transfers"]));
   const skips = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["skips"]));
   const evictions = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["evictions"]));
-  const leased = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["leased"]));
   const mtm = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["mtm"]));
   const mtmConversions = sumRonaldoColumn(rows, findRonaldoHeaderIndex(indices, ["mtm_conversions"]));
   return makeRonaldoBackfillRow(target, {
@@ -24324,7 +24518,6 @@ function parseRonaldoPropertyPulseRows(rows = [], target = {}) {
     renewal_undecided: [mtm, mtmConversions].some(value => Number.isFinite(value))
       ? [mtm, mtmConversions].filter(value => Number.isFinite(value)).reduce((sum, value) => sum + value, 0)
       : "",
-    ...(leased !== null ? { leased } : {}),
     ...(skips !== null || evictions !== null ? { renewal_early_termination: [skips, evictions].filter(value => Number.isFinite(value)).reduce((sum, value) => sum + value, 0) } : {})
   });
 }
@@ -24736,16 +24929,32 @@ async function processRonaldoMonthlyReferenceFiles(files, options = {}) {
         if (kind && kind !== "monthly_upload" && kind !== "community_master") {
           const csvSheet = workbook.Sheets[sheetNames[0]];
           const csvRows = XLSX.utils.sheet_to_json(csvSheet, { header: 1, defval: "", raw: false });
-          const row = parseRonaldoGeneratorDetailRows(csvRows, kind, forcedTarget, file.name);
-          if (row) fileRows.push(row);
+          const portfolioRows = parseRonaldoPortfolioGeneratorRows(csvRows, kind, forcedTarget);
+          if (portfolioRows.length > 0) {
+            fileRows.push(...portfolioRows);
+            notes.push(`✅ ${file.name} split into ${portfolioRows.length} community ${kind.replace(/_/g, " ")} row${portfolioRows.length === 1 ? "" : "s"}.`);
+          } else if (isLikelyRonaldoPortfolioGeneratorRows(csvRows, kind, forcedTarget)) {
+            notes.push(`⚠️ ${file.name} looks like a portfolio ${kind.replace(/_/g, " ")} export, but its row blocks did not match the expected community order. No single-community fallback was applied.`);
+          } else {
+            const row = parseRonaldoGeneratorDetailRows(csvRows, kind, forcedTarget, file.name);
+            if (row) fileRows.push(row);
+          }
         }
       } else {
         for (const { sheetName, kind } of detailSheetKinds) {
           const sheetRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "", raw: false });
-          const row = parseRonaldoGeneratorDetailRows(sheetRows, kind, forcedTarget, `${file.name} · ${sheetName}`);
-          if (row) {
-            fileRows.push(row);
-            notes.push(`✅ ${file.name} · ${sheetName} mapped as ${kind.replace(/_/g, " ")}.`);
+          const portfolioRows = parseRonaldoPortfolioGeneratorRows(sheetRows, kind, forcedTarget);
+          if (portfolioRows.length > 0) {
+            fileRows.push(...portfolioRows);
+            notes.push(`✅ ${file.name} · ${sheetName} split into ${portfolioRows.length} community ${kind.replace(/_/g, " ")} row${portfolioRows.length === 1 ? "" : "s"}.`);
+          } else if (isLikelyRonaldoPortfolioGeneratorRows(sheetRows, kind, forcedTarget)) {
+            notes.push(`⚠️ ${file.name} · ${sheetName} looks like a portfolio ${kind.replace(/_/g, " ")} export, but its row blocks did not match the expected community order. No single-community fallback was applied.`);
+          } else {
+            const row = parseRonaldoGeneratorDetailRows(sheetRows, kind, forcedTarget, `${file.name} · ${sheetName}`);
+            if (row) {
+              fileRows.push(row);
+              notes.push(`✅ ${file.name} · ${sheetName} mapped as ${kind.replace(/_/g, " ")}.`);
+            }
           }
         }
       }
@@ -24754,10 +24963,18 @@ async function processRonaldoMonthlyReferenceFiles(files, options = {}) {
           const sheetRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "", raw: false });
           const inferredKind = detectRonaldoGeneratorSheetKindFromRows(sheetRows);
           if (!inferredKind || inferredKind === "monthly_upload" || inferredKind === "community_master") continue;
-          const row = parseRonaldoGeneratorDetailRows(sheetRows, inferredKind, forcedTarget, `${file.name} · ${sheetName}`);
-          if (row) {
-            fileRows.push(row);
-            notes.push(`✅ ${file.name} · ${sheetName} inferred as ${inferredKind.replace(/_/g, " ")}.`);
+          const portfolioRows = parseRonaldoPortfolioGeneratorRows(sheetRows, inferredKind, forcedTarget);
+          if (portfolioRows.length > 0) {
+            fileRows.push(...portfolioRows);
+            notes.push(`✅ ${file.name} · ${sheetName} inferred and split into ${portfolioRows.length} community ${inferredKind.replace(/_/g, " ")} row${portfolioRows.length === 1 ? "" : "s"}.`);
+          } else if (isLikelyRonaldoPortfolioGeneratorRows(sheetRows, inferredKind, forcedTarget)) {
+            notes.push(`⚠️ ${file.name} · ${sheetName} looks like a portfolio ${inferredKind.replace(/_/g, " ")} export, but its row blocks did not match the expected community order. No single-community fallback was applied.`);
+          } else {
+            const row = parseRonaldoGeneratorDetailRows(sheetRows, inferredKind, forcedTarget, `${file.name} · ${sheetName}`);
+            if (row) {
+              fileRows.push(row);
+              notes.push(`✅ ${file.name} · ${sheetName} inferred as ${inferredKind.replace(/_/g, " ")}.`);
+            }
           }
         }
       }
