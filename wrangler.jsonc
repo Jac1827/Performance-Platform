@@ -3,6 +3,11 @@
   "name": "rise-performance-platform-site",
   "main": "./src/worker.mjs",
   "compatibility_date": "2026-05-22",
+  "kv_namespaces": [
+    {
+      "binding": "SYNC_STATE"
+    }
+  ],
   "assets": {
     "directory": "./docs",
     "binding": "ASSETS",

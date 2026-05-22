@@ -29,6 +29,8 @@ const BUILD_INFO = {
   runtime: "cloudflare-workers",
 };
 
+const SYNC_WRITE_TOKEN = "atlas-rise-shared-sync-2026";
+
 function json(data, init = {}) {
   const headers = new Headers(init.headers);
   if (!headers.has("content-type")) {
@@ -42,8 +44,28 @@ function json(data, init = {}) {
   });
 }
 
+function apiResponse(data, init = {}) {
+  const response = json(data, init);
+  const headers = new Headers(response.headers);
+  headers.set("access-control-allow-origin", "*");
+  headers.set("access-control-allow-methods", "GET,POST,OPTIONS");
+  headers.set("access-control-allow-headers", "content-type, authorization");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 function noContent() {
-  return new Response(null, { status: 204 });
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET,POST,OPTIONS",
+      "access-control-allow-headers": "content-type, authorization",
+    },
+  });
 }
 
 function withCommonHeaders(response) {
@@ -100,9 +122,91 @@ async function fetchAsset(request, env) {
   return null;
 }
 
+async function readJsonBody(request) {
+  try {
+    return await request.json();
+  } catch {
+    return null;
+  }
+}
+
+function normalizeScope(scope) {
+  return String(scope || "").trim() || "atlas_performance_v1";
+}
+
+function makeSyncKey(scope) {
+  return `shared-sync:${normalizeScope(scope)}`;
+}
+
+function makeSyncRecord({ scope, payload, source, updatedAt }) {
+  return {
+    scope: normalizeScope(scope),
+    source: String(source || "manual"),
+    updatedAt: String(updatedAt || new Date().toISOString()),
+    payload: payload && typeof payload === "object" ? payload : { keys: {} },
+  };
+}
+
+async function handleSyncRequest(request, env) {
+  const url = new URL(request.url);
+  const scope = normalizeScope(url.searchParams.get("scope"));
+
+  if (request.method === "OPTIONS") {
+    return noContent();
+  }
+
+  if (request.method === "GET") {
+    const raw = await env.SYNC_STATE.get(makeSyncKey(scope));
+    const record = raw ? JSON.parse(raw) : null;
+    return apiResponse({ ok: true, record });
+  }
+
+  if (request.method === "POST") {
+    const body = await readJsonBody(request);
+    if (!body || typeof body !== "object") {
+      return apiResponse({ ok: false, error: "Invalid JSON body" }, { status: 400 });
+    }
+
+    if (String(body.writeToken || "") !== SYNC_WRITE_TOKEN) {
+      return apiResponse({ ok: false, error: "Unauthorized" }, { status: 401 });
+    }
+
+    const record = makeSyncRecord({
+      scope: body.scope ?? scope,
+      payload: body.payload,
+      source: body.source,
+      updatedAt: body.updatedAt,
+    });
+
+    await env.SYNC_STATE.put(makeSyncKey(record.scope), JSON.stringify(record));
+    return apiResponse({ ok: true, record });
+  }
+
+  return new Response("Method Not Allowed", {
+    status: 405,
+    headers: {
+      allow: "GET, POST, OPTIONS",
+      "access-control-allow-origin": "*",
+    },
+  });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    if (url.pathname === "/__health" || url.pathname === "/api/status") {
+      return apiResponse({
+        ok: true,
+        service: "rise-performance-platform-site",
+        time: new Date().toISOString(),
+        routes: SITE_ROUTES.length,
+      });
+    }
+
+    if (url.pathname === "/api/health" || url.pathname === "/api/state") {
+      return handleSyncRequest(request, env);
+    }
 
     if (request.method === "OPTIONS") {
       return noContent();
@@ -117,24 +221,15 @@ export default {
       });
     }
 
-    if (url.pathname === "/__health" || url.pathname === "/api/status") {
-      return json({
-        ok: true,
-        service: "rise-performance-platform-site",
-        time: new Date().toISOString(),
-        routes: SITE_ROUTES.length,
-      });
-    }
-
     if (url.pathname === "/api/site-map" || url.pathname === "/api/routes") {
-      return json({
+      return apiResponse({
         service: "rise-performance-platform-site",
         routes: SITE_ROUTES,
       });
     }
 
     if (url.pathname === "/api/build-info") {
-      return json({
+      return apiResponse({
         service: "rise-performance-platform-site",
         build: BUILD_INFO,
       });
@@ -150,6 +245,7 @@ export default {
       headers: {
         "content-type": "text/plain; charset=utf-8",
         "cache-control": "no-store",
+        "access-control-allow-origin": "*",
       },
     });
   },
