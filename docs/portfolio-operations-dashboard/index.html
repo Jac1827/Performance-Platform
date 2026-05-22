@@ -4033,6 +4033,14 @@ function getLeadSourceTotal(monthEntry = {}) {
   return explicitGuestCards;
 }
 
+function inferPendingDecisionApplications(applications = 0, approvals = 0, denials = 0, cancelled = 0, explicitPending = 0) {
+  const applicationTotal = Math.max(0, Number(applications) || 0);
+  const knownDecisions = [approvals, denials, cancelled].reduce((sum, value) => sum + Math.max(0, Number(value) || 0), 0);
+  const statedPending = Math.max(0, Number(explicitPending) || 0);
+  const unclassifiedApplications = Math.max(applicationTotal - knownDecisions, 0);
+  return Math.max(statedPending, unclassifiedApplications);
+}
+
 function getApplicationDecisionMetrics(monthEntry = {}) {
   const applications = Math.max(0, Number(monthEntry.applications) || 0);
   const approvals = Math.max(0, Number(getApplicationsApprovedCount(monthEntry)) || 0);
@@ -4042,11 +4050,10 @@ function getApplicationDecisionMetrics(monthEntry = {}) {
   const explicitDenials = Math.max(0, Number(monthEntry.denied) || 0);
   const explicitCancelled = Math.max(0, Number(monthEntry.cancelled) || 0);
   const explicitPending = Math.max(0, Number(monthEntry.pendingDecision) || 0);
-  // Treat approvals as carryover-aware so they can exceed same-month applications
-  // while still preserving explicit denial/cancel/pending counts.
-  const denials = hasDenied ? explicitDenials : Math.max(applications - approvals - explicitCancelled - explicitPending, 0);
-  const cancelled = hasCancelled ? explicitCancelled : Math.max(applications - approvals - denials - explicitPending, 0);
-  const pendingDecision = hasPending ? explicitPending : Math.max(applications - approvals - denials - cancelled, 0);
+  // Preserve known decisions, then classify any remaining completed apps as pending.
+  const denials = hasDenied ? explicitDenials : 0;
+  const cancelled = hasCancelled ? explicitCancelled : 0;
+  const pendingDecision = inferPendingDecisionApplications(applications, approvals, denials, cancelled, hasPending ? explicitPending : 0);
   const leases = Math.max(0, Number(monthEntry.leasesSignedActual) || 0);
   const approvalPct = applications > 0 ? (approvals / applications) * 100 : 0;
   const denialPct = applications > 0 ? (denials / applications) * 100 : 0;
@@ -4124,7 +4131,7 @@ function buildDlrTrafficMetricsFromSummary(dlrSummary = {}, monthEntry = {}, dai
   const approvals = Math.max(0, Number(summaryApplications.approvals) || 0);
   const denials = Math.max(0, Number(summaryApplications.denials) || 0);
   const cancelled = Math.max(0, Number(summaryApplications.cancelled) || 0);
-  const pendingDecision = Math.max(0, Number(summaryApplications.pendingDecision) || 0);
+  const pendingDecision = inferPendingDecisionApplications(applications, approvals, denials, cancelled, summaryApplications.pendingDecision);
   const leases = Math.max(0, Number(summaryApplications.leases) || 0);
   const derivedApplications = applications > 0 ? applications : (approvals + denials + cancelled + pendingDecision);
   const leadGuestCards = getDlrActivityMetric(activity, "Guest Cards")
@@ -12141,11 +12148,16 @@ function buildDailyBoxScoreSnapshotFromRows(rows = [], fileName = "", rawText = 
     dailySnapshot.tours = leadActivityTotals.firstVisitsTours;
   }
   if (leadConversionTotals) {
-    dailySnapshot.applications = leadConversionTotals.completed || 0;
-    dailySnapshot.pendingDecision = leadConversionTotals.partiallyCompleted;
-    dailySnapshot.applicationsApproved = leadConversionTotals.approved;
-    dailySnapshot.denied = leadConversionTotals.denied;
-    dailySnapshot.cancelled = (leadConversionTotals.completedCancelled || 0) + (leadConversionTotals.approvedCancelled || 0);
+    const applications = Math.max(0, Number(leadConversionTotals.completed) || 0);
+    const approvals = Math.max(0, Number(leadConversionTotals.approved) || 0);
+    const denials = Math.max(0, Number(leadConversionTotals.denied) || 0);
+    const cancelled = Math.max(0, Number(leadConversionTotals.completedCancelled) || 0) + Math.max(0, Number(leadConversionTotals.approvedCancelled) || 0);
+    const partialPending = Math.max(0, Number(leadConversionTotals.partiallyCompleted) || 0);
+    dailySnapshot.applications = applications;
+    dailySnapshot.applicationsApproved = approvals;
+    dailySnapshot.denied = denials;
+    dailySnapshot.cancelled = cancelled;
+    dailySnapshot.pendingDecision = inferPendingDecisionApplications(applications, approvals, denials, cancelled, partialPending);
     dailySnapshot.leasesSigned = Math.max(leadConversionTotals.leaseCompleted || 0, leadConversionTotals.leaseApproved || 0);
   }
   if (propertyPulseTotals) {
@@ -12172,6 +12184,13 @@ function buildDailyBoxScoreSnapshotFromRows(rows = [], fileName = "", rawText = 
     dailySnapshot.denied = mergePreferredBoxScoreCount(dailySnapshot.denied, extractMetricFromRowsOrText(rows, rawText, ["denied"], ["Denied"]));
     dailySnapshot.cancelled = mergePreferredBoxScoreCount(dailySnapshot.cancelled, extractMetricFromRowsOrText(rows, rawText, ["cancelled", "canceled"], ["Cancelled"]));
     dailySnapshot.pendingDecision = mergePreferredBoxScoreCount(dailySnapshot.pendingDecision, extractMetricFromRowsOrText(rows, rawText, ["pending decision", "pending decisions", "pipeline", "application started"], ["Pipeline (Application Started)", "Pending Decision"]));
+    dailySnapshot.pendingDecision = inferPendingDecisionApplications(
+      dailySnapshot.applications,
+      dailySnapshot.applicationsApproved,
+      dailySnapshot.denied,
+      dailySnapshot.cancelled,
+      dailySnapshot.pendingDecision
+    );
   }
   if (dailySnapshot.leasesSigned === null || dailySnapshot.leasesSigned === undefined) dailySnapshot.leasesSigned = extractMetricFromRowsOrText(rows, rawText, ["leases signed", "signed leases", "leases"], ["Leases Signed"]);
   if (dailySnapshot.moveIns === null || dailySnapshot.moveIns === undefined) dailySnapshot.moveIns = extractMetricFromRowsOrText(rows, rawText, ["move-ins", "move ins"], ["Move-Ins"]);
@@ -22999,9 +23018,7 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
     ? ((dailyBoxScore.applications !== null && dailyBoxScore.applications !== undefined) ? dailyApplicationsRaw : inferredDailyApplications)
     : 0;
   const dailyPendingDecision = hasMatchingDailyBoxScore
-    ? ((dailyBoxScore.pendingDecision !== null && dailyBoxScore.pendingDecision !== undefined)
-      ? dailyPendingDecisionRaw
-      : Math.max(dailyApplications - dailyApprovals - dailyDenied - dailyCancelled, 0))
+    ? inferPendingDecisionApplications(dailyApplications, dailyApprovals, dailyDenied, dailyCancelled, dailyPendingDecisionRaw)
     : 0;
   const dailyTraffic = {
     walkIn: dailyLeadSources.walkIn,
