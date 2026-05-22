@@ -3961,6 +3961,17 @@ function getDlrActivityMetric(activity = {}, label, field = "mtd") {
   return Number.isFinite(value) ? value : null;
 }
 
+function getMaxNonNegativeMetric(...values) {
+  let maxValue = 0;
+  values.forEach(value => {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric >= 0) {
+      maxValue = Math.max(maxValue, numeric);
+    }
+  });
+  return maxValue;
+}
+
 function buildDlrTrafficMetricsFromSummary(dlrSummary = {}, monthEntry = {}, dailyBoxScore = {}, options = {}) {
   const normalizedSummary = normalizeDlrSummary(dlrSummary);
   const activity = normalizedSummary.activity || {};
@@ -22307,8 +22318,9 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   const leasedUnits = reportAnchorLeasedUnits;
   const occupancyPct = getOccupancyPctFromUnits(occupiedUnits, totalUnits, corporateUnits);
   const leasedPct = getOccupancyPctFromUnits(leasedUnits, totalUnits, corporateUnits);
+  const projectedTrendRow = nextRows[Math.min(3, Math.max(nextRows.length - 1, 0))] || nextRows[nextRows.length - 1] || null;
   const projectedEndingOccupancy = computeProjectedEndingPhysicalOccupancy(record, totalUnits, reportMetricMonthIdx, 3);
-  const trendingOccupancyPct = Number(projectedEndingOccupancy.pct ?? occupancyPct) || occupancyPct;
+  const trendingOccupancyPct = Number(projectedTrendRow?.projectedOccupancy ?? projectedEndingOccupancy.pct ?? occupancyPct) || occupancyPct;
   const budgetOccPct = getRecordSavedBudgetOccPct(record, reportMetricMonthIdx);
   const moveInsNeeded = Number(scheduleRow.netOccLeases) || 0;
   const moveInGoalPerWeek = moveInsNeeded > 0 ? Math.max(1, Math.ceil(moveInsNeeded / 4)) : 0;
@@ -22319,10 +22331,10 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   mtdTraffic.rolledGuestCards = mtdTraffic.guestCards;
   mtdTraffic.tours = Math.max(0, Number(reportSummary.tours ?? mtdTraffic.tours) || 0);
   mtdTraffic.applications = Math.max(0, Number(reportSummary.applications ?? mtdTraffic.applications) || 0);
-  mtdTraffic.approvals = Math.max(0, Number(reportSummary.applicationsApproved ?? mtdTraffic.approvals) || 0);
-  mtdTraffic.denials = Math.max(0, Number(reportSummary.applicationsDenied ?? mtdTraffic.denials) || 0);
-  mtdTraffic.cancelled = Math.max(0, Number(reportSummary.applicationsCancelled ?? mtdTraffic.cancelled) || 0);
-  mtdTraffic.pendingDecision = Math.max(0, Number(reportSummary.applicationsPendingDecision ?? mtdTraffic.pendingDecision) || 0);
+  mtdTraffic.approvals = getMaxNonNegativeMetric(reportSummary.applicationsApproved, mtdTraffic.approvals, appMetrics.approvals);
+  mtdTraffic.denials = getMaxNonNegativeMetric(reportSummary.applicationsDenied, mtdTraffic.denials, appMetrics.denials);
+  mtdTraffic.cancelled = getMaxNonNegativeMetric(reportSummary.applicationsCancelled, mtdTraffic.cancelled, appMetrics.cancelled);
+  mtdTraffic.pendingDecision = getMaxNonNegativeMetric(reportSummary.applicationsPendingDecision, mtdTraffic.pendingDecision, appMetrics.pendingDecision);
   mtdTraffic.leases = Math.max(0, Number(reportSummary.leasesSigned ?? mtdTraffic.leases) || 0);
   mtdTraffic.renewals = Math.max(0, Number(reportSummary.renewalsSigned ?? mtdTraffic.renewals) || 0);
   mtdTraffic.moveIns = Math.max(0, Number(reportSummary.moveIns ?? monthEntry.moveIns) || 0);
@@ -22338,10 +22350,10 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   prevMonthTraffic.rolledGuestCards = prevMonthTraffic.guestCards;
   prevMonthTraffic.tours = Math.max(0, Number(previousReportSummary.tours ?? prevMonthTraffic.tours) || 0);
   prevMonthTraffic.applications = Math.max(0, Number(previousReportSummary.applications ?? prevMonthTraffic.applications) || 0);
-  prevMonthTraffic.approvals = Math.max(0, Number(previousReportSummary.applicationsApproved ?? prevMonthTraffic.approvals) || 0);
-  prevMonthTraffic.denials = Math.max(0, Number(previousReportSummary.applicationsDenied ?? prevMonthTraffic.denials) || 0);
-  prevMonthTraffic.cancelled = Math.max(0, Number(previousReportSummary.applicationsCancelled ?? prevMonthTraffic.cancelled) || 0);
-  prevMonthTraffic.pendingDecision = Math.max(0, Number(previousReportSummary.applicationsPendingDecision ?? prevMonthTraffic.pendingDecision) || 0);
+  prevMonthTraffic.approvals = getMaxNonNegativeMetric(previousReportSummary.applicationsApproved, prevMonthTraffic.approvals, prevAppMetrics.approvals);
+  prevMonthTraffic.denials = getMaxNonNegativeMetric(previousReportSummary.applicationsDenied, prevMonthTraffic.denials, prevAppMetrics.denials);
+  prevMonthTraffic.cancelled = getMaxNonNegativeMetric(previousReportSummary.applicationsCancelled, prevMonthTraffic.cancelled, prevAppMetrics.cancelled);
+  prevMonthTraffic.pendingDecision = getMaxNonNegativeMetric(previousReportSummary.applicationsPendingDecision, prevMonthTraffic.pendingDecision, prevAppMetrics.pendingDecision);
   prevMonthTraffic.leases = Math.max(0, Number(previousReportSummary.leasesSigned ?? prevMonthTraffic.leases) || 0);
   prevMonthTraffic.renewals = Math.max(0, Number(previousReportSummary.renewalsSigned ?? prevMonthTraffic.renewals) || 0);
   prevMonthTraffic.moveIns = Math.max(0, Number(previousReportSummary.moveIns ?? prevMonthTraffic.moveIns) || 0);
