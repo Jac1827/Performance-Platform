@@ -1,0 +1,11 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "rise-performance-platform-site",
+  "main": "./src/worker.mjs",
+  "compatibility_date": "2026-05-22",
+  "assets": {
+    "directory": "./docs",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  }
+}

@@ -3007,12 +3007,14 @@ function render(){
   const app = document.getElementById('app');
   if(!STATE.currentUser){
     app.innerHTML = renderLogin();
+    refreshBuildInfoBadge();
     return;
   }
   if(UI.currentView === 'settings' && STATE.currentUser.role !== 'admin'){
     UI.currentView = 'dashboard';
   }
   app.innerHTML = renderShell();
+  refreshBuildInfoBadge();
 }
 
 function renderLogin(){
@@ -3096,6 +3098,7 @@ function renderShell(){
           <div class="user-meta">
             <span class="badge ${user.role === 'admin' ? 'badge-admin' : 'badge-soft'}">${user.role === 'admin' ? 'Admin' : 'Manager'}</span>
             <span class="badge badge-soft">${escapeHtml(userScopeLabel(user))}</span>
+            <span id="build-info-badge" class="badge badge-soft">Build info loading</span>
             <span class="small muted">${escapeHtml(user.name)}</span>
             <button class="btn btn-soft btn-sm" onclick="openPlatformDataTransferModal()">Data Transfer</button>
             <button class="btn btn-soft btn-sm" onclick="logout()">Lock</button>
@@ -3107,6 +3110,35 @@ function renderShell(){
       ${renderView()}
     </div>
   `;
+}
+
+function refreshBuildInfoBadge(){
+  const badge = document.getElementById('build-info-badge');
+  if(!badge){
+    return;
+  }
+  if(window.__BUILD_INFO_BADGE_READY){
+    badge.textContent = window.__BUILD_INFO_BADGE_READY;
+    return;
+  }
+  if(window.__BUILD_INFO_BADGE_LOADING){
+    return;
+  }
+  window.__BUILD_INFO_BADGE_LOADING = true;
+  fetch('/api/build-info', { headers: { accept: 'application/json' } })
+    .then(response => response.ok ? response.json() : null)
+    .then(payload => {
+      const build = payload && payload.build ? payload.build : null;
+      const label = build
+        ? `${build.name} ${build.compatibilityDate}`
+        : 'Build info unavailable';
+      window.__BUILD_INFO_BADGE_READY = label;
+      badge.textContent = label;
+    })
+    .catch(() => {
+      window.__BUILD_INFO_BADGE_READY = 'Build info unavailable';
+      badge.textContent = 'Build info unavailable';
+    });
 }
 
 function switchView(view){
