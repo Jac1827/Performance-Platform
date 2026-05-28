@@ -1059,18 +1059,8 @@ const DASHBOARD_STORAGE_MIGRATION_KEYS = [
   PERFORMANCE_PLATFORM_STORAGE_KEY
 ];
 const DASHBOARD_SHARED_SYNC_SCOPE = "atlas_dashboard_v1";
-const DASHBOARD_SHARED_SYNC_WORKER_ORIGIN = "https://rise-performance-platform-site.jacquelyn-heflin.workers.dev";
-function getDashboardSharedSyncBaseUrl() {
-  const origin = String(window.location?.origin || "");
-  const hostname = String(window.location?.hostname || "");
-  if (/^https?:\/\//i.test(origin) && !/github\.io$/i.test(hostname)) {
-    return origin;
-  }
-  return DASHBOARD_SHARED_SYNC_WORKER_ORIGIN;
-}
-const DASHBOARD_SHARED_SYNC_BASE_URL = getDashboardSharedSyncBaseUrl();
-const DASHBOARD_SHARED_SYNC_ENDPOINT = `${DASHBOARD_SHARED_SYNC_BASE_URL}/api/state`;
-const DASHBOARD_SHARED_SYNC_HEALTH_ENDPOINT = `${DASHBOARD_SHARED_SYNC_BASE_URL}/api/health`;
+const DASHBOARD_SHARED_SYNC_ENDPOINT = "https://api.appdeploy.ai/app/582d88ce519f411cab/api/state";
+const DASHBOARD_SHARED_SYNC_HEALTH_ENDPOINT = "https://api.appdeploy.ai/app/582d88ce519f411cab/api/health";
 const DASHBOARD_SHARED_SYNC_WRITE_TOKEN = "atlas-rise-shared-sync-2026";
 const DASHBOARD_SHARED_SYNC_META_KEY = "atlas_dashboard_shared_sync_meta_v1";
 const DASHBOARD_DAILY_BACKUP_INDEX_KEY = "atlas_dashboard_daily_backup_index_v1";
@@ -1115,14 +1105,6 @@ function getBudgetTierSet() {
     { label: "At / Above Budget", threshold: 100, multiplier: 1 },
     { label: "Within Reach", threshold: 98, multiplier: 0.75 },
     { label: "Just Under Budget", threshold: 95, multiplier: 0.5 }
-  ];
-}
-
-function getBudgetVarianceTierSet() {
-  return [
-    { label: "At / Above Budget", threshold: 0, multiplier: 1 },
-    { label: "Within Reach", threshold: -1, multiplier: 0.75 },
-    { label: "Just Under Budget", threshold: -2, multiplier: 0.5 }
   ];
 }
 
@@ -1307,7 +1289,7 @@ let portfolioReportFilters = defaultPortfolioReportFilters();
 let monthlyPresentationCommunities = [];
 let weeklyExecutiveEmail = defaultWeeklyExecutiveEmailSettings();
 let workspaceScopeValue = PORTFOLIO_SCOPE_VALUE;
-let reportHubType = "weekly_portfolio_snapshot";
+let reportHubType = "investor_snapshot";
 let reportHubAction = "preview";
 let reportHubRecipientKeys = [];
 let reportHubPerspective = "csuite";
@@ -1832,19 +1814,18 @@ function normalizeReportHubType(value) {
     weekly_csuite: "weekly_portfolio_snapshot",
     portfolio_report: "investor_snapshot",
     investor_deck: "monthly_investor_deck",
-    dlr_overview: "dlr"
+    dlr_overview: "dlr",
+    monthly_report: "monthly_investor_deck",
+    marketing_report: "investor_marketing_report"
   };
-  const mapped = legacyMap[normalized] || normalized || "weekly_portfolio_snapshot";
+  const mapped = legacyMap[normalized] || normalized || "investor_snapshot";
   return [
     "investor_snapshot",
-    "investor_property_packet",
-    "weekly_portfolio_snapshot",
     "monthly_investor_deck",
     "investor_marketing_report",
     "dlr",
-    "bonus_payout",
-    "regional_progress_report"
-  ].includes(mapped) ? mapped : "weekly_portfolio_snapshot";
+    "bonus_payout"
+  ].includes(mapped) ? mapped : "investor_snapshot";
 }
 
 function normalizeReportHubPerspective(value) {
@@ -2838,7 +2819,7 @@ function defaultJacsTeamBonus() {
   });
   return [
     role("vp_ops", "VP of Property Management Operations", 150000, 20, "Leadership", [
-      metric("Budget Attainment %",               25, 100,  { syncKey:"avgBudgetOccAttainmentPct", sourceLabel:"Overview", format:"pct", direction:"up", tiers:getBudgetTierSet(), hideGoalInput:true }),
+      metric("Physical Occ % vs Budget",          25, 100,  { syncKey:"avgBudgetOccAttainmentPct", sourceLabel:"Overview", format:"pct", direction:"up", tiers:getBudgetTierSet(), hideGoalInput:true }),
       metric("NER Growth vs Prior Year %",         25,  3,  { sourceLabel:"Manual",     format:"pct",    direction:"up" }),
       metric("ORA Score",                          20,  62, { syncKey:"oraScore",       sourceLabel:"Reputation", format:"decimal", direction:"up", tiers:getOraTierSet(), hideGoalInput:true }),
       metric("Operations Budget Adherence %",      15,  95, { sourceLabel:"Manual",     format:"pct",    direction:"up",
@@ -2847,28 +2828,28 @@ function defaultJacsTeamBonus() {
                                                               partial:true, partialThreshold:55 })
     ]),
     role("regional_1", "Regional Manager 1", 110000, 15, "Regionals", [
-      metric("Occ vs Budget (pts)", 25, 0, { syncKey:"avgOccGapPts", sourceLabel:"Overview", format:"delta", direction:"up", tiers:getBudgetVarianceTierSet(), hideGoalInput:true }),
+      metric("Occ vs Budget (pts)", 25, 100, { syncKey:"avgBudgetOccAttainmentPct", sourceLabel:"Overview", format:"pct", tiers:getBudgetTierSet(), hideGoalInput:true }),
       metric("Employee Turnover %", 25, 40, { syncKey:"employeeTurnoverPct", sourceLabel:"Community Setup", format:"pct", direction:"down", partial:true, partialThreshold:50 }),
       metric("MTD Absorption", 20, 0, { syncKey:"monthAbsorption", sourceLabel:"Overview", format:"number", comboType:"absorption_renewal", secondaryLabel:"Renewal %", secondaryGoal:60, secondarySyncKey:"quarterClosedRetentionAverage", partial:true }),
       metric("Guest Card Goal Attainment %", 15, 100, { syncKey:"guestCardGoalPct", sourceLabel:"Traffic", format:"pct" }),
       metric("ORA Score", 15, 62, { syncKey:"oraScore", sourceLabel:"Reputation", format:"decimal", tiers:getOraTierSet(), hideGoalInput:true })
     ]),
     role("regional_2", "Regional Manager 2", 110000, 15, "Regionals", [
-      metric("Occ vs Budget (pts)", 25, 0, { syncKey:"avgOccGapPts", sourceLabel:"Overview", format:"delta", direction:"up", tiers:getBudgetVarianceTierSet(), hideGoalInput:true }),
+      metric("Occ vs Budget (pts)", 25, 100, { syncKey:"avgBudgetOccAttainmentPct", sourceLabel:"Overview", format:"pct", tiers:getBudgetTierSet(), hideGoalInput:true }),
       metric("Employee Turnover %", 25, 40, { syncKey:"employeeTurnoverPct", sourceLabel:"Community Setup", format:"pct", direction:"down", partial:true, partialThreshold:50 }),
       metric("MTD Absorption", 20, 0, { syncKey:"monthAbsorption", sourceLabel:"Overview", format:"number", comboType:"absorption_renewal", secondaryLabel:"Renewal %", secondaryGoal:60, secondarySyncKey:"quarterClosedRetentionAverage", partial:true }),
       metric("Guest Card Goal Attainment %", 15, 100, { syncKey:"guestCardGoalPct", sourceLabel:"Traffic", format:"pct" }),
       metric("ORA Score", 15, 62, { syncKey:"oraScore", sourceLabel:"Reputation", format:"decimal", tiers:getOraTierSet(), hideGoalInput:true })
     ]),
     role("regional_3", "Regional Manager 3", 110000, 15, "Regionals", [
-      metric("Occ vs Budget (pts)", 25, 0, { syncKey:"avgOccGapPts", sourceLabel:"Overview", format:"delta", direction:"up", tiers:getBudgetVarianceTierSet(), hideGoalInput:true }),
+      metric("Occ vs Budget (pts)", 25, 100, { syncKey:"avgBudgetOccAttainmentPct", sourceLabel:"Overview", format:"pct", tiers:getBudgetTierSet(), hideGoalInput:true }),
       metric("Employee Turnover %", 25, 40, { syncKey:"employeeTurnoverPct", sourceLabel:"Community Setup", format:"pct", direction:"down", partial:true, partialThreshold:50 }),
       metric("MTD Absorption", 20, 0, { syncKey:"monthAbsorption", sourceLabel:"Overview", format:"number", comboType:"absorption_renewal", secondaryLabel:"Renewal %", secondaryGoal:60, secondarySyncKey:"quarterClosedRetentionAverage", partial:true }),
       metric("Guest Card Goal Attainment %", 15, 100, { syncKey:"guestCardGoalPct", sourceLabel:"Traffic", format:"pct" }),
       metric("ORA Score", 15, 62, { syncKey:"oraScore", sourceLabel:"Reputation", format:"decimal", tiers:getOraTierSet(), hideGoalInput:true })
     ]),
     role("regional_4", "Regional Manager 4", 110000, 15, "Regionals", [
-      metric("Occ vs Budget (pts)", 25, 0, { syncKey:"avgOccGapPts", sourceLabel:"Overview", format:"delta", direction:"up", tiers:getBudgetVarianceTierSet(), hideGoalInput:true }),
+      metric("Occ vs Budget (pts)", 25, 100, { syncKey:"avgBudgetOccAttainmentPct", sourceLabel:"Overview", format:"pct", tiers:getBudgetTierSet(), hideGoalInput:true }),
       metric("Employee Turnover %", 25, 40, { syncKey:"employeeTurnoverPct", sourceLabel:"Community Setup", format:"pct", direction:"down", partial:true, partialThreshold:50 }),
       metric("MTD Absorption", 20, 0, { syncKey:"monthAbsorption", sourceLabel:"Overview", format:"number", comboType:"absorption_renewal", secondaryLabel:"Renewal %", secondaryGoal:60, secondarySyncKey:"quarterClosedRetentionAverage", partial:true }),
       metric("Guest Card Goal Attainment %", 15, 100, { syncKey:"guestCardGoalPct", sourceLabel:"Traffic", format:"pct" }),
@@ -2933,7 +2914,7 @@ function normalizeJacsTeamBonus(data) {
       bonusRate: Number(savedRole.bonusRate ?? defRole.bonusRate),
       metrics: defRole.metrics.map(defMetric => {
         const savedMetric = (savedRole.metrics ?? []).find(m => m?.cat === defMetric.cat) ?? {};
-        const forceBudgetOccMetric = defMetric.cat === "Budget Attainment %" || defMetric.cat === "Occ vs Budget (pts)";
+        const forceBudgetOccMetric = defMetric.cat === "Physical Occ % vs Budget" || defMetric.cat === "Occ vs Budget (pts)";
         const forceCombinedRetentionMetric = isCombinedAbsorptionMetric(defMetric);
         return {
           ...defMetric,
@@ -4041,14 +4022,6 @@ function getLeadSourceTotal(monthEntry = {}) {
   return explicitGuestCards;
 }
 
-function inferPendingDecisionApplications(applications = 0, approvals = 0, denials = 0, cancelled = 0, explicitPending = 0) {
-  const applicationTotal = Math.max(0, Number(applications) || 0);
-  const knownDecisions = [approvals, denials, cancelled].reduce((sum, value) => sum + Math.max(0, Number(value) || 0), 0);
-  const statedPending = Math.max(0, Number(explicitPending) || 0);
-  const unclassifiedApplications = Math.max(applicationTotal - knownDecisions, 0);
-  return Math.max(statedPending, unclassifiedApplications);
-}
-
 function getApplicationDecisionMetrics(monthEntry = {}) {
   const applications = Math.max(0, Number(monthEntry.applications) || 0);
   const approvals = Math.max(0, Number(getApplicationsApprovedCount(monthEntry)) || 0);
@@ -4058,17 +4031,17 @@ function getApplicationDecisionMetrics(monthEntry = {}) {
   const explicitDenials = Math.max(0, Number(monthEntry.denied) || 0);
   const explicitCancelled = Math.max(0, Number(monthEntry.cancelled) || 0);
   const explicitPending = Math.max(0, Number(monthEntry.pendingDecision) || 0);
-  // Preserve known decisions, then classify any remaining completed apps as pending.
-  const denials = hasDenied ? explicitDenials : 0;
-  const cancelled = hasCancelled ? explicitCancelled : 0;
-  const pendingDecision = inferPendingDecisionApplications(applications, approvals, denials, cancelled, hasPending ? explicitPending : 0);
+  // Treat approvals as carryover-aware so they can exceed same-month applications
+  // while still preserving explicit denial/cancel/pending counts.
+  const denials = hasDenied ? explicitDenials : Math.max(applications - approvals - explicitCancelled - explicitPending, 0);
+  const cancelled = hasCancelled ? explicitCancelled : Math.max(applications - approvals - denials - explicitPending, 0);
+  const pendingDecision = hasPending ? explicitPending : Math.max(applications - approvals - denials - cancelled, 0);
   const leases = Math.max(0, Number(monthEntry.leasesSignedActual) || 0);
-  const funnelBase = Math.max(applications, approvals + denials + cancelled + pendingDecision, leases);
-  const approvalPct = funnelBase > 0 ? (approvals / funnelBase) * 100 : 0;
-  const denialPct = funnelBase > 0 ? (denials / funnelBase) * 100 : 0;
-  const cancelledPct = funnelBase > 0 ? (cancelled / funnelBase) * 100 : 0;
-  const pendingPct = funnelBase > 0 ? (pendingDecision / funnelBase) * 100 : 0;
-  const appToLeasePct = funnelBase > 0 ? (leases / funnelBase) * 100 : 0;
+  const approvalPct = applications > 0 ? (approvals / applications) * 100 : 0;
+  const denialPct = applications > 0 ? (denials / applications) * 100 : 0;
+  const cancelledPct = applications > 0 ? (cancelled / applications) * 100 : 0;
+  const pendingPct = applications > 0 ? (pendingDecision / applications) * 100 : 0;
+  const appToLeasePct = applications > 0 ? (leases / applications) * 100 : 0;
   return { applications, approvals, denials, cancelled, pendingDecision, leases, approvalPct, denialPct, cancelledPct, pendingPct, appToLeasePct };
 }
 
@@ -4140,7 +4113,7 @@ function buildDlrTrafficMetricsFromSummary(dlrSummary = {}, monthEntry = {}, dai
   const approvals = Math.max(0, Number(summaryApplications.approvals) || 0);
   const denials = Math.max(0, Number(summaryApplications.denials) || 0);
   const cancelled = Math.max(0, Number(summaryApplications.cancelled) || 0);
-  const pendingDecision = inferPendingDecisionApplications(applications, approvals, denials, cancelled, summaryApplications.pendingDecision);
+  const pendingDecision = Math.max(0, Number(summaryApplications.pendingDecision) || 0);
   const leases = Math.max(0, Number(summaryApplications.leases) || 0);
   const derivedApplications = applications > 0 ? applications : (approvals + denials + cancelled + pendingDecision);
   const leadGuestCards = getDlrActivityMetric(activity, "Guest Cards")
@@ -5215,8 +5188,8 @@ function aggregateCommunitySummaries(summaries) {
     previousLeadToLeasePct: totals.previousGuestCards > 0 ? (totals.previousLeasesSigned / totals.previousGuestCards) * 100 : 0,
     tourToAppPct: totals.tours > 0 ? (totals.applications / totals.tours) * 100 : 0,
     previousTourToAppPct: totals.previousTours > 0 ? (totals.previousApplications / totals.previousTours) * 100 : 0,
-    tourToLeasePct: totals.tours > 0 ? (totals.leasesSigned / totals.tours) * 100 : 0,
-    previousTourToLeasePct: totals.previousTours > 0 ? (totals.previousLeasesSigned / totals.previousTours) * 100 : 0,
+    tourToLeasePct: totals.tourToLeasePctCount > 0 ? totals.tourToLeasePctTotal / totals.tourToLeasePctCount : 0,
+    previousTourToLeasePct: totals.previousTourToLeasePctCount > 0 ? totals.previousTourToLeasePctTotal / totals.previousTourToLeasePctCount : 0,
     applicationApprovalPct: totals.applications > 0 ? (totals.applicationsApproved / totals.applications) * 100 : 0,
     previousApplicationApprovalPct: totals.previousApplications > 0 ? (totals.previousApplicationsApproved / totals.previousApplications) * 100 : 0,
     applicationDenialPct: totals.applications > 0 ? (totals.applicationsDenied / totals.applications) * 100 : 0,
@@ -8213,10 +8186,6 @@ async function pushDashboardSharedState({ silent = false, source = "manual" } = 
     const bundle = await buildDashboardStorageBundle();
     const response = await fetch(DASHBOARD_SHARED_SYNC_ENDPOINT, {
       method: "POST",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json"
-      },
       body: JSON.stringify({
         scope: DASHBOARD_SHARED_SYNC_SCOPE,
         source,
@@ -8325,6 +8294,36 @@ async function copyDashboardStorageBundleToClipboard() {
   link.click();
   URL.revokeObjectURL(link.href);
   alert("Clipboard copy is blocked in this browser. A bundle file was downloaded instead.");
+}
+
+async function importDashboardStorageBundleFromFile(file) {
+  if (!file) return;
+  let payloadText = "";
+  try {
+    payloadText = await file.text();
+  } catch {
+    alert(`Could not read ${file.name || "the selected file"}.`);
+    return;
+  }
+  if (!payloadText.trim()) {
+    alert("The selected file is empty.");
+    return;
+  }
+  let parsed = null;
+  try {
+    parsed = JSON.parse(payloadText);
+  } catch {
+    alert("Could not parse the selected bundle file as JSON.");
+    return;
+  }
+  const writtenCount = await applyDashboardStorageBundle(parsed);
+  if (writtenCount === 0) {
+    alert("No keys were written. Browser storage may be blocked or full.");
+    return;
+  }
+  closeModal();
+  alert(`Imported ${writtenCount} storage key${writtenCount === 1 ? "" : "s"} from file. Reloading now.`);
+  window.location.reload();
 }
 
 async function applyDashboardStorageBundle(bundle) {
@@ -9066,17 +9065,19 @@ function renderDashboardDataMigrationPanel() {
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
       <div>
         <div class="card-title" style="margin-bottom:6px">Browser Data Migration</div>
-        <div style="font-size:0.68rem;color:var(--muted)">Use this to align Playground and live browser data for both ATLAS apps. In Playground, click <strong>Copy Bundle</strong>. On live, click <strong>Import Bundle</strong>.</div>
+        <div style="font-size:0.68rem;color:var(--muted)">Use this to align Playground and live browser data for both ATLAS apps. Browser storage is local to each browser profile unless you use the cloud sync buttons or import a bundle file.</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-gray btn-sm" onclick="verifyDashboardSharedSyncConnection()">🔌 Check Cloud</button>
         <button class="btn btn-blue btn-sm" onclick="pushDashboardSharedState({ silent:false, source:'manual_push' })">☁ Save To Cloud</button>
         <button class="btn btn-gray btn-sm" onclick="pullDashboardSharedState({ silent:false, applyRemoteIfNewer:true })">☁ Pull From Cloud</button>
         <button class="btn btn-gray btn-sm" onclick="copyDashboardStorageBundleToClipboard()">📋 Copy Bundle</button>
-        <button class="btn btn-blue btn-sm" onclick="importDashboardStorageBundleFromClipboard()">⬇ Import Bundle</button>
+        <button class="btn btn-blue btn-sm" onclick="document.getElementById('atlas-bundle-file-input').click()">⬇ Import Bundle</button>
+        <button class="btn btn-gray btn-sm" onclick="importDashboardStorageBundleFromClipboard()">📋 Paste Bundle</button>
       </div>
     </div>
-    <div style="font-size:0.66rem;color:var(--muted)">Bundle includes dashboard saves, workspace context, reporting baseline, property catalog, nav state, and Performance Platform browser state.</div>
+    <input type="file" id="atlas-bundle-file-input" accept=".json,application/json" style="display:none" onchange="importDashboardStorageBundleFromFile(this.files && this.files[0]); this.value = ''">
+    <div style="font-size:0.66rem;color:var(--muted)">Bundle includes dashboard saves, workspace context, reporting baseline, property catalog, nav state, and Performance Platform browser state. Use Import Bundle for the downloaded file, or Paste Bundle if you copied JSON directly.</div>
     <div style="font-size:0.64rem;color:var(--muted);margin-top:6px">${escapeHtml(getDashboardSharedSyncStatusLine())}</div>
   </div>`;
 }
@@ -9090,9 +9091,105 @@ function renderPortfolioScopedImportTab() {
   const dlrLoaded = readinessDetails.filter(detail => detail.readiness.dlrLoaded).length;
   const surveyLoaded = readinessDetails.filter(detail => detail.readiness.surveyLoaded).length;
   const renewalLoaded = readinessDetails.filter(detail => detail.readiness.renewalLoaded).length;
+  const errorHTML = csvError ? `<div class="alert-red" style="margin-top:12px">${csvError}</div>` : "";
+  const logHTML = csvLog.length > 0 ? `<div class="alert-green" style="margin-top:12px">${csvLog.map((line, idx) => `<div style="${idx===0?"color:#3fb950;font-weight:600":"color:var(--muted)"}">${escapeHtml(line)}</div>`).join("")}</div>` : "";
   const marketSurveyLogHTML = marketSurveyImportLog.length > 0
     ? `<div class="alert-green" style="margin-top:12px">${marketSurveyImportLog.map((line, idx) => `<div style="${idx===0?"color:#3fb950;font-weight:600":"color:var(--muted)"}">${escapeHtml(line)}</div>`).join("")}</div>`
     : "";
+  const bulkImportWorkspaceHTML = `<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+      <div>
+        <div class="card-title" style="margin-bottom:6px">Portfolio Bulk Import Workspace</div>
+        <div style="font-size:0.68rem;color:var(--muted)">Stage CSV, PDF, and ATLAS monthly workbook uploads for the whole portfolio here. This is the main review area for extracted rows before they are applied into saved community month records.</div>
+      </div>
+      <button class="btn btn-gray btn-sm" onclick="resetImportWorkspace()">↺ Start Fresh</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px">
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:8px;padding:12px">
+        <div class="card-title" style="margin-bottom:6px">Month Routing</div>
+        <select data-field="importRoutingMode">
+          <option value="file_first" ${importRoutingMode==="file_first"?"selected":""}>Use file / row month first</option>
+          <option value="force_override" ${importRoutingMode==="force_override"?"selected":""}>Force selected month</option>
+        </select>
+        <div style="font-size:0.66rem;color:var(--muted);margin-top:6px">Trust the report month when it exists, or force everything into the selected portfolio month when you need a clean backfill.</div>
+      </div>
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:8px;padding:12px">
+        <div class="card-title" style="margin-bottom:6px">Manual Month Override</div>
+        <select data-field="importMonthOverride">
+          ${MONTHS.map((m,i) => `<option value="${i}" ${i===getImportTargetMonth()?"selected":""}>${m}</option>`).join("")}
+        </select>
+        <div style="font-size:0.66rem;color:var(--muted);margin-top:6px">Used as the fallback month, or as the forced target when routing mode is set to override.</div>
+      </div>
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:8px;padding:12px">
+        <div class="card-title" style="margin-bottom:6px">ATLAS Workbook Scope</div>
+        <select data-field="atlasWorkbookImportMode">
+          <option value="merge_scope" ${atlasWorkbookImportMode==="merge_scope"?"selected":""}>Merge into saved communities</option>
+          <option value="replace_scope" ${atlasWorkbookImportMode==="replace_scope"?"selected":""}>Replace selected month scope</option>
+        </select>
+        <div style="font-size:0.66rem;color:var(--muted);margin-top:6px">Use replace when the workbook is the source of truth and you want the selected month to match the uploaded portfolio set exactly.</div>
+      </div>
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:8px;padding:12px">
+        <div class="card-title" style="margin-bottom:6px">Ideal Upload Format</div>
+        <div style="font-size:0.68rem;color:var(--muted);line-height:1.55">Upload one row per property per month with <code>property</code> and <code>month</code> included in every row. Review the extracted preview below before you apply.</div>
+      </div>
+    </div>
+    <label class="csv-dropzone" id="dropzone-area" style="cursor:pointer" ondragover="event.preventDefault();event.target.style.borderColor='#4493f8';event.target.style.background='rgba(68,147,248,0.08)'" ondragleave="event.target.style.borderColor='rgba(68,147,248,0.4)';event.target.style.background=''" ondrop="handleDrop(event)">
+      <div class="csv-drop-icon">⬆</div>
+      <div style="font-size:0.85rem;color:#4493f8;font-weight:600">Click to upload CSV, PDF, or ATLAS monthly workbook files</div>
+      <div style="font-size:0.72rem;color:var(--muted);margin-top:4px">Multiple files stage into one shared portfolio preview so you can review them before they write into the dashboard.</div>
+      <input type="file" accept=".csv,.pdf,.xlsx,.xls,.xlsm" id="csv-input" multiple/>
+    </label>
+    ${errorHTML}${logHTML}
+  </div>`;
+  const extractPreviewHTML = extractedDashboardRows.length > 0 ? `<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+      <div>
+        <div class="card-title" style="margin-bottom:6px">Extracted Dashboard CSV Preview</div>
+        <div style="font-size:0.72rem;color:var(--muted)">Source: ${extractedSourceLabel}. Review these normalized portfolio rows before applying them into the dashboard or downloading the staged CSV.</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-blue btn-sm" onclick="applyExtractedDashboardRows()">Apply Extracted Rows</button>
+        <button class="btn btn-gray btn-sm" onclick="downloadExtractedDashboardCSV()">Download Dashboard CSV</button>
+        <button class="btn btn-gray btn-sm" onclick="clearExtractedDashboardRows()">Clear Preview</button>
+      </div>
+    </div>
+    <div class="tbl-wrap" style="margin-bottom:0">
+      <table>
+        <thead><tr><th class="l">Property</th><th class="c">Month</th><th class="c">Occupied</th><th class="c">Leased</th><th class="c">Move-Outs</th><th class="c">Move-Ins</th><th class="c">Guest Cards</th><th class="c">Walk In</th><th class="c">Off Site</th><th class="c">Phone</th><th class="c">Email / Online</th><th class="c">Text / Chat / Other</th><th class="c">Tours</th><th class="c">Applications</th><th class="c">Apps Approved</th><th class="c">Leases Signed</th><th class="c">Budget Occ %</th><th class="c">Market Rent</th><th class="c">Budget Rent</th><th class="c">Budget NER</th><th class="c">Rent Roll Total</th><th class="c">Concessions</th><th class="c">NER</th><th class="c">Renewal Exp.</th><th class="c">Renewals Signed</th><th class="c">Renewal NTVs</th><th class="c">Transfers</th><th class="c">Undecided / M2M</th><th class="c">Early Term.</th></tr></thead>
+        <tbody>${extractedDashboardRows.map((row, idx) => `<tr>
+          <td class="l"><input type="text" value="${row.property ?? ""}" onchange="updateExtractedDashboardCell(${idx},'property',this.value)" style="width:150px"></td>
+          <td><input type="text" value="${row.month ?? ""}" onchange="updateExtractedDashboardCell(${idx},'month',this.value)" style="width:58px;text-align:center"></td>
+          <td><input type="number" value="${row.occupied ?? ""}" onchange="updateExtractedDashboardCell(${idx},'occupied',this.value)" style="width:74px;text-align:center"></td>
+          <td><input type="number" value="${row.leased ?? ""}" onchange="updateExtractedDashboardCell(${idx},'leased',this.value)" style="width:74px;text-align:center"></td>
+          <td><input type="number" value="${row.move_outs ?? ""}" onchange="updateExtractedDashboardCell(${idx},'move_outs',this.value)" style="width:74px;text-align:center"></td>
+          <td><input type="number" value="${row.move_ins ?? ""}" onchange="updateExtractedDashboardCell(${idx},'move_ins',this.value)" style="width:74px;text-align:center"></td>
+          <td><input type="number" value="${row.guest_cards ?? ""}" onchange="updateExtractedDashboardCell(${idx},'guest_cards',this.value)" style="width:84px;text-align:center"></td>
+          <td><input type="number" value="${row.walk_in ?? ""}" onchange="updateExtractedDashboardCell(${idx},'walk_in',this.value)" style="width:72px;text-align:center"></td>
+          <td><input type="number" value="${row.off_site_event ?? ""}" onchange="updateExtractedDashboardCell(${idx},'off_site_event',this.value)" style="width:72px;text-align:center"></td>
+          <td><input type="number" value="${row.phone_calls ?? ""}" onchange="updateExtractedDashboardCell(${idx},'phone_calls',this.value)" style="width:72px;text-align:center"></td>
+          <td><input type="number" value="${row.emails_online ?? ""}" onchange="updateExtractedDashboardCell(${idx},'emails_online',this.value)" style="width:84px;text-align:center"></td>
+          <td><input type="number" value="${row.text_chat_other ?? ""}" onchange="updateExtractedDashboardCell(${idx},'text_chat_other',this.value)" style="width:96px;text-align:center"></td>
+          <td><input type="number" value="${row.tours ?? ""}" onchange="updateExtractedDashboardCell(${idx},'tours',this.value)" style="width:70px;text-align:center"></td>
+          <td><input type="number" value="${row.applications ?? ""}" onchange="updateExtractedDashboardCell(${idx},'applications',this.value)" style="width:92px;text-align:center"></td>
+          <td><input type="number" value="${row.applications_approved ?? ""}" onchange="updateExtractedDashboardCell(${idx},'applications_approved',this.value)" style="width:92px;text-align:center"></td>
+          <td><input type="number" value="${row.leases_signed ?? ""}" onchange="updateExtractedDashboardCell(${idx},'leases_signed',this.value)" style="width:92px;text-align:center"></td>
+          <td><input type="number" value="${row.budget_occ ?? ""}" onchange="updateExtractedDashboardCell(${idx},'budget_occ',this.value)" style="width:82px;text-align:center"></td>
+          <td><input type="number" value="${row.market_rent ?? ""}" onchange="updateExtractedDashboardCell(${idx},'market_rent',this.value)" style="width:92px;text-align:center"></td>
+          <td><input type="number" value="${row.budget_rent ?? ""}" onchange="updateExtractedDashboardCell(${idx},'budget_rent',this.value)" style="width:92px;text-align:center"></td>
+          <td><input type="number" value="${row.budget_ner ?? ""}" onchange="updateExtractedDashboardCell(${idx},'budget_ner',this.value)" style="width:92px;text-align:center"></td>
+          <td><input type="number" value="${row.rent_roll_total ?? ""}" onchange="updateExtractedDashboardCell(${idx},'rent_roll_total',this.value)" style="width:110px;text-align:center"></td>
+          <td><input type="number" value="${row.concessions ?? ""}" onchange="updateExtractedDashboardCell(${idx},'concessions',this.value)" style="width:92px;text-align:center"></td>
+          <td><input type="number" value="${row.ner ?? ""}" onchange="updateExtractedDashboardCell(${idx},'ner',this.value)" style="width:92px;text-align:center"></td>
+          <td><input type="number" value="${row.renewal_expirations ?? ""}" onchange="updateExtractedDashboardCell(${idx},'renewal_expirations',this.value)" style="width:92px;text-align:center"></td>
+          <td><input type="number" value="${row.renewals_signed ?? ""}" onchange="updateExtractedDashboardCell(${idx},'renewals_signed',this.value)" style="width:92px;text-align:center"></td>
+          <td><input type="number" value="${row.renewal_ntvs ?? ""}" onchange="updateExtractedDashboardCell(${idx},'renewal_ntvs',this.value)" style="width:92px;text-align:center"></td>
+          <td><input type="number" value="${row.renewal_transfers ?? ""}" onchange="updateExtractedDashboardCell(${idx},'renewal_transfers',this.value)" style="width:92px;text-align:center"></td>
+          <td><input type="number" value="${row.renewal_undecided ?? ""}" onchange="updateExtractedDashboardCell(${idx},'renewal_undecided',this.value)" style="width:92px;text-align:center"></td>
+          <td><input type="number" value="${row.renewal_early_termination ?? ""}" onchange="updateExtractedDashboardCell(${idx},'renewal_early_termination',this.value)" style="width:92px;text-align:center"></td>
+        </tr>`).join("")}</tbody>
+      </table>
+    </div>
+  </div>` : "";
   const monthlyTemplateBackfillHTML = `<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
       <div>
@@ -9135,6 +9232,9 @@ function renderPortfolioScopedImportTab() {
     </label>
   </div>`;
   const bodyHtml = `<div class="tbl-wrap">
+    ${bulkImportWorkspaceHTML}
+    ${extractPreviewHTML}
+    ${extractedDashboardRows.length > 0 ? renderExtractFieldMapControls() : ""}
     ${renderDashboardDataMigrationPanel()}
     ${monthlyTemplateBackfillHTML}
     ${renewalTrackerUploadHTML}
@@ -9155,7 +9255,7 @@ function renderPortfolioScopedImportTab() {
       ${marketSurveyImportSourceLabel ? `<div style="font-size:0.68rem;color:var(--muted);margin-top:8px">Latest market survey sync: ${escapeHtml(marketSurveyImportSourceLabel)}</div>` : ""}
       ${marketSurveyLogHTML}
     </div>
-    <div class="tbl-header"><h2>Import readiness by community</h2><p>APTIQ workbooks can be uploaded in portfolio mode, while DLR box scores and renewal files still open through each community import workspace.</p></div>
+    <div class="tbl-header"><h2>Import readiness by community</h2><p>The portfolio workspace above is now the primary staging area for bulk rows and workbook uploads. Use the community import view when you need a one-off, community-specific deep dive.</p></div>
     <table>
       <thead><tr><th class="l">Community</th><th>DLR Box Score</th><th>Market Survey</th><th>Renewals</th><th>Action</th></tr></thead>
       <tbody>${readinessDetails.map(detail => {
@@ -9178,7 +9278,7 @@ function renderPortfolioScopedImportTab() {
     ${statBox("Renewal Coverage", `${renewalLoaded}/${details.length}`, isSelectedDashboardMonthCurrentCalendarMonth() ? "Resets to Pending every Sunday until Monday uploads refresh" : "Communities with historical renewal data for the selected month", "#d29922")}
     ${statBox("Contacts Loaded", details.filter(detail => normalizeInvestorEmailContacts(detail.record?.investorEmailContacts).length > 0).length, "Communities with report recipients saved", "#a371f7")}
   </div>`;
-  return renderPortfolioScopePanel("Portfolio Import Coverage", "A portfolio-level read on data readiness before you export reporting.", cardsHtml, bodyHtml);
+  return renderPortfolioScopePanel("Portfolio Data Import Workspace", "Stage, validate, and apply portfolio uploads here before they flow into reporting and dashboard screens.", cardsHtml, bodyHtml);
 }
 
 function renderSetupTab() {
@@ -12157,16 +12257,11 @@ function buildDailyBoxScoreSnapshotFromRows(rows = [], fileName = "", rawText = 
     dailySnapshot.tours = leadActivityTotals.firstVisitsTours;
   }
   if (leadConversionTotals) {
-    const applications = Math.max(0, Number(leadConversionTotals.completed) || 0);
-    const approvals = Math.max(0, Number(leadConversionTotals.approved) || 0);
-    const denials = Math.max(0, Number(leadConversionTotals.denied) || 0);
-    const cancelled = Math.max(0, Number(leadConversionTotals.completedCancelled) || 0) + Math.max(0, Number(leadConversionTotals.approvedCancelled) || 0);
-    const partialPending = Math.max(0, Number(leadConversionTotals.partiallyCompleted) || 0);
-    dailySnapshot.applications = applications;
-    dailySnapshot.applicationsApproved = approvals;
-    dailySnapshot.denied = denials;
-    dailySnapshot.cancelled = cancelled;
-    dailySnapshot.pendingDecision = inferPendingDecisionApplications(applications, approvals, denials, cancelled, partialPending);
+    dailySnapshot.applications = leadConversionTotals.completed || 0;
+    dailySnapshot.pendingDecision = leadConversionTotals.partiallyCompleted;
+    dailySnapshot.applicationsApproved = leadConversionTotals.approved;
+    dailySnapshot.denied = leadConversionTotals.denied;
+    dailySnapshot.cancelled = (leadConversionTotals.completedCancelled || 0) + (leadConversionTotals.approvedCancelled || 0);
     dailySnapshot.leasesSigned = Math.max(leadConversionTotals.leaseCompleted || 0, leadConversionTotals.leaseApproved || 0);
   }
   if (propertyPulseTotals) {
@@ -12193,13 +12288,6 @@ function buildDailyBoxScoreSnapshotFromRows(rows = [], fileName = "", rawText = 
     dailySnapshot.denied = mergePreferredBoxScoreCount(dailySnapshot.denied, extractMetricFromRowsOrText(rows, rawText, ["denied"], ["Denied"]));
     dailySnapshot.cancelled = mergePreferredBoxScoreCount(dailySnapshot.cancelled, extractMetricFromRowsOrText(rows, rawText, ["cancelled", "canceled"], ["Cancelled"]));
     dailySnapshot.pendingDecision = mergePreferredBoxScoreCount(dailySnapshot.pendingDecision, extractMetricFromRowsOrText(rows, rawText, ["pending decision", "pending decisions", "pipeline", "application started"], ["Pipeline (Application Started)", "Pending Decision"]));
-    dailySnapshot.pendingDecision = inferPendingDecisionApplications(
-      dailySnapshot.applications,
-      dailySnapshot.applicationsApproved,
-      dailySnapshot.denied,
-      dailySnapshot.cancelled,
-      dailySnapshot.pendingDecision
-    );
   }
   if (dailySnapshot.leasesSigned === null || dailySnapshot.leasesSigned === undefined) dailySnapshot.leasesSigned = extractMetricFromRowsOrText(rows, rawText, ["leases signed", "signed leases", "leases"], ["Leases Signed"]);
   if (dailySnapshot.moveIns === null || dailySnapshot.moveIns === undefined) dailySnapshot.moveIns = extractMetricFromRowsOrText(rows, rawText, ["move-ins", "move ins"], ["Move-Ins"]);
@@ -13935,10 +14023,7 @@ function getJacsMetricRecommendation(role, metric, scope) {
   let primary = Number(metric.goal) || 0;
   let secondary = null;
   let reason = "Current benchmark remains the recommended target.";
-  if (cat === "Occ vs Budget (pts)") {
-    primary = 0;
-    reason = `Keep the average physical occupancy variance at budget or better across the assigned scope.`;
-  } else if (cat === "Budget Attainment %") {
+  if (cat === "Occ vs Budget (pts)" || cat === "Physical Occ % vs Budget") {
     primary = 100;
     reason = `Scores each saved community independently using the occupancy budget attainment tiers, then sums the earned share of this metric across the assigned scope.`;
   } else if (cat === "Leased vs Target (pts)") {
@@ -13966,6 +14051,9 @@ function getJacsMetricRecommendation(role, metric, scope) {
   } else if (cat === "Move-In Goal Attainment %") {
     primary = 100;
     reason = `Hit the full move-in plan needed to protect budget occupancy.`;
+  } else if (cat === "Budget Attainment %") {
+    primary = 100;
+    reason = `The portfolio should stay at or above the budget occupancy target.`;
   } else if (cat === "MoM Application Growth %" && plan) {
     const currentApps = Number(plan.currentApplications || 0);
     const neededGrowth = currentApps > 0 ? ((Math.max(plan.currentAppNeed || 0, currentApps) - currentApps) / currentApps) * 100 : primary;
@@ -14057,7 +14145,7 @@ function getMetricOutcome(m) {
 }
 
 function isVpCommunityBudgetMetric(role, metric) {
-  return role?.id === "vp_ops" && String(metric?.cat ?? "") === "Budget Attainment %";
+  return role?.id === "vp_ops" && String(metric?.cat ?? "") === "Physical Occ % vs Budget";
 }
 
 function getTierMatchForActual(actual, tiers = []) {
@@ -14340,7 +14428,7 @@ function exportBonusPayoutCSV() {
   a.click();
 }
 
-function openBonusPayoutReport(printImmediately=false) {
+function buildBonusPayoutReportDocument() {
   const data = getBonusExportData();
   const roleTotalRows = data.roleTotals.map(row =>
     `<tr><td>${row.quarter}</td><td>${row.role}</td><td>$${row.total.toLocaleString(undefined,{maximumFractionDigits:2})}</td></tr>`
@@ -14375,9 +14463,7 @@ function openBonusPayoutReport(printImmediately=false) {
       </div>`;
     })
   ].join("");
-  const win = window.open("", "_blank");
-  if (!win) return;
-  win.document.write(`<!DOCTYPE html><html><head><title>Bonus Payout Report</title><style>
+  return `<!DOCTYPE html><html><head><title>Bonus Payout Report</title><style>
     body{font-family:'DM Sans',Arial,sans-serif;padding:28px;color:#1b3a4b;background:#fff} h1,h2,h3{margin:0 0 12px} h1{font-size:26px;color:#1b3a4b} h2{font-size:18px;color:#1b3a4b;margin-top:18px} table{width:100%;border-collapse:collapse;margin:16px 0} th,td{border:1px solid #dfdfda;padding:8px;text-align:left;font-size:12px} th{background:#f3f2ee;color:#1b3a4b;text-transform:uppercase;letter-spacing:.05em}
     .brand{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px;padding-bottom:14px;border-bottom:2px solid #89bdd7}.brand img{height:38px;width:auto;object-fit:contain}.meta{color:#666;font-size:12px;margin-bottom:16px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-top:16px}.card{border:1px solid #dfdfda;border-radius:10px;padding:16px;break-inside:avoid-page;background:#fff}.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#666;margin-bottom:6px}.meta-row{display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;font-size:12px}.total{margin:12px 0;padding:10px;border-radius:8px;background:#eef5f7;color:#1b3a4b;font-weight:700}.detail-title{font-size:12px;font-weight:700;margin-bottom:6px} ul{margin:0;padding-left:18px} li,p{font-size:12px;line-height:1.45}
   </style></head><body>
@@ -14386,7 +14472,13 @@ function openBonusPayoutReport(printImmediately=false) {
   <table><thead><tr><th>Quarter</th><th>Role</th><th>Total Payout Due</th></tr></thead><tbody>${roleTotalRows}</tbody></table>
   <h2>Employee Payroll Snapshots</h2>
   <div class="cards">${employeeCards}</div>
-  </body></html>`);
+  </body></html>`;
+}
+
+function openBonusPayoutReport(printImmediately=false) {
+  const win = window.open("", "_blank");
+  if (!win) return;
+  win.document.write(buildBonusPayoutReportDocument());
   win.document.close();
   if (printImmediately) win.print();
 }
@@ -14739,15 +14831,6 @@ function formatJacMetricSource(metric, scopeTypeLabel, scope) {
     if (tracked > 0) {
       return `↔ ${scopeTypeLabel} · ${rate.toFixed(1)}% avg budget attainment · ${onTrack}/${tracked} communities on track`;
     }
-  }
-  if (metric.syncKey === "avgOccGapPts") {
-    const tracked = Number(scope?.metrics?.trackedBudgetOccCount || 0);
-    const onTrack = Number(scope?.metrics?.onTrackBudgetOccCount || 0);
-    const gap = Number(scope?.metrics?.avgOccGapPts || 0);
-    if (tracked > 0) {
-      return `↔ ${scopeTypeLabel} · ${formatSignedDisplay(gap, 1, " pts")} avg occ vs budget · ${onTrack}/${tracked} communities on track`;
-    }
-    return `↔ ${scopeTypeLabel} · add saved occupancy budgets in Overview to score this metric`;
   }
   if (metric.syncKey === "employeeTurnoverPct") {
     const headcount = Number(scope?.metrics?.employeeHeadcount || 0);
@@ -17217,36 +17300,29 @@ function renderPortfolioHomeTab() {
       `<div class="alert alert-info">Portfolio priorities are temporarily unavailable for this snapshot.</div>`
     );
     const trendScopeTitle = isPortfolioWorkspaceSelected() ? "Portfolio" : getProp().name;
-    const currentDate = new Date();
-    const currentYear = currentDate.getFullYear();
-    const currentCalendarMonth = currentDate.getMonth();
-    const trendCeilingMonth = Math.min(selectedMonth, currentCalendarMonth);
-    const trendRows = buildPortfolioHomeMonthlyTrendRows(trendCeilingMonth);
-    const selectedTrendRow = trendRows[trendCeilingMonth] || null;
-    const isLiveCurrentMonthTrend = selectedMonth === currentCalendarMonth;
-    const approvedTrendAsOfLabel = isLiveCurrentMonthTrend
-      ? formatPresentationDate(currentDate)
-      : `${selectedLabel} ${currentYear}`;
+    const trendRows = buildPortfolioHomeMonthlyTrendRows(selectedMonth);
+    const selectedTrendRow = trendRows[selectedMonth] || null;
+    const lastClosedTrendMonth = getClosedMonthTrendCeiling(selectedMonth, new Date().getFullYear());
+    const lastClosedTrendRow = lastClosedTrendMonth >= 0 ? trendRows[lastClosedTrendMonth] : null;
     const approvedTrendCard = renderSafeSection(
       () => buildPortfolioTrendCard({
         title: "Approved apps trend",
-        subtitle: `${trendScopeTitle} month-over-month approved applications from Jan ${currentYear} through ${approvedTrendAsOfLabel}.`,
-        summaryLabel: isLiveCurrentMonthTrend ? "As of Today" : selectedLabel,
+        subtitle: `${trendScopeTitle} month-over-month approved applications from Jan ${new Date().getFullYear()} through ${selectedLabel} ${new Date().getFullYear()}.`,
+        summaryLabel: selectedLabel,
         summaryValue: selectedTrendRow && selectedTrendRow.communityCount > 0 ? formatPortfolioTrendMetricValue(selectedTrendRow.approvedApps, "number") : "—",
-        summarySub: trendCeilingMonth > 0 && selectedTrendRow && trendRows[trendCeilingMonth - 1]?.communityCount > 0
-          ? `${formatPortfolioTrendValue(selectedTrendRow.approvedApps ?? 0, trendRows[trendCeilingMonth - 1]?.approvedApps ?? 0, "count_pct").replace("MoM", "vs prior month")} · updated through ${approvedTrendAsOfLabel}`
-          : `Approved apps saved through ${approvedTrendAsOfLabel}`,
+        summarySub: selectedMonth > 0 && selectedTrendRow && trendRows[selectedMonth - 1]?.communityCount > 0
+          ? formatPortfolioTrendValue(selectedTrendRow.approvedApps ?? 0, trendRows[selectedMonth - 1]?.approvedApps ?? 0, "count_pct").replace("MoM", "vs prior month")
+          : "Approved apps saved in the selected reporting month",
         chips: [
           `<strong>${selectedTrendRow?.communityCount ?? 0}</strong> active communities`,
           `<strong>${formatPortfolioTrendMetricValue(trendRows[0]?.approvedApps, "number")}</strong> in Jan`,
-          `<strong>${formatPortfolioTrendMetricValue(Math.max(...trendRows.map(row => row.approvedApps || 0)), "number")}</strong> peak month`,
-          `<strong>${approvedTrendAsOfLabel}</strong> last live date`
+          `<strong>${formatPortfolioTrendMetricValue(Math.max(...trendRows.map(row => row.approvedApps || 0)), "number")}</strong> peak month`
         ],
         chartHtml: buildPortfolioTrendLineChart(
           trendRows.map(row => ({
             shortLabel: row.shortLabel,
-            value: row.communityCount > 0 && row.monthIdx <= trendCeilingMonth ? row.approvedApps : null,
-            projected: row.monthIdx > trendCeilingMonth
+            value: row.communityCount > 0 && row.monthIdx <= selectedMonth ? row.approvedApps : null,
+            projected: false
           })),
           {
             kind: "number",
@@ -17405,9 +17481,14 @@ function renderPortfolioHomeTab() {
 
 function renderReportingTab() {
   ensureValidReportHubAction();
+  reportHubType = normalizeReportHubType(reportHubType);
+  if (!["dlr", "bonus_payout"].includes(reportHubType) && reportHubPerspective === "regional") {
+    reportHubPerspective = "investor";
+  }
   if (normalizeReportHubType(reportHubType) === "dlr") {
     syncDlrTargetFromReportHub({ preserveCommunity: true });
   }
+  const normalizedType = normalizeReportHubType(reportHubType);
   const reportHubContacts = ensureReportHubRecipientSelection();
   const reportHubActionOptions = getReportHubActionOptions();
   const reportBuilderDetails = buildPortfolioDetailsForMonth(getReportHubMonthIndex());
@@ -17422,88 +17503,41 @@ function renderReportingTab() {
         </button>`;
       }).join("")
     : `<div style="font-size:0.72rem;color:var(--muted)">No saved community contacts are available in the current scope yet.</div>`;
-  const weeklyBaseline = getStoredWeeklySnapshotPayload();
-  const weeklyBaselineText = weeklyBaseline?.exportedAt
-    ? `Weekly comparison baseline synced ${new Date(weeklyBaseline.exportedAt).toLocaleString()}.`
-    : "No weekly baseline is synced yet. Use the weekly report controls below after this week’s send so next week can compare correctly.";
-  const selectedReportSections = getSelectedPortfolioReportSections();
   const reportMonthLabel = `${getDashboardMonthLabel(getReportHubMonthIndex())} ${getReportHubYear()}`;
-  const ownerFilterSummary = `${(portfolioReportFilters.investorGroups ?? []).length} investor group(s) · ${(portfolioReportFilters.investorCommunities ?? []).length} community selection(s)`;
-  const regionalFilterSummary = `${(portfolioReportFilters.regionalScopes ?? []).length} scope(s) · ${(portfolioReportFilters.regionalCommunities ?? []).length} community selection(s)`;
-  const scopeFilterHTML = portfolioReportMode === "owner"
-    ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px">
-        <div class="report-hub-card">
-          <div class="card-title" style="margin-bottom:8px">Investor Groups</div>
-          <div class="bonus-assignment-chip-wrap">
-            ${getInvestorReportFilterOptions().length > 0 ? getInvestorReportFilterOptions().map(name => {
-              const isActive = (portfolioReportFilters.investorGroups ?? []).includes(name);
-              return `<button class="bonus-community-chip ${isActive ? "active" : ""}" onclick='togglePortfolioReportFilter("investorGroups", ${JSON.stringify(name)})'>${escapeHtml(name)}</button>`;
-            }).join("") : `<div style="font-size:0.72rem;color:var(--muted)">Add investor names in Community Setup to group communities here.</div>`}
-          </div>
+  const selectedReportSections = getSelectedPortfolioReportSections();
+  const ownerFilterSummary = `${(portfolioReportFilters.investorGroups ?? []).length} investor group(s) · ${(portfolioReportFilters.investorCommunities ?? []).length} highlighted communit${(portfolioReportFilters.investorCommunities ?? []).length === 1 ? "y" : "ies"}`;
+  const reportNeedsScopeBuilder = normalizedType !== "dlr" && normalizedType !== "bonus_payout";
+  const reportNeedsSectionBuilder = normalizedType !== "dlr" && normalizedType !== "bonus_payout";
+  const reportTypeDescription = normalizedType === "investor_marketing_report"
+    ? "Combines traffic and funnel performance with comp calculator and market-survey context."
+    : normalizedType === "monthly_investor_deck"
+      ? "Builds the branded monthly report deck from the selected investor scope."
+      : normalizedType === "bonus_payout"
+        ? "Payroll-ready payout reporting using the saved bonus calculator data."
+        : normalizedType === "dlr"
+          ? "Single-community daily leasing report with upload-backed activity checks."
+          : "Investor-facing operating snapshot across the selected investor groups and highlighted communities.";
+  const scopeFilterHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px">
+      <div class="report-hub-card">
+        <div class="card-title" style="margin-bottom:8px">Investor Groups</div>
+        <div class="bonus-assignment-chip-wrap">
+          ${getInvestorReportFilterOptions().length > 0 ? getInvestorReportFilterOptions().map(name => {
+            const isActive = (portfolioReportFilters.investorGroups ?? []).includes(name);
+            return `<button class="bonus-community-chip ${isActive ? "active" : ""}" onclick='togglePortfolioReportFilter("investorGroups", ${JSON.stringify(name)})'>${escapeHtml(name)}</button>`;
+          }).join("") : `<div style="font-size:0.72rem;color:var(--muted)">Add investor names in Community Setup to group communities here.</div>`}
         </div>
-        <div class="report-hub-card">
-          <div class="card-title" style="margin-bottom:8px">Communities</div>
-          <div class="bonus-assignment-chip-wrap">
-            ${reportBuilderDetails.map(detail => {
-              const name = detail.name;
-              const isActive = (portfolioReportFilters.investorCommunities ?? []).includes(name);
-              return `<button class="bonus-community-chip ${isActive ? "active" : ""}" onclick='togglePortfolioReportFilter("investorCommunities", ${JSON.stringify(name)})'>${escapeHtml(name)}</button>`;
-            }).join("") || `<div style="font-size:0.72rem;color:var(--muted)">Save communities to filter them here.</div>`}
-          </div>
+      </div>
+      <div class="report-hub-card">
+        <div class="card-title" style="margin-bottom:8px">Highlighted Communities</div>
+        <div class="bonus-assignment-chip-wrap">
+          ${reportBuilderDetails.map(detail => {
+            const name = detail.name;
+            const isActive = (portfolioReportFilters.investorCommunities ?? []).includes(name);
+            return `<button class="bonus-community-chip ${isActive ? "active" : ""}" onclick='togglePortfolioReportFilter("investorCommunities", ${JSON.stringify(name)})'>${escapeHtml(name)}</button>`;
+          }).join("") || `<div style="font-size:0.72rem;color:var(--muted)">Save communities to filter them here.</div>`}
         </div>
-      </div>`
-    : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px">
-        <div class="report-hub-card">
-          <div class="card-title" style="margin-bottom:8px">Regional Roles</div>
-          <div class="bonus-assignment-chip-wrap">
-            ${getRegionalReportFilterOptions().length > 0 ? getRegionalReportFilterOptions().map(option => {
-              const isActive = (portfolioReportFilters.regionalScopes ?? []).includes(option.id);
-              return `<button class="bonus-community-chip ${isActive ? "active" : ""}" onclick='togglePortfolioReportFilter("regionalScopes", ${JSON.stringify(option.id)})'>${escapeHtml(option.title)}</button>`;
-            }).join("") : `<div style="font-size:0.72rem;color:var(--muted)">Assign communities to Regionals in Community Setup or Bonus Calc first.</div>`}
-          </div>
-        </div>
-        <div class="report-hub-card">
-          <div class="card-title" style="margin-bottom:8px">Communities</div>
-          <div class="bonus-assignment-chip-wrap">
-            ${reportBuilderDetails.map(detail => {
-              const name = detail.name;
-              const isActive = (portfolioReportFilters.regionalCommunities ?? []).includes(name);
-              return `<button class="bonus-community-chip ${isActive ? "active" : ""}" onclick='togglePortfolioReportFilter("regionalCommunities", ${JSON.stringify(name)})'>${escapeHtml(name)}</button>`;
-            }).join("") || `<div style="font-size:0.72rem;color:var(--muted)">Save communities to filter them here.</div>`}
-          </div>
-        </div>
-      </div>`;
-  const bonusPayoutCard = `<div class="report-hub-card">
-    <h3>Bonus payout reporting</h3>
-    <p>Pull payroll-ready employee payout views across the portfolio without a community name in the output.</p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-gray btn-sm" onclick="exportBonusPayoutCSV()">⬇ CSV</button>
-      <button class="btn btn-gray btn-sm" onclick="openBonusPayoutReport(false)">🧾 Printable HTML</button>
-      <button class="btn btn-blue btn-sm" onclick="openBonusPayoutReport(true)">🖨 PDF / Print</button>
-        <button type="button" class="btn btn-gray btn-sm" onmousedown="return queueCurrentWorkspaceTab(9)">Open Bonus Calc</button>
-    </div>
-  </div>`;
-  const executiveCard = `<div class="report-hub-card">
-    <h3>Weekly Portfolio Snap Shot</h3>
-    <p>${escapeHtml(weeklyBaselineText)}</p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-gray btn-sm" onclick="publishWeeklySnapshot()">📡 Sync This Week as Baseline</button>
-      <button class="btn btn-gray btn-sm" onclick="openWeeklyExecutiveReport(false)">👁 Preview Snap Shot</button>
-      <button class="btn btn-blue btn-sm" onclick="openWeeklyExecutiveReport(true)">🖨 Weekly PDF / Print</button>
-      <button class="btn btn-gray btn-sm" onclick="draftWeeklyExecutiveOutlookEmail()">✉ Draft Outlook Email</button>
-    </div>
-  </div>`;
-  const investorCard = `<div class="report-hub-card">
-    <h3>Investor-facing output</h3>
-    <p>Generate branded investor deliverables from saved dashboard data without disturbing any community records.</p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-gray btn-sm" onclick="openMonthlyInvestorPresentation(false)">👁 Preview Deck</button>
-      <button class="btn btn-blue btn-sm" onclick="openMonthlyInvestorPresentation(true)">🖨 Investor PDF / Print</button>
-      <button class="btn btn-gray btn-sm" onclick="setReportHubType('investor_property_packet')">Investor Info</button>
-      <button class="btn btn-gray btn-sm" onclick="exportMonthlyInvestorPresentationPptx()">🪄 Export for Canva</button>
-      <button class="btn btn-gray btn-sm" onclick="setReportHubType('dlr')">📘 Build DLR</button>
-    </div>
-  </div>`;
+      </div>
+    </div>`;
   const editableRecommendationDetails = (reportHubPerspective === "csuite" || reportHubPerspective === "regional")
     ? getScopedPortfolioReportDetails(reportBuilderDetails).slice(0, 8)
     : [];
@@ -17527,6 +17561,17 @@ function renderReportingTab() {
     </div>`
     : "";
   return `<div class="card mb4">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+      <div>
+        <h2 style="font-size:0.95rem;font-weight:700;margin-bottom:4px">🗂 Reporting Hub</h2>
+        <p style="font-size:0.72rem;color:var(--muted)">Build the report from the current month, selected investor scope, and highlighted communities, then review the live preview below before you export or email it.</p>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" class="btn btn-gray btn-sm" onmousedown="return queueCurrentWorkspaceTab(7)">Open Data Import</button>
+        ${normalizedType === "bonus_payout" ? `<button type="button" class="btn btn-gray btn-sm" onmousedown="return queueCurrentWorkspaceTab(9)">Open Bonus Calc</button>` : ""}
+        <button type="button" class="btn btn-gray btn-sm" onmousedown="return queueCurrentWorkspaceTab(0)">Back to Portfolio Home</button>
+      </div>
+    </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px">
       <div class="report-hub-card">
         <div class="card-title" style="margin-bottom:6px">Current Scope</div>
@@ -17536,24 +17581,21 @@ function renderReportingTab() {
       <div class="report-hub-card">
         <div class="card-title" style="margin-bottom:6px">Report Type</div>
         <select onchange="setReportHubType(this.value)">
-          <option value="investor_snapshot" ${reportHubType==="investor_snapshot"?"selected":""}>Investor Snap Shot</option>
-          <option value="investor_property_packet" ${reportHubType==="investor_property_packet"?"selected":""}>Investor Community Information</option>
-          <option value="weekly_portfolio_snapshot" ${reportHubType==="weekly_portfolio_snapshot"?"selected":""}>Weekly Portfolio Snap Shot</option>
-          <option value="monthly_investor_deck" ${reportHubType==="monthly_investor_deck"?"selected":""}>Monthly Investor Deck</option>
-          <option value="investor_marketing_report" ${reportHubType==="investor_marketing_report"?"selected":""}>Investor Marketing Report</option>
           <option value="dlr" ${reportHubType==="dlr"?"selected":""}>DLR</option>
+          <option value="investor_snapshot" ${reportHubType==="investor_snapshot"?"selected":""}>Investor Snapshot</option>
+          <option value="investor_marketing_report" ${reportHubType==="investor_marketing_report"?"selected":""}>Marketing Report</option>
           <option value="bonus_payout" ${reportHubType==="bonus_payout"?"selected":""}>Bonus Payout Report</option>
-          <option value="regional_progress_report" ${reportHubType==="regional_progress_report"?"selected":""}>Regional Progress Report</option>
+          <option value="monthly_investor_deck" ${reportHubType==="monthly_investor_deck"?"selected":""}>Monthly Report</option>
         </select>
+        <div style="font-size:0.66rem;color:var(--muted);margin-top:6px">${escapeHtml(reportTypeDescription)}</div>
       </div>
       <div class="report-hub-card">
         <div class="card-title" style="margin-bottom:6px">Report View</div>
         <select onchange="setReportHubPerspective(this.value)">
           <option value="investor" ${reportHubPerspective==="investor"?"selected":""}>Investor facing</option>
-          <option value="regional" ${reportHubPerspective==="regional"?"selected":""}>Regional level view</option>
           <option value="csuite" ${reportHubPerspective==="csuite"?"selected":""}>C-Suite View</option>
         </select>
-        <div style="font-size:0.66rem;color:var(--muted);margin-top:6px">${reportHubPerspective === "investor" ? "Highlights wins and cushions complications without watering down the facts." : reportHubPerspective === "regional" ? "Shows pain points, issues, improvement focus, and direct recommendations." : "High-level, clear wins and headwinds with management adjustments shown as controlled actions."}</div>
+        <div style="font-size:0.66rem;color:var(--muted);margin-top:6px">${reportHubPerspective === "investor" ? "Highlights wins and keeps the delivery investor-ready." : "High-level, clear wins and headwinds with management adjustments shown as controlled actions."}</div>
       </div>
       <div class="report-hub-card">
         <div class="card-title" style="margin-bottom:6px">Report Period</div>
@@ -17578,6 +17620,27 @@ function renderReportingTab() {
         <div style="font-size:0.68rem;color:var(--muted);margin-top:8px">${selectedRecipientCount} recipient${selectedRecipientCount === 1 ? "" : "s"} selected for email actions.</div>
       </div>
     </div>
+    ${reportNeedsScopeBuilder ? `<div class="report-hub-card" style="margin-bottom:14px">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+        <div>
+          <div class="card-title" style="margin-bottom:6px">Portfolio Report Builder</div>
+          <p style="font-size:0.72rem;color:var(--muted)">Use investor groups and highlighted communities to define the reporting scope. The live preview below updates from this builder.</p>
+        </div>
+        <div style="font-size:0.68rem;color:var(--muted)">${ownerFilterSummary}</div>
+      </div>
+      ${reportNeedsSectionBuilder ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:12px">
+        <div class="report-hub-card">
+          <div class="card-title" style="margin-bottom:8px">Sections to Include</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px">
+            ${Object.keys(portfolioReportSections).map(sectionKey => `<label style="display:flex;align-items:center;gap:8px;font-size:0.72rem;color:var(--text)">
+              <input type="checkbox" ${portfolioReportSections[sectionKey]?"checked":""} onchange="setPortfolioReportSection('${sectionKey}',this.checked)">
+              <span>${getPortfolioReportSectionLabel(sectionKey)}</span>
+            </label>`).join("")}
+          </div>
+        </div>
+      </div>` : ""}
+      ${scopeFilterHTML}
+    </div>` : ""}
     <div class="report-hub-card" style="margin-bottom:14px">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
         <div>
@@ -17592,69 +17655,67 @@ function renderReportingTab() {
       <div class="bonus-assignment-chip-wrap">${reportHubRecipientsHtml}</div>
     </div>
     ${recommendationsEditorHtml}
-    ${reportHubType === "dlr" ? renderDlrReportingWorkspace() : ""}
   </div>
-  <div class="card mb4">
+  ${renderReportHubInlinePreview(normalizedType, selectedReportSections)}`;
+}
+
+function renderReportHubPreviewFrame(title, description, documentHtml, controlsHtml = "") {
+  if (!documentHtml) {
+    return `<div class="card mb4" id="reporting-inline-preview">
+      <div class="report-hub-card">
+        <div class="alert-red">The selected report could not be previewed yet. Adjust the current scope or save the required source data first.</div>
+      </div>
+    </div>`;
+  }
+  return `<div class="card mb4" id="reporting-inline-preview">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
       <div>
-        <h2 style="font-size:0.95rem;font-weight:700;margin-bottom:4px">🗂 Reporting Hub</h2>
-        <p style="font-size:0.72rem;color:var(--muted)">This is the cleaner front door for internal operations reporting, investor-facing reporting, and bonus payout output. The underlying exports read from the selected month and the selected workspace scope.</p>
+        <h3 style="font-size:0.9rem;font-weight:700;margin-bottom:6px">${escapeHtml(title)} Preview</h3>
+        <p style="font-size:0.72rem;color:var(--muted)">${escapeHtml(description)}</p>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button type="button" class="btn btn-gray btn-sm" onmousedown="return queueCurrentWorkspaceTab(7)">Open Data Import</button>
-        <button type="button" class="btn btn-gray btn-sm" onmousedown="return queueCurrentWorkspaceTab(0)">Back to Portfolio Home</button>
-      </div>
+      ${controlsHtml ? `<div style="display:flex;gap:8px;flex-wrap:wrap">${controlsHtml}</div>` : ""}
     </div>
-    <div class="report-hub-grid">
-      ${executiveCard}
-      ${investorCard}
-      ${bonusPayoutCard}
-      <div class="report-hub-card">
-        <h3>Data Import access</h3>
-        <p>Market survey uploads stay in Data Import. DLR daily box score uploads now appear here only when the DLR report type is selected.</p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button type="button" class="btn btn-blue btn-sm" onmousedown="return queueCurrentWorkspaceTab(7)">Open Data Import Workspace</button>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="card mb4">
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
-      <div>
-        <h3 style="font-size:0.85rem;font-weight:700;margin-bottom:6px">📦 Portfolio report builder</h3>
-        <p style="font-size:0.72rem;color:var(--muted)">Filter the report by investor ownership, Regional scope, or individual communities, then export the selected sections in the format you need.</p>
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-gray btn-sm" onclick="exportPortfolioReportCSV()" ${selectedReportSections.length===0?"disabled":""}>⬇ CSV</button>
-        <button class="btn btn-gray btn-sm" onclick="exportPortfolioReportExcel()" ${selectedReportSections.length===0?"disabled":""}>📊 Excel</button>
-        <button class="btn btn-blue btn-sm" onclick="openPortfolioPerformanceReport(true)" ${selectedReportSections.length===0?"disabled":""}>🖨 PDF / Print</button>
-      </div>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
-      <div class="report-hub-card">
-        <div class="card-title" style="margin-bottom:6px">Report Audience</div>
-        <select onchange="setPortfolioReportMode(this.value)">
-          <option value="owner" ${portfolioReportMode==="owner"?"selected":""}>Investor Report</option>
-          <option value="regional" ${portfolioReportMode==="regional"?"selected":""}>Regional Detailed + Recommendations</option>
-        </select>
-        <div style="font-size:0.66rem;color:var(--muted);margin-top:6px">${portfolioReportMode==="owner"?"High-level investor-facing summary for the selected ownership scope.":"Detailed internal package for Regional accountability and recommendations."}</div>
-      </div>
-      <div class="report-hub-card" style="grid-column:span 2">
-        <div class="card-title" style="margin-bottom:8px">Sections to Include</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px">
-          ${Object.keys(portfolioReportSections).map(sectionKey => `<label style="display:flex;align-items:center;gap:8px;font-size:0.72rem;color:var(--text)">
-            <input type="checkbox" ${portfolioReportSections[sectionKey]?"checked":""} onchange="setPortfolioReportSection('${sectionKey}',this.checked)">
-            <span>${getPortfolioReportSectionLabel(sectionKey)}</span>
-          </label>`).join("")}
-        </div>
-      </div>
-    </div>
-    <div class="report-hub-card" style="margin-top:12px">
-      <div class="card-title" style="margin-bottom:6px">${portfolioReportMode==="owner"?"Investor Scope Builder":"Regional Scope Builder"}</div>
-      <div style="font-size:0.68rem;color:var(--muted);margin-bottom:10px">${portfolioReportMode==="owner"?ownerFilterSummary:regionalFilterSummary}</div>
-      ${scopeFilterHTML}
-    </div>
+    <iframe title="${escapeHtml(title)} Preview" srcdoc="${escapeHtml(documentHtml)}" style="width:100%;min-height:980px;border:1px solid var(--border);border-radius:16px;background:#fff"></iframe>
   </div>`;
+}
+
+function renderReportHubInlinePreview(type = normalizeReportHubType(reportHubType), selectedSections = getSelectedPortfolioReportSections()) {
+  if (type === "dlr") {
+    return `<div class="card mb4" id="reporting-inline-preview">${renderDlrReportingWorkspace()}</div>`;
+  }
+  if (type === "bonus_payout") {
+    return renderReportHubPreviewFrame(
+      "Bonus Payout Report",
+      "Payroll-ready output built from the saved bonus calculator state.",
+      buildBonusPayoutReportDocument(),
+      `<button class="btn btn-gray btn-sm" onclick="exportBonusPayoutCSV()">⬇ CSV</button><button class="btn btn-blue btn-sm" onclick="openBonusPayoutReport(true)">🖨 PDF / Print</button>`
+    );
+  }
+  if (selectedSections.length === 0) {
+    return `<div class="card mb4" id="reporting-inline-preview">
+      <div class="report-hub-card">
+        <div class="alert-red">Select at least one report section to build the preview.</div>
+      </div>
+    </div>`;
+  }
+  if (type === "monthly_investor_deck") {
+    const report = buildMonthlyInvestorPresentationData("monthly_investor_deck", { silent: true });
+    return renderReportHubPreviewFrame(
+      "Monthly Report",
+      "Branded monthly report deck preview for the selected investor scope.",
+      report ? buildMonthlyInvestorPresentationDocument(report) : "",
+      `<button class="btn btn-gray btn-sm" onclick="downloadMonthlyInvestorPresentationBrief()">⬇ Editable HTML</button><button class="btn btn-blue btn-sm" onclick="openMonthlyInvestorPresentation(true)">🖨 PDF / Print</button>`
+    );
+  }
+  const payload = buildPortfolioReportRows({ silent: true });
+  return renderReportHubPreviewFrame(
+    type === "investor_marketing_report" ? "Marketing Report" : "Investor Snapshot",
+    type === "investor_marketing_report"
+      ? "Preview blends traffic and funnel momentum with comp calculator and market-survey context."
+      : "Preview shows the current investor-facing operating snapshot for the selected scope.",
+    payload ? buildPortfolioPerformanceReportDocument(payload.report) : "",
+    `<button class="btn btn-gray btn-sm" onclick="exportPortfolioReportCSV()">⬇ CSV</button><button class="btn btn-gray btn-sm" onclick="exportPortfolioReportExcel()">📊 Excel</button><button class="btn btn-blue btn-sm" onclick="openPortfolioPerformanceReport(true)">🖨 PDF / Print</button>`
+  );
 }
 
 // ─── CSV Tab ───────────────────────────────────────────────────────────────────
@@ -18010,15 +18071,12 @@ function setReportHubPerspective(value) {
 
 function getReportHubTypeLabel(type = reportHubType) {
   return {
-    investor_snapshot: "Investor Snap Shot",
-    investor_property_packet: "Investor Community Information",
-    weekly_portfolio_snapshot: "Weekly Portfolio Snap Shot",
-    monthly_investor_deck: "Monthly Investor Deck",
-    investor_marketing_report: "Investor Marketing Report",
+    investor_snapshot: "Investor Snapshot",
+    monthly_investor_deck: "Monthly Report",
+    investor_marketing_report: "Marketing Report",
     dlr: "DLR",
-    bonus_payout: "Bonus Payout Report",
-    regional_progress_report: "Regional Progress Report"
-  }[normalizeReportHubType(type)] || "Weekly Portfolio Snap Shot";
+    bonus_payout: "Bonus Payout Report"
+  }[normalizeReportHubType(type)] || "Investor Snapshot";
 }
 
 function getReportPerspectiveLabel(value = reportHubPerspective) {
@@ -18031,35 +18089,35 @@ function getReportPerspectiveLabel(value = reportHubPerspective) {
 
 function configureReportHubDefaultsForType(type) {
   const normalized = normalizeReportHubType(type);
-  if (normalized === "regional_progress_report") {
-    portfolioReportMode = "regional";
-    reportHubPerspective = "regional";
+  if (normalized === "investor_marketing_report") {
+    portfolioReportMode = "owner";
+    reportHubPerspective = "investor";
     portfolioReportSections = normalizePortfolioReportSections({
       overview: true,
       traffic: true,
       marketing: true,
       leasing: true,
-      budget: true,
-      renewals: true,
-      reputation: true,
-      finances: true
-    });
-  } else if (normalized === "investor_marketing_report") {
-    portfolioReportMode = "owner";
-    reportHubPerspective = "investor";
-    portfolioReportSections = normalizePortfolioReportSections({
-      overview: false,
-      traffic: true,
-      marketing: true,
-      leasing: true,
       budget: false,
-      renewals: false,
+      renewals: true,
       reputation: true,
       finances: false
     });
-  } else if (normalized === "weekly_portfolio_snapshot") {
+  } else if (normalized === "monthly_investor_deck") {
     portfolioReportMode = "owner";
-    reportHubPerspective = "csuite";
+    reportHubPerspective = "investor";
+    portfolioReportSections = normalizePortfolioReportSections({
+      overview: true,
+      traffic: true,
+      marketing: false,
+      leasing: false,
+      budget: false,
+      renewals: true,
+      reputation: true,
+      finances: false
+    });
+  } else if (normalized === "investor_snapshot") {
+    portfolioReportMode = "owner";
+    reportHubPerspective = "investor";
     portfolioReportSections = normalizePortfolioReportSections({
       overview: true,
       traffic: true,
@@ -18067,12 +18125,13 @@ function configureReportHubDefaultsForType(type) {
       leasing: true,
       budget: true,
       renewals: true,
-      reputation: false,
+      reputation: true,
       finances: true
     });
-  } else if (normalized === "investor_snapshot" || normalized === "monthly_investor_deck" || normalized === "investor_property_packet") {
-    portfolioReportMode = "owner";
-    reportHubPerspective = "investor";
+  } else if (normalized === "dlr") {
+    reportHubPerspective = "csuite";
+  } else if (normalized === "bonus_payout") {
+    reportHubPerspective = "csuite";
   }
 }
 
@@ -19056,6 +19115,7 @@ function buildMarketSurveyAggregateForDetails(details = []) {
 
 function buildPortfolioReportData() {
   const selectedMonth = getReportHubMonthIndex();
+  const reportMode = "owner";
   const allDetails = buildPortfolioDetailsForMonth(selectedMonth);
   const details = getScopedPortfolioReportDetails(allDetails).map(detail => ({
     ...detail,
@@ -19065,19 +19125,15 @@ function buildPortfolioReportData() {
     }
   }));
   const type = normalizeReportHubType(reportHubType);
-  const reportTitle = type === "regional_progress_report"
-    ? "ATLAS RISE Regional Progress Report"
-    : type === "investor_marketing_report"
+  const reportTitle = type === "investor_marketing_report"
       ? "ATLAS RISE Investor Marketing Report"
-      : type === "weekly_portfolio_snapshot"
-        ? "ATLAS RISE Weekly Portfolio Snap Shot"
-        : "ATLAS RISE Investor Snap Shot";
-  const reportSubtitle = `${getReportPerspectiveLabel()} · ${portfolioReportMode === "owner" ? "selected investor/community scope" : "regional performance scope"}`;
+      : "ATLAS RISE Investor Snapshot";
+  const reportSubtitle = `${getReportPerspectiveLabel()} · selected investor groups and highlighted communities`;
   const aggregate = aggregateCommunitySummaries(details.map(detail => detail.summary));
   aggregate.marketSurveyAggregate = buildMarketSurveyAggregateForDetails(details);
   const report = {
     generatedAt: new Date(),
-    mode: portfolioReportMode,
+    mode: reportMode,
     type,
     perspective: reportHubPerspective,
     title: reportTitle,
@@ -19095,15 +19151,16 @@ function buildPortfolioReportData() {
   return report;
 }
 
-function buildPortfolioReportRows() {
+function buildPortfolioReportRows(options = {}) {
+  const silent = options?.silent === true;
   const report = buildPortfolioReportData();
   if (report.selectedSections.length === 0) {
-    alert("Select at least one section for the portfolio report.");
+    if (!silent) alert("Select at least one section for the portfolio report.");
     return null;
   }
   report.scopeSummary = getPortfolioReportScopeSummary(report);
   if (report.details.length === 0) {
-    alert("No communities match the current report filters.");
+    if (!silent) alert("No communities match the current report filters.");
     return null;
   }
   const rows = [];
@@ -19235,10 +19292,8 @@ function exportPortfolioReportExcel() {
   URL.revokeObjectURL(link.href);
 }
 
-function openPortfolioPerformanceReport(printImmediately = false) {
-  const payload = buildPortfolioReportRows();
-  if (!payload) return;
-  const { report } = payload;
+function buildPortfolioPerformanceReportDocument(report) {
+  if (!report) return "";
   const recommendationSourcesBySection = {
     overview: ["Overview", "Traffic", "Renewals"],
     traffic: ["Traffic"],
@@ -19302,13 +19357,20 @@ function openPortfolioPerformanceReport(printImmediately = false) {
         </section>`;
       }).join("")
     : "";
-  const win = window.open("", "_blank");
-  if (!win) return;
-  win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${report.title}</title><style>
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${report.title}</title><style>
     body{font-family:'DM Sans',Arial,sans-serif;padding:28px;color:#111827}
     table{width:100%;border-collapse:collapse}
     @media print { body{padding:18px} }
-  </style></head><body>${brandMark}${investorMarketingBlocks}${sectionBlocks}</body></html>`);
+  </style></head><body>${brandMark}${investorMarketingBlocks}${sectionBlocks}</body></html>`;
+}
+
+function openPortfolioPerformanceReport(printImmediately = false) {
+  const payload = buildPortfolioReportRows();
+  if (!payload) return;
+  const documentHtml = buildPortfolioPerformanceReportDocument(payload.report);
+  const win = window.open("", "_blank");
+  if (!win) return;
+  win.document.write(documentHtml);
   win.document.close();
   if (printImmediately) {
     win.focus();
@@ -19723,12 +19785,13 @@ function getMonthlyPresentationCurrentEntry(detail) {
   return detail?.record?.monthlyData?.[monthIdx] ?? {};
 }
 
-function buildMonthlyInvestorPresentationData(variant = "monthly_investor_deck") {
+function buildMonthlyInvestorPresentationData(variant = "monthly_investor_deck", options = {}) {
+  const silent = options?.silent === true;
   const selectedMonth = getReportHubMonthIndex();
   const allDetails = buildPortfolioDetailsForMonth(selectedMonth);
   const details = getMonthlyPresentationScopedDetails(allDetails);
   if (details.length === 0) {
-    alert("No communities match the current monthly investor presentation scope.");
+    if (!silent) alert("No communities match the current monthly report scope.");
     return null;
   }
   const generatedAt = new Date();
@@ -19752,7 +19815,7 @@ function buildMonthlyInvestorPresentationData(variant = "monthly_investor_deck")
     variant,
     title: isInvestorPacket
       ? "Investor Community Information"
-      : (details.length === 1 ? "Community Market Analysis" : "Portfolio Market Analysis"),
+      : (details.length === 1 ? "ATLAS RISE Monthly Report" : "ATLAS RISE Monthly Report"),
     subtitle: isInvestorPacket ? communityNames.join(" · ") : subtitle,
     coverMonthLabel: `${getDashboardMonthLabel(selectedMonth)} ${isInvestorPacket ? "Investor Community Information" : "Investor Presentation"}`,
     footerLabel: isInvestorPacket
@@ -19852,7 +19915,7 @@ function buildMonthlyInvestorPresentationNarrative(report) {
   const secondParagraph = report.previousMonthLabel
     ? (packetMode
         ? `Versus ${report.previousMonthLabel}, approved applications are ${formatPortfolioTrendValue(aggregate.applicationsApproved ?? 0, aggregate.previousApplicationsApproved ?? 0, "count_pct").replace("MoM", "month over month")}, renewal retention is ${formatPortfolioTrendValue(aggregate.renewalRetentionRate ?? 0, aggregate.previousRenewalRetentionRate ?? 0, "point").replace("MoM", "month over month")}, and tour-to-lease conversion is ${tourToLeaseComparison}. The packet stays high level, but it still reads directly from live ATLAS data, APTIQ market inputs, team assignments, and saved community photos.`
-        : `Versus ${report.previousMonthLabel}, approved applications are ${formatPortfolioTrendValue(aggregate.applicationsApproved ?? 0, aggregate.previousApplicationsApproved ?? 0, "count_pct").replace("MoM", "month over month")}, renewal retention is ${formatPortfolioTrendValue(aggregate.renewalRetentionRate ?? 0, aggregate.previousRenewalRetentionRate ?? 0, "point").replace("MoM", "month over month")}, and tour-to-lease conversion is ${tourToLeaseComparison}. This export is built from live dashboard data, not a static slide template, so each monthly deck reflects the current operating picture for the selected communities.`)
+        : `Versus ${report.previousMonthLabel}, applications are ${formatPortfolioTrendValue(aggregate.applicationsApproved ?? 0, aggregate.previousApplicationsApproved ?? 0, "count_pct").replace("MoM", "month over month")}, renewal retention is ${formatPortfolioTrendValue(aggregate.renewalRetentionRate ?? 0, aggregate.previousRenewalRetentionRate ?? 0, "point").replace("MoM", "month over month")}, and tour-to-lease conversion is ${tourToLeaseComparison}. This export is built from live dashboard data, not a static slide template, so each monthly deck reflects the current operating picture for the selected communities.`)
     : (packetMode
         ? `Tour-to-lease conversion is currently ${(aggregate.tourToLeasePct ?? 0).toFixed(1)}%, and this packet blends live operating momentum with saved market, staffing, and image data so the story remains investor-ready without losing connection to the actual dashboard numbers.`
         : `Tour-to-lease conversion is currently ${(aggregate.tourToLeasePct ?? 0).toFixed(1)}%, and this export is built from live dashboard data rather than a static slide template so the deck always reflects the current operating picture for the selected communities.`);
@@ -21936,9 +21999,8 @@ function getReportHubActionOptions(type = reportHubType) {
     { value: "print", label: "Print / PDF" },
     { value: "email", label: "Draft Email" }
   ];
-  if (["investor_snapshot", "investor_marketing_report", "regional_progress_report"].includes(normalizedType)) return [...common, { value: "export_csv", label: "Export CSV" }, { value: "export_excel", label: "Export Excel" }];
-  if (normalizedType === "monthly_investor_deck") return [...common, { value: "export_canva", label: "Export for Canva" }, { value: "export_html", label: "Download Editable HTML" }];
-  if (normalizedType === "investor_property_packet") return [...common, { value: "export_html", label: "Download Editable HTML" }];
+  if (["investor_snapshot", "investor_marketing_report"].includes(normalizedType)) return [...common, { value: "export_csv", label: "Export CSV" }, { value: "export_excel", label: "Export Excel" }];
+  if (normalizedType === "monthly_investor_deck") return [...common, { value: "export_html", label: "Download Editable HTML" }];
   if (normalizedType === "dlr") return [...common, { value: "export_html", label: "Download Editable HTML" }];
   if (normalizedType === "bonus_payout") return [...common, { value: "export_csv", label: "Export CSV" }];
   return common;
@@ -21954,16 +22016,7 @@ function buildReportHubEmailDraft(type = reportHubType) {
   const selectedRecipients = ensureReportHubRecipientSelection().filter(contact => reportHubRecipientKeys.includes(contact.key));
   const to = selectedRecipients.map(contact => contact.email).join("; ");
   const scopeLabel = getWorkspaceScopeDisplayName();
-  if (normalizedType === "weekly_portfolio_snapshot") {
-    const report = buildWeeklyExecutiveReportData();
-    if (!report) return null;
-    return {
-      to,
-      subject: `${report.title} | ${report.currentMonthLabel}`,
-      body: buildWeeklyExecutiveEmailBody(report)
-    };
-  }
-  if (["investor_snapshot", "investor_marketing_report", "regional_progress_report"].includes(normalizedType)) {
+  if (["investor_snapshot", "investor_marketing_report"].includes(normalizedType)) {
     const payload = buildPortfolioReportRows();
     if (!payload) return null;
     return {
@@ -21988,22 +22041,7 @@ function buildReportHubEmailDraft(type = reportHubType) {
         `${report.title}`,
         `${report.scopeSummary}`,
         "",
-        "The latest investor presentation is ready from the Reporting Hub.",
-        "Use Preview, Print / PDF, Export for Canva, or Download Editable HTML before sending."
-      ].join("\n")
-    };
-  }
-  if (normalizedType === "investor_property_packet") {
-    const report = buildInvestorPropertyPacketData();
-    if (!report) return null;
-    return {
-      to,
-      subject: `${report.title} | ${report.currentMonthLabel}`,
-      body: [
-        `${report.title}`,
-        `${report.scopeSummary}`,
-        "",
-        "The latest Investor Community Information report is ready from the Reporting Hub.",
+        "The latest monthly report is ready from the Reporting Hub.",
         "Use Preview, Print / PDF, or Download Editable HTML before sending."
       ].join("\n")
     };
@@ -22225,27 +22263,488 @@ function renderDlrReportingWorkspace() {
   </div>`;
 }
 
+function buildPortfolioDlrOverviewNotes({
+  reportDateLabel,
+  monthLabel,
+  detailCount,
+  dailyCoverageCount,
+  aggregate,
+  previousAggregate,
+  dailyTraffic,
+  mtdTraffic,
+  scopeSummary
+}) {
+  const prevApps = Number(previousAggregate?.applications ?? 0);
+  const prevTours = Number(previousAggregate?.tours ?? 0);
+  const prevLeases = Number(previousAggregate?.leasesSigned ?? 0);
+  const topLeadSources = getTopLeadSourceFacts(mtdTraffic);
+  const sourceLead = topLeadSources[0] || null;
+  const sourceSupport = topLeadSources[1] || null;
+  return {
+    tours: [
+      `${dailyCoverageCount} of ${detailCount} selected communit${detailCount === 1 ? "y has" : "ies have"} matching daily box score coverage for ${reportDateLabel || monthLabel}.`,
+      `${formatDlrMetricValue(dailyTraffic.guestCards)} guest cards and ${formatDlrMetricValue(dailyTraffic.tours)} tours were logged across the selected scope on the report date.`,
+      sourceLead
+        ? `${sourceLead.label} leads the month-to-date source mix at ${sourceLead.value}${sourceSupport ? `, followed by ${sourceSupport.label} at ${sourceSupport.value}` : ""}.`
+        : "Lead-source mix will populate here as walk-in, call, email / online, and event activity are saved by community.",
+      `Month-to-date tours are ${formatDeltaWord(mtdTraffic.tours, prevTours, "tour")} across the selected scope.`
+    ].filter(Boolean),
+    applications: [
+      `${formatDlrMetricValue(mtdTraffic.applications)} applications are recorded month to date, including ${formatDlrMetricValue(mtdTraffic.approvals)} approved, ${formatDlrMetricValue(mtdTraffic.denials)} denied, ${formatDlrMetricValue(mtdTraffic.cancelled)} cancelled, and ${formatDlrMetricValue(mtdTraffic.pendingDecision)} pending decision.`,
+      `${formatDlrMetricValue(dailyTraffic.applications)} applications posted on the report date across the selected communities.`,
+      `Applications are currently ${formatDeltaWord(mtdTraffic.applications, prevApps, "application")} versus the prior month, while signed leases are ${formatDeltaWord(mtdTraffic.leases, prevLeases, "lease")} across the same scope.`
+    ].filter(Boolean),
+    highlights: [
+      `${formatDlrPercent(aggregate.occPct, 1)} physical occupancy is pacing against a saved budget target of ${formatDlrPercent(aggregate.budgetOccPct, 1)} across ${detailCount} selected communit${detailCount === 1 ? "y" : "ies"}.`,
+      `${formatDlrPercent(aggregate.leasedPct, 1)} leased exposure and ${formatDlrPercent(aggregate.renewalRetentionRate, 0)} retention are supporting the selected portfolio scope.`,
+      `${formatDlrMetricValue(aggregate.occGapUnits)} budget gap unit${Number(aggregate.occGapUnits) === 1 ? "" : "s"} and ${formatDlrMetricValue(aggregate.renewalUndecided)} undecided renewal${Number(aggregate.renewalUndecided) === 1 ? "" : "s"} remain the clearest operating focus.`,
+      scopeSummary
+    ].filter(Boolean),
+    wins: [
+      Number(aggregate.monthAbsorption ?? 0) > 0 ? `Net absorption is positive at ${formatDlrSignedNumber(aggregate.monthAbsorption)} units for the selected scope.` : "",
+      Number(aggregate.applicationsApproved ?? 0) > 0 ? `${formatDlrMetricValue(aggregate.applicationsApproved)} approved applications are already in hand for conversion.` : "",
+      Number(aggregate.occPct ?? 0) + 0.5 >= Number(aggregate.budgetOccPct ?? 0) ? "Physical occupancy is pacing at or near the saved budget line." : "",
+      Number(aggregate.renewalRetentionRate ?? 0) >= 50 ? `Renewal retention is holding at ${formatDlrPercent(aggregate.renewalRetentionRate, 0)} across the selected communities.` : ""
+    ].filter(Boolean)
+  };
+}
+
+function buildPortfolioDlrOverviewData(options = {}) {
+  const silent = options.silent === true;
+  const monthIdx = getReportHubMonthIndex();
+  const year = getReportHubYear();
+  const allDetails = buildPortfolioDetailsForMonth(monthIdx);
+  const details = getInvestorScopedPortfolioDetails(allDetails);
+  if (details.length === 0) {
+    if (!silent) alert("No communities match the current investor / community scope for the portfolio DLR.");
+    return null;
+  }
+  const communityReports = details
+    .map(detail => buildDashboardDlrInvestorOverview(detail.name, monthIdx, year))
+    .filter(Boolean);
+  if (communityReports.length === 0) {
+    if (!silent) alert("Save community data first, then the portfolio DLR can build from the selected scope.");
+    return null;
+  }
+  const aggregate = aggregateCommunitySummaries(details.map(detail => detail.summary));
+  aggregate.occPct = aggregate.occupancyBaseUnits > 0 ? (aggregate.occupied / aggregate.occupancyBaseUnits) * 100 : 0;
+  aggregate.leasedPct = aggregate.occupancyBaseUnits > 0 ? (aggregate.leased / aggregate.occupancyBaseUnits) * 100 : 0;
+  const previousMonthIdx = monthIdx > 0 ? monthIdx - 1 : 0;
+  const previousDetails = monthIdx > 0
+    ? getInvestorScopedPortfolioDetails(buildPortfolioDetailsForMonth(previousMonthIdx))
+    : [];
+  const previousAggregate = previousDetails.length > 0
+    ? aggregateCommunitySummaries(previousDetails.map(detail => detail.summary))
+    : null;
+  const sumMetrics = (items, path) => (Array.isArray(items) ? items : []).reduce((total, item) => total + (Number(path(item)) || 0), 0);
+  const dailyTraffic = {
+    walkIn: sumMetrics(communityReports, report => report.dailyTraffic?.walkIn),
+    offSiteEvent: sumMetrics(communityReports, report => report.dailyTraffic?.offSiteEvent),
+    phoneCalls: sumMetrics(communityReports, report => report.dailyTraffic?.phoneCalls),
+    emailsOnline: sumMetrics(communityReports, report => report.dailyTraffic?.emailsOnline),
+    textChatOther: sumMetrics(communityReports, report => report.dailyTraffic?.textChatOther),
+    guestCards: sumMetrics(communityReports, report => report.dailyTraffic?.guestCards),
+    newLeads: sumMetrics(communityReports, report => report.dailyTraffic?.newLeads),
+    tours: sumMetrics(communityReports, report => report.dailyTraffic?.tours),
+    applications: sumMetrics(communityReports, report => report.dailyTraffic?.applications),
+    approvals: sumMetrics(communityReports, report => report.dailyTraffic?.approvals),
+    denials: sumMetrics(communityReports, report => report.dailyTraffic?.denials),
+    cancelled: sumMetrics(communityReports, report => report.dailyTraffic?.cancelled),
+    pendingDecision: sumMetrics(communityReports, report => report.dailyTraffic?.pendingDecision),
+    leases: sumMetrics(communityReports, report => report.dailyTraffic?.leases),
+    moveIns: sumMetrics(communityReports, report => report.dailyTraffic?.moveIns),
+    moveOuts: sumMetrics(communityReports, report => report.dailyTraffic?.moveOuts),
+    renewals: sumMetrics(communityReports, report => report.dailyTraffic?.renewals),
+    activityEmails: sumMetrics(communityReports, report => report.dailyTraffic?.activityEmails),
+    activityCalls: sumMetrics(communityReports, report => report.dailyTraffic?.activityCalls),
+    activityChats: sumMetrics(communityReports, report => report.dailyTraffic?.activityChats),
+    activityTexts: sumMetrics(communityReports, report => report.dailyTraffic?.activityTexts),
+    firstVisitsTours: sumMetrics(communityReports, report => report.dailyTraffic?.firstVisitsTours)
+  };
+  const mtdTraffic = {
+    walkIn: sumMetrics(communityReports, report => report.trafficMetrics?.walkIn),
+    offSiteEvent: sumMetrics(communityReports, report => report.trafficMetrics?.offSiteEvent),
+    phoneCalls: sumMetrics(communityReports, report => report.trafficMetrics?.phoneCalls),
+    emailsOnline: sumMetrics(communityReports, report => report.trafficMetrics?.emailsOnline),
+    textChatOther: sumMetrics(communityReports, report => report.trafficMetrics?.textChatOther),
+    guestCards: sumMetrics(communityReports, report => report.trafficMetrics?.guestCards),
+    rolledGuestCards: sumMetrics(communityReports, report => report.trafficMetrics?.rolledGuestCards ?? report.trafficMetrics?.guestCards),
+    tours: sumMetrics(communityReports, report => report.trafficMetrics?.tours),
+    applications: sumMetrics(communityReports, report => report.trafficMetrics?.applications),
+    approvals: sumMetrics(communityReports, report => report.trafficMetrics?.approvals),
+    denials: sumMetrics(communityReports, report => report.trafficMetrics?.denials),
+    cancelled: sumMetrics(communityReports, report => report.trafficMetrics?.cancelled),
+    pendingDecision: sumMetrics(communityReports, report => report.trafficMetrics?.pendingDecision),
+    leases: sumMetrics(communityReports, report => report.trafficMetrics?.leases),
+    renewals: sumMetrics(communityReports, report => report.trafficMetrics?.renewals),
+    moveIns: sumMetrics(communityReports, report => report.trafficMetrics?.moveIns),
+    moveOuts: sumMetrics(communityReports, report => report.trafficMetrics?.moveOuts),
+    monthAbsorption: sumMetrics(communityReports, report => report.monthAbsorption)
+  };
+  const forwardLook = Array.from({ length: 4 }, (_, idx) => {
+    const sample = communityReports.find(report => report.forwardLook?.[idx])?.forwardLook?.[idx] || null;
+    return {
+      monthIdx: sample?.monthIdx ?? clampNumber(monthIdx + idx, 0, 11),
+      label: sample?.label || formatDlrMonthYear(clampNumber(monthIdx + idx, 0, 11), year),
+      leaseExpirations: sumMetrics(communityReports, report => report.forwardLook?.[idx]?.leaseExpirations),
+      mtm: sumMetrics(communityReports, report => report.forwardLook?.[idx]?.mtm),
+      pendingMoveOuts: sumMetrics(communityReports, report => report.forwardLook?.[idx]?.pendingMoveOuts),
+      pendingMoveIns: sumMetrics(communityReports, report => report.forwardLook?.[idx]?.pendingMoveIns),
+      moveInsNeeded: sumMetrics(communityReports, report => report.forwardLook?.[idx]?.moveInsNeeded),
+      budgetedOccupancy: 0,
+      projectedOccupancy: 0
+    };
+  });
+  forwardLook.forEach((row, idx) => {
+    const scopeDetails = getInvestorScopedPortfolioDetails(buildPortfolioDetailsForMonth(clampNumber(monthIdx + idx, 0, 11)));
+    const scopeAggregate = scopeDetails.length > 0 ? aggregateCommunitySummaries(scopeDetails.map(detail => detail.summary)) : null;
+    row.budgetedOccupancy = Number(scopeAggregate?.budgetOccPct ?? aggregate.budgetOccPct) || 0;
+    row.projectedOccupancy = scopeAggregate?.occupancyBaseUnits > 0 ? (Number(scopeAggregate?.occupied ?? 0) / Number(scopeAggregate.occupancyBaseUnits)) * 100 : Number(aggregate.occPct ?? 0);
+  });
+  const pricingTotals = communityReports.reduce((acc, report) => {
+    const weight = Math.max(1, Number(report.occupiedUnits) || Number(report.leasedUnits) || 0);
+    if (Number(report.pricing?.avgInPlaceRent ?? 0) > 0) {
+      acc.inPlaceWeight += Number(report.pricing.avgInPlaceRent) * weight;
+      acc.inPlaceUnits += weight;
+    }
+    if (Number(report.pricing?.avgBudgetRent ?? 0) > 0) {
+      acc.budgetWeight += Number(report.pricing.avgBudgetRent) * weight;
+      acc.budgetUnits += weight;
+    }
+    if (Number(report.pricing?.avgNetEffectiveRent ?? 0) > 0) {
+      acc.nerWeight += Number(report.pricing.avgNetEffectiveRent) * weight;
+      acc.nerUnits += weight;
+    }
+    acc.rentRollTotal += Number(report.pricing?.rentRollTotal ?? 0) || 0;
+    acc.concessions += Number(report.pricing?.concessions ?? 0) || 0;
+    return acc;
+  }, {
+    inPlaceWeight: 0,
+    inPlaceUnits: 0,
+    budgetWeight: 0,
+    budgetUnits: 0,
+    nerWeight: 0,
+    nerUnits: 0,
+    rentRollTotal: 0,
+    concessions: 0
+  });
+  const scopeSummary = getPortfolioReportScopeSummary({ mode: "owner", details });
+  const status = Number(aggregate.occPct ?? 0) + 0.5 >= Number(aggregate.budgetOccPct ?? 0)
+    ? "On Track"
+    : Number(aggregate.occPct ?? 0) + 2 >= Number(aggregate.budgetOccPct ?? 0)
+      ? "Watch"
+      : "Needs Attention";
+  const dateLabels = [...new Set(communityReports.map(report => String(report.reportDateLabel || "").trim()).filter(Boolean))];
+  const reportDateLabel = dateLabels.length === 1 ? dateLabels[0] : "";
+  const photoPool = collectMonthlyPresentationPhotos(details, 3);
+  const notes = buildPortfolioDlrOverviewNotes({
+    reportDateLabel,
+    monthLabel: formatDlrMonthYear(monthIdx, year),
+    detailCount: details.length,
+    dailyCoverageCount: communityReports.filter(report => isDlrDailyBoxScoreReady(report)).length,
+    aggregate,
+    previousAggregate,
+    dailyTraffic,
+    mtdTraffic,
+    scopeSummary
+  });
+  return {
+    title: "ATLAS RISE Portfolio Daily Leasing Report",
+    communityName: scopeSummary,
+    scopeSummary,
+    reportMonthIdx: monthIdx,
+    reportYear: year,
+    reportMonthLabel: formatDlrMonthYear(monthIdx, year),
+    reportPeriodLabel: reportDateLabel ? `${reportDateLabel} · portfolio scope` : `${formatDlrMonthYear(monthIdx, year)} portfolio scope`,
+    reportDateLabel,
+    generatedAt: new Date(),
+    status,
+    totalUnits: aggregate.totalUnits,
+    occupiedUnits: aggregate.occupied,
+    leasedUnits: aggregate.leased,
+    occupancyPct: Number(aggregate.occPct ?? 0),
+    leasedPct: Number(aggregate.leasedPct ?? 0),
+    trendingOccupancyPct: Number(forwardLook[Math.min(3, Math.max(forwardLook.length - 1, 0))]?.projectedOccupancy ?? aggregate.occPct ?? 0),
+    budgetOccPct: Number(aggregate.budgetOccPct ?? 0),
+    moveInGoalPerWeek: Number(aggregate.moveInGoal ?? 0),
+    moveInsNeeded: Number(forwardLook[0]?.moveInsNeeded ?? aggregate.occGapUnits ?? 0),
+    monthAbsorption: Number(aggregate.monthAbsorption ?? 0),
+    trafficMetrics: {
+      ...mtdTraffic,
+      sourceMode: communityReports.some(report => isDlrDailyBoxScoreReady(report)) ? "daily_box_score" : "dashboard_mtd"
+    },
+    dailyTraffic,
+    pricing: {
+      totalUnits: aggregate.totalUnits,
+      leasedUnits: aggregate.leased,
+      occupiedUnits: aggregate.occupied,
+      avgBudgetRent: pricingTotals.budgetUnits > 0 ? pricingTotals.budgetWeight / pricingTotals.budgetUnits : null,
+      avgInPlaceRent: pricingTotals.inPlaceUnits > 0 ? pricingTotals.inPlaceWeight / pricingTotals.inPlaceUnits : null,
+      avgNetEffectiveRent: pricingTotals.nerUnits > 0 ? pricingTotals.nerWeight / pricingTotals.nerUnits : null,
+      rentRollTotal: pricingTotals.rentRollTotal || null,
+      concessions: pricingTotals.concessions || null
+    },
+    forwardLook,
+    renewalSnapshot: {
+      expirations: Number(aggregate.renewalExpirations ?? 0),
+      signed: Number(aggregate.renewalsSigned ?? 0),
+      undecided: Number(aggregate.renewalUndecided ?? 0),
+      projectedAttrition: Number(aggregate.renewalProjectedAttrition ?? 0),
+      retentionRate: Number(aggregate.renewalRetentionRate ?? 0),
+      previousRetentionRate: Number(previousAggregate?.renewalRetentionRate ?? 0)
+    },
+    notes,
+    marketing: { ready: false, narrative: "" },
+    details,
+    communityReports,
+    photoPool,
+    communityPhotoAsset: photoPool[0] || null,
+    communityPhotoPreviewSrc: String(photoPool[0]?.previewSrc || photoPool[0]?.src || ""),
+    sourceSummary: `${details.length} communit${details.length === 1 ? "y" : "ies"} included · ${communityReports.filter(report => isDlrDailyBoxScoreReady(report)).length}/${details.length} with matching daily DLR box score coverage`
+  };
+}
+
+async function hydratePortfolioDlrOverviewAssets(report) {
+  if (!report) return report;
+  if (Array.isArray(report.photoPool) && report.photoPool.length > 0) {
+    report.photoPoolResolved = await Promise.all(report.photoPool.map(async photo => ({
+      ...photo,
+      resolvedSrc: await resolveDlrInvestorOverviewPhotoSrc(photo)
+    })));
+    report.communityPhotoSrc = report.photoPoolResolved[0]?.resolvedSrc || "";
+  } else {
+    report.photoPoolResolved = [];
+    report.communityPhotoSrc = "";
+  }
+  return report;
+}
+
+function buildPortfolioDlrOverviewDocument(report) {
+  const photoStrip = (report.photoPoolResolved ?? []).length > 0
+    ? `<div class="section portfolio-photo-strip">
+        ${(report.photoPoolResolved ?? []).map(photo => `<div class="portfolio-photo-frame">
+          <img src="${photo.resolvedSrc}" alt="" class="portfolio-photo-frame-img">
+          <div class="portfolio-photo-frame-label">${escapeHtml(photo.community || "RISE")}</div>
+        </div>`).join("")}
+      </div>`
+    : "";
+  const heroCards = [
+    { label: "Physical Occupancy", value: formatDlrPercent(report.occupancyPct), sub: `${report.occupiedUnits} occupied units` },
+    { label: "Leased Exposure", value: formatDlrPercent(report.leasedPct), sub: `${report.leasedUnits} leased units` },
+    { label: "90-Day Projection", value: formatDlrPercent(report.trendingOccupancyPct), sub: "ending physical occupancy" },
+    { label: "Net Absorption", value: formatDlrSignedNumber(report.monthAbsorption), sub: `${formatDlrMetricValue(report.trafficMetrics?.moveIns)} ins / ${formatDlrMetricValue(report.trafficMetrics?.moveOuts)} outs` },
+    { label: "Renewal Retention", value: formatDlrPercent(report.renewalSnapshot.retentionRate, 0), sub: `${formatDlrMetricValue(report.renewalSnapshot.signed)} signed of ${formatDlrMetricValue(report.renewalSnapshot.expirations)}` },
+    { label: "Today's Apps", value: formatDlrMetricValue(report.dailyTraffic?.applications), sub: `${formatDlrMetricValue(report.dailyTraffic?.approvals)} approved · ${formatDlrMetricValue(report.dailyTraffic?.denials)} denied` }
+  ];
+  const scopeRows = report.details.map(detail => {
+    const communityReport = report.communityReports.find(item => item.communityName === detail.name) || null;
+    return `<tr>
+      <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px">
+        <div style="font-weight:700;color:#0f172a">${escapeHtml(detail.name)}</div>
+        <div style="font-size:11px;color:#64748b">${escapeHtml(getInvestorPortfolioName(detail.record) || "Unassigned investor")}</div>
+      </td>
+      <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${getSummaryOccPct(detail.summary).toFixed(1)}%</td>
+      <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${getSummaryLeasedPct(detail.summary).toFixed(1)}%</td>
+      <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${Math.round(detail.summary?.applicationsApproved ?? 0)}</td>
+      <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${formatSignedDisplay(detail.summary?.monthAbsorption ?? 0)}</td>
+      <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${(detail.summary?.renewalRetentionRate ?? 0).toFixed(1)}%</td>
+      <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${communityReport && isDlrDailyBoxScoreReady(communityReport) ? "Live DLR" : "Saved MTD"}</td>
+    </tr>`;
+  }).join("");
+  const notesHtml = [
+    { label: "Tours", items: report.notes.tours },
+    { label: "Applications", items: report.notes.applications },
+    { label: "Highlights", items: report.notes.highlights },
+    { label: "Wins", items: report.notes.wins }
+  ].map(section => `<div style="margin-bottom:12px">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;margin-bottom:4px">${escapeHtml(section.label)}</div>
+      <div style="font-size:12px;color:#334155;line-height:1.7">${section.items.length > 0 ? section.items.map(item => `• ${escapeHtml(item)}`).join("<br>") : "No notes surfaced from the current dashboard data."}</div>
+    </div>`).join("");
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(report.title)}</title><style>
+    *{box-sizing:border-box}
+    body{font-family:'DM Sans',Arial,sans-serif;padding:28px;color:#0f172a;background:#ffffff}
+    table{width:100%;border-collapse:collapse}
+    .section{margin-bottom:18px}
+    .section-card{border:1px solid #dbe4f0;border-radius:16px;padding:16px;background:#ffffff}
+    .hero-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:18px}
+    .hero-card{background:#eff6ff;border:1px solid #bfdbfe;border-radius:14px;padding:14px 16px}
+    .portfolio-photo-strip{display:grid;grid-template-columns:repeat(${Math.max(1, (report.photoPoolResolved ?? []).length)},minmax(0,1fr));gap:12px}
+    .portfolio-photo-frame{position:relative;min-height:180px;border-radius:20px;overflow:hidden;border:1px solid #dbe4f0;background:#0f172a}
+    .portfolio-photo-frame-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+    .portfolio-photo-frame-label{position:absolute;left:14px;bottom:14px;padding:7px 10px;border-radius:999px;background:rgba(15,23,42,.74);border:1px solid rgba(191,219,254,.4);color:#dbeafe;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+    .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    @media print { body{padding:18px} .grid-2{grid-template-columns:1fr 1fr} }
+  </style></head><body>
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:18px;padding:18px 20px;border:1px solid #dbe4f0;border-radius:20px;background:linear-gradient(135deg,#f8fbff 0%,#eef5ff 100%)">
+      <div style="display:flex;align-items:center;gap:14px">
+        <img src="${resolveExportBrandLogoSrc()}" alt="ATLAS RISE logo" style="height:38px;width:auto;object-fit:contain;display:block">
+        <div>
+          <div style="font-size:24px;font-weight:700;color:#1d4ed8">${escapeHtml(report.title)}</div>
+          <div style="font-size:13px;color:#64748b">${escapeHtml(report.reportPeriodLabel)}</div>
+          <div style="font-size:12px;color:#475569;margin-top:6px;max-width:620px">${escapeHtml(report.communityName)}. The scope follows the highlighted community overrides and investor group filters already selected in Reporting.</div>
+        </div>
+      </div>
+      <div style="text-align:right;font-size:11px;color:#64748b">
+        <div style="display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;background:${report.status === "On Track" ? "#dcfce7" : report.status === "Watch" ? "#fef3c7" : "#fee2e2"};color:${report.status === "On Track" ? "#166534" : report.status === "Watch" ? "#92400e" : "#991b1b"};font-weight:700;margin-bottom:8px">${escapeHtml(report.status)} · Saved Budget ${formatDlrPercent(report.budgetOccPct)}</div>
+        <div>Generated ${escapeHtml(formatPresentationTimestamp(report.generatedAt))}</div>
+        <div>${escapeHtml(report.sourceSummary)}</div>
+      </div>
+    </div>
+    ${photoStrip}
+    <div class="hero-cards">
+      ${heroCards.map(card => `<div class="hero-card">
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#6b7280;margin-bottom:6px">${escapeHtml(card.label)}</div>
+        <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:4px">${escapeHtml(card.value)}</div>
+        <div style="font-size:12px;color:#475569">${escapeHtml(card.sub)}</div>
+      </div>`).join("")}
+    </div>
+    <div class="grid-2 section">
+      <div>${buildDlrOccupancyPositionChart(report)}</div>
+      <div>${buildDlrRenewalHealthChart(report)}</div>
+    </div>
+    <div class="grid-2 section">
+      <div class="section-card">
+        <div style="font-size:14px;font-weight:700;margin-bottom:10px">Activity Snapshot</div>
+        ${renderDashboardDlrActivityMiniTable(report)}
+      </div>
+      <div class="section-card">
+        <div style="font-size:14px;font-weight:700;margin-bottom:10px">Pricing & Retention Snapshot</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12px;color:#334155">
+          <div><strong>Market / In-Place Rent</strong><br>${formatDlrCurrency(report.pricing.avgInPlaceRent)}</div>
+          <div><strong>Budget Rent</strong><br>${formatDlrCurrency(report.pricing.avgBudgetRent)}</div>
+          <div><strong>Net Effective Rent</strong><br>${formatDlrCurrency(report.pricing.avgNetEffectiveRent)}</div>
+          <div><strong>Concessions</strong><br>${formatDlrCurrency(report.pricing.concessions)}</div>
+          <div><strong>Rent Roll Total</strong><br>${formatDlrCurrency(report.pricing.rentRollTotal)}</div>
+          <div><strong>Move-In Goal</strong><br>${formatDlrMetricValue(report.moveInGoalPerWeek)}</div>
+        </div>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid #e5e7eb;font-size:12px;color:#475569">
+          Renewal retention is ${formatDlrPercent(report.renewalSnapshot.retentionRate, 0)} with ${formatDlrMetricValue(report.renewalSnapshot.undecided)} undecided / M2M and ${formatDlrMetricValue(report.moveInsNeeded)} move-ins still needed against the current saved occupancy target.
+        </div>
+      </div>
+    </div>
+    <div class="section section-card">
+      <div style="font-size:14px;font-weight:700;margin-bottom:10px">Forward Look</div>
+      <div style="margin-bottom:12px">${buildDlrForwardLookChart(report)}</div>
+      <table>
+        <thead>
+          <tr style="background:#eff6ff">
+            <th style="padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#475569;text-align:left">Month</th>
+            <th style="padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#475569;text-align:center">Expirations</th>
+            <th style="padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#475569;text-align:center">Pending Outs</th>
+            <th style="padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#475569;text-align:center">Pending Ins</th>
+            <th style="padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#475569;text-align:center">Budget Occ</th>
+            <th style="padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#475569;text-align:center">Projected Occ</th>
+            <th style="padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#475569;text-align:center">Move-Ins Needed</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${(report.forwardLook ?? []).map(row => `<tr>
+            <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;font-weight:700">${escapeHtml(row.label)}</td>
+            <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${formatDlrMetricValue(row.leaseExpirations)}</td>
+            <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${formatDlrMetricValue(row.pendingMoveOuts)}</td>
+            <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${formatDlrMetricValue(row.pendingMoveIns)}</td>
+            <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${formatDlrPercent(row.budgetedOccupancy)}</td>
+            <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${formatDlrPercent(row.projectedOccupancy)}</td>
+            <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center;font-weight:700">${formatDlrMetricValue(row.moveInsNeeded)}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+    <div class="grid-2 section">
+      <div class="section-card">
+        <div style="font-size:14px;font-weight:700;margin-bottom:10px">Scope Notes</div>
+        ${notesHtml}
+      </div>
+      <div class="section-card">
+        <div style="font-size:14px;font-weight:700;margin-bottom:10px">Community Scope Snapshot</div>
+        <table>
+          <thead>
+            <tr style="background:#eff6ff">
+              <th style="padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#475569;text-align:left">Community</th>
+              <th style="padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#475569;text-align:center">Physical</th>
+              <th style="padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#475569;text-align:center">Leased</th>
+              <th style="padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#475569;text-align:center">Approved</th>
+              <th style="padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#475569;text-align:center">Absorption</th>
+              <th style="padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#475569;text-align:center">Renewal</th>
+              <th style="padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#475569;text-align:center">Source</th>
+            </tr>
+          </thead>
+          <tbody>${scopeRows}</tbody>
+        </table>
+      </div>
+    </div>
+  </body></html>`;
+}
+
+function renderPortfolioDlrReportingWorkspace() {
+  const report = buildPortfolioDlrOverviewData({ silent: true });
+  if (!report) {
+    return `<div id="reporting-portfolio-dlr-workspace" class="report-hub-card" style="margin-top:14px">
+      <div class="alert-red">Select one or more active communities through the Investor Scope Builder, then the portfolio DLR can render from that saved scope.</div>
+    </div>`;
+  }
+  const selectedCommunities = report.details.map(detail => detail.name);
+  const coverageCount = report.communityReports.filter(item => isDlrDailyBoxScoreReady(item)).length;
+  const imageCount = report.photoPool.length;
+  return `<div id="reporting-portfolio-dlr-workspace" class="report-hub-card" style="margin-top:14px">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+      <div>
+        <div class="card-title" style="margin-bottom:6px">Portfolio DLR Scope</div>
+        <p style="font-size:0.72rem;color:var(--muted)">This report follows the current Investor Scope Builder below. Use investor groups or highlighted community overrides to decide which properties roll into the branded portfolio DLR.</p>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-gray btn-sm" onclick="downloadPortfolioDlrOverviewHtml()">⬇ Editable HTML</button>
+        <button class="btn btn-blue btn-sm" onclick="openPortfolioDlrOverview(true)">🖨 Portfolio DLR / Print</button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:12px">
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px">
+        <div class="card-title" style="margin-bottom:6px">Scope Summary</div>
+        <div style="font-size:0.78rem;color:var(--text);line-height:1.55">${escapeHtml(report.communityName)}</div>
+      </div>
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px">
+        <div class="card-title" style="margin-bottom:6px">Included Communities</div>
+        <div style="font-size:1.4rem;font-weight:700;font-family:'JetBrains Mono',monospace;color:#4493f8">${report.details.length}</div>
+        <div style="font-size:0.66rem;color:var(--muted);margin-top:6px">${coverageCount}/${report.details.length} with matching daily box score coverage.</div>
+      </div>
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px">
+        <div class="card-title" style="margin-bottom:6px">Image Library Pull</div>
+        <div style="font-size:1.4rem;font-weight:700;font-family:'JetBrains Mono',monospace;color:#2dd4bf">${imageCount}</div>
+        <div style="font-size:0.66rem;color:var(--muted);margin-top:6px">${imageCount > 0 ? "Report will use saved community photos from the library." : "Add community photos in the library to enrich the hero strip."}</div>
+      </div>
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px">
+        <div class="card-title" style="margin-bottom:6px">Report Period</div>
+        <div style="font-size:0.82rem;font-weight:700;color:var(--accent)">${escapeHtml(report.reportPeriodLabel)}</div>
+        <div style="font-size:0.66rem;color:var(--muted);margin-top:6px">${escapeHtml(report.sourceSummary)}</div>
+      </div>
+    </div>
+    <div class="bonus-assignment-chip-wrap">
+      ${selectedCommunities.map(name => `<span class="bonus-community-chip active">${escapeHtml(name)}<span>Included</span></span>`).join("")}
+    </div>
+  </div>`;
+}
+
 async function runReportHubAction() {
   ensureValidReportHubAction();
   const type = normalizeReportHubType(reportHubType);
   if (reportHubAction === "preview") {
-    if (type === "weekly_portfolio_snapshot") return openWeeklyExecutiveReport(false);
-    if (["investor_snapshot", "investor_marketing_report", "regional_progress_report"].includes(type)) return openPortfolioPerformanceReport(false);
-    if (type === "monthly_investor_deck") return openMonthlyInvestorPresentation(false);
-    if (type === "investor_property_packet") return openInvestorPropertyPacket(false);
+    if (["investor_snapshot", "investor_marketing_report", "monthly_investor_deck", "bonus_payout"].includes(type)) {
+      renderTab();
+      const target = document.getElementById("reporting-inline-preview");
+      if (target?.scrollIntoView) target.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
     if (type === "dlr") {
       syncDlrTargetFromReportHub({ preserveCommunity: true });
       renderTab();
       focusReportingDlrPreview();
       return;
     }
-    return openBonusPayoutReport(false);
+    return;
   }
   if (reportHubAction === "print") {
-    if (type === "weekly_portfolio_snapshot") return openWeeklyExecutiveReport(true);
-    if (["investor_snapshot", "investor_marketing_report", "regional_progress_report"].includes(type)) return openPortfolioPerformanceReport(true);
+    if (["investor_snapshot", "investor_marketing_report"].includes(type)) return openPortfolioPerformanceReport(true);
     if (type === "monthly_investor_deck") return openMonthlyInvestorPresentation(true);
-    if (type === "investor_property_packet") return openInvestorPropertyPacket(true);
     if (type === "dlr") {
       syncDlrTargetFromReportHub({ preserveCommunity: true });
       return openDlrInvestorOverview(true);
@@ -22253,14 +22752,12 @@ async function runReportHubAction() {
     return openBonusPayoutReport(true);
   }
   if (reportHubAction === "export_csv") {
-    if (["investor_snapshot", "investor_marketing_report", "regional_progress_report"].includes(type)) return exportPortfolioReportCSV();
+    if (["investor_snapshot", "investor_marketing_report"].includes(type)) return exportPortfolioReportCSV();
     return exportBonusPayoutCSV();
   }
   if (reportHubAction === "export_excel") return exportPortfolioReportExcel();
-  if (reportHubAction === "export_canva") return exportMonthlyInvestorPresentationPptx();
   if (reportHubAction === "export_html") {
     if (type === "monthly_investor_deck") return downloadMonthlyInvestorPresentationBrief();
-    if (type === "investor_property_packet") return downloadInvestorPropertyPacketHtml();
     syncDlrTargetFromReportHub({ preserveCommunity: true });
     return downloadDlrInvestorOverviewHtml();
   }
@@ -23043,7 +23540,9 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
     ? ((dailyBoxScore.applications !== null && dailyBoxScore.applications !== undefined) ? dailyApplicationsRaw : inferredDailyApplications)
     : 0;
   const dailyPendingDecision = hasMatchingDailyBoxScore
-    ? inferPendingDecisionApplications(dailyApplications, dailyApprovals, dailyDenied, dailyCancelled, dailyPendingDecisionRaw)
+    ? ((dailyBoxScore.pendingDecision !== null && dailyBoxScore.pendingDecision !== undefined)
+      ? dailyPendingDecisionRaw
+      : Math.max(dailyApplications - dailyApprovals - dailyDenied - dailyCancelled, 0))
     : 0;
   const dailyTraffic = {
     walkIn: dailyLeadSources.walkIn,
@@ -23443,6 +23942,23 @@ async function openDlrInvestorOverview(printImmediately = false) {
   }
 }
 
+async function openPortfolioDlrOverview(printImmediately = false) {
+  let report = buildPortfolioDlrOverviewData();
+  if (!report) return;
+  await ensurePresentationReportAssetsLoaded(report);
+  report = buildPortfolioDlrOverviewData();
+  if (!report) return;
+  await hydratePortfolioDlrOverviewAssets(report);
+  const win = window.open("", "_blank");
+  if (!win) return;
+  win.document.write(buildPortfolioDlrOverviewDocument(report));
+  win.document.close();
+  if (printImmediately) {
+    win.focus();
+    setTimeout(() => win.print(), 220);
+  }
+}
+
 async function downloadDlrInvestorOverviewHtml() {
   const report = buildDashboardDlrInvestorOverview();
   if (!report) return;
@@ -23466,6 +23982,21 @@ async function downloadDlrInvestorOverviewHtml() {
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
   link.download = `${report.communityName.toLowerCase().replace(/[^a-z0-9]+/g, "_")}_dlr_investor_overview_${report.reportYear}-${String(report.reportMonthIdx + 1).padStart(2, "0")}.html`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+async function downloadPortfolioDlrOverviewHtml() {
+  let report = buildPortfolioDlrOverviewData();
+  if (!report) return;
+  await ensurePresentationReportAssetsLoaded(report);
+  report = buildPortfolioDlrOverviewData();
+  if (!report) return;
+  await hydratePortfolioDlrOverviewAssets(report);
+  const blob = new Blob([buildPortfolioDlrOverviewDocument(report)], { type: "text/html" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `portfolio_dlr_${report.reportYear}-${String(report.reportMonthIdx + 1).padStart(2, "0")}.html`;
   link.click();
   URL.revokeObjectURL(link.href);
 }
@@ -24478,12 +25009,6 @@ function getRonaldoGeneratorSheetKind(name) {
 
 function detectRonaldoGeneratorSheetKindFromRows(rows = []) {
   if (!Array.isArray(rows) || rows.length === 0) return null;
-  const headerKeys = Array.isArray(rows[0])
-    ? rows[0].map(cell => normalizeAtlasColumnKey(cell)).filter(Boolean)
-    : [];
-  const headerSet = new Set(headerKeys);
-  if (headerSet.has("report_month") && headerSet.has("community_id") && headerSet.has("row_status")) return "monthly_upload";
-  if (headerSet.has("community_id") && headerSet.has("community_name") && headerSet.has("active_flag")) return "community_master";
   const sampleText = rows
     .slice(0, 40)
     .flatMap(row => Array.isArray(row) ? row : [])
@@ -25227,7 +25752,6 @@ async function processRonaldoMonthlyReferenceFiles(files, options = {}) {
         const kind = getRonaldoGeneratorSheetKind(sheetName);
         return kind && kind !== "monthly_upload" && kind !== "community_master";
       });
-      const hasMonthlyUploadSheet = sheetNames.some(sheetName => getRonaldoGeneratorSheetKind(sheetName) === "monthly_upload");
       const detailSheetKinds = sheetNames
         .map(sheetName => ({ sheetName, kind: getRonaldoGeneratorSheetKind(sheetName) }))
         .filter(item => item.kind && item.kind !== "monthly_upload" && item.kind !== "community_master");
@@ -25243,10 +25767,6 @@ async function processRonaldoMonthlyReferenceFiles(files, options = {}) {
           const sheetRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "", raw: false });
           fileRows.push(...mapRonaldoGeneratorDetailRows(sheetRows, kind, forcedTarget, `${file.name} · ${sheetName}`, notes, {}));
         }
-      }
-      if (fileRows.length === 0 && hasMonthlyUploadSheet && !hasGeneratorDetailSheet) {
-        notes.push(`ℹ ${file.name} was already handled as an ATLAS Monthly_Upload workbook; skipped the generator-reference scan.`);
-        continue;
       }
       if (fileRows.length === 0) {
         for (const sheetName of sheetNames) {
@@ -25303,11 +25823,9 @@ async function processRonaldoMonthlyBackfillFiles(files, options = {}) {
   csvLog = [shouldForceWorkbookPeriod
     ? `📦 Ronaldo monthly backfill target: ${MONTHS[targetMonthIdx]} ${targetYear}`
     : "📦 Ronaldo monthly backfill target: workbook Report_Month routing"];
-  const workbookImportOptions = {
-    ...(shouldForceWorkbookPeriod ? { forcedMonthIdx: targetMonthIdx, forcedYear: targetYear } : {}),
-    replacePortfolioScope: true,
-    replaceLeadSourceBuckets: true
-  };
+  const workbookImportOptions = shouldForceWorkbookPeriod
+    ? { forcedMonthIdx: targetMonthIdx, forcedYear: targetYear }
+    : {};
   for (const file of workbookFiles) {
     await handleAtlasAdvancedWorkbook(file, workbookImportOptions);
   }
@@ -26010,6 +26528,7 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
     const seenWorkbookCommunityIds = new Set();
     const touchedPeriods = new Map();
     const unresolvedWorkbookRows = [];
+    const missingLeadSourceRows = [];
     const log = [];
     let matched = 0;
     let included = 0;
@@ -26125,9 +26644,6 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
         renewal_undecided: "",
         renewal_early_termination: ""
       };
-      let leadSourceLogNote = leadSourceValues.some(value => value !== null)
-        ? `↳ lead mix: walk ${leadWalkInsValue ?? 0}, calls ${leadCallsValue ?? 0}, email/online ${leadEmailsOnlineValue ?? 0}, text/chat/other ${leadChatTextOtherValue ?? 0}`
-        : "↳ lead mix not supplied in Monthly_Upload; no source buckets were changed.";
       const targetRecord = getPropertyRecordForApply(mappedName);
       if (targetRecord) {
         touchedCommunities.add(mappedName);
@@ -26160,21 +26676,17 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
           text_chat_other: "text_chat_other"
         };
         const hasLeadSourceBreakdown = leadSourceValues.some(value => value !== null);
-        const shouldReplaceLeadSourceBuckets = options.replaceLeadSourceBuckets === true || options.replacePortfolioScope === true;
-        const shouldClearLeadSourceBuckets = shouldReplaceLeadSourceBuckets && !hasLeadSourceBreakdown && guestCardsValue !== null;
-        const rebalancedLeadSourceResult = !shouldReplaceLeadSourceBuckets && !hasLeadSourceBreakdown && guestCardsValue !== null
-          ? rebalanceLeadSourceBreakdown(targetRecord, targetMonthIdx, guestCardsValue)
-          : null;
-        if (shouldClearLeadSourceBuckets) {
-          leadSourceLogNote = `↳ lead mix not supplied in Monthly_Upload; cleared stale source buckets and kept ${mappedRow.guest_cards || 0} total leads as an aggregate import.`;
-        } else if (!hasLeadSourceBreakdown && rebalancedLeadSourceResult?.strategy === "rescaled_existing") {
-          leadSourceLogNote = `↳ lead mix not supplied in Monthly_Upload; rescaled the saved source mix to ${mappedRow.guest_cards || 0} total leads.`;
-        } else if (!hasLeadSourceBreakdown && rebalancedLeadSourceResult?.strategy === "catch_all") {
-          leadSourceLogNote = `↳ lead mix not supplied in Monthly_Upload; routed ${mappedRow.guest_cards || 0} unattributed leads into text/chat/other so the funnel stays in sync.`;
+        const shouldFlagMissingLeadMix = !hasLeadSourceBreakdown && guestCardsValue !== null && guestCardsValue > 0;
+        if (shouldFlagMissingLeadMix) {
+          missingLeadSourceRows.push({
+            community: mappedName,
+            month: MONTHS[targetMonthIdx],
+            leads: guestCardsValue
+          });
         }
         const fieldsToClear = [
           ...Object.values(monthlyFieldMap),
-          ...((hasLeadSourceBreakdown || rebalancedLeadSourceResult || shouldClearLeadSourceBuckets) ? Object.values(leadSourceFieldMap) : [])
+          ...(hasLeadSourceBreakdown ? Object.values(leadSourceFieldMap) : [])
         ];
         clearMonthlyRecordFields(targetRecord, targetMonthIdx, fieldsToClear);
         const applyFieldMap = {
@@ -26188,13 +26700,6 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
           if (!Number.isFinite(numeric)) return;
           applyValueToRecord(targetRecord, targetMonthIdx, targetKey, numeric);
         });
-        if (!hasLeadSourceBreakdown && rebalancedLeadSourceResult) {
-          Object.entries(leadSourceFieldMap).forEach(([sourceKey, targetKey]) => {
-            const numeric = Number(rebalancedLeadSourceResult.values?.[sourceKey]);
-            if (!Number.isFinite(numeric)) return;
-            applyValueToRecord(targetRecord, targetMonthIdx, targetKey, numeric);
-          });
-        }
         const totalUnitsVal = Number(String(totalUnitsValue ?? "").replace(/[,]/g, ""));
         if (Number.isFinite(totalUnitsVal) && totalUnitsVal > 0) {
           targetRecord.customUnits = Math.round(totalUnitsVal);
@@ -26216,7 +26721,13 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
       if (log.length < 18) {
         const monthLabel = MONTHS[targetMonthIdx];
         log.push(`${mappedName} · ${monthLabel}: occupied ${mappedRow.occupied || "—"}, leased ${mappedRow.leased || "—"}, leads ${mappedRow.guest_cards || "—"}`);
-        log.push(leadSourceLogNote);
+        if ([leadWalkInsValue, leadCallsValue, leadEmailsOnlineValue, leadChatTextOtherValue].some(value => value !== null)) {
+          log.push(`↳ lead mix: walk ${leadWalkInsValue ?? 0}, calls ${leadCallsValue ?? 0}, email/online ${leadEmailsOnlineValue ?? 0}, text/chat/other ${leadChatTextOtherValue ?? 0}`);
+        } else if (shouldFlagMissingLeadMix) {
+          log.push(`↳ lead mix missing in Monthly_Upload; ATLAS kept totals but did not rebalance ${mappedRow.guest_cards || 0} leads into source buckets.`);
+        } else {
+          log.push("↳ lead mix not supplied in Monthly_Upload; no source buckets were changed.");
+        }
       }
     }
 
@@ -26226,10 +26737,9 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
       return;
     }
     let replacedScopeCommunities = 0;
-    const shouldReplacePortfolioScope = options.replacePortfolioScope === true || atlasWorkbookImportMode === "replace_scope";
     if (!forcedTarget.community) {
       touchedPeriods.forEach((importedNames, periodKey) => {
-        if (!shouldReplacePortfolioScope) {
+        if (atlasWorkbookImportMode !== "replace_scope") {
           setPortfolioMonthScopeForPeriod(periodKey, []);
           return;
         }
@@ -26272,7 +26782,7 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
       : "file month routing";
     csvLog = [`✅ Imported ${included} ATLAS Monthly_Upload row(s) from ${file.name} using ${modeLabel}.`, ...log];
     if (skipped > 0) csvLog.push(`ℹ Skipped ${skipped} row(s) marked ERROR or missing community/month mapping.`);
-    if (!forcedTarget.community && shouldReplacePortfolioScope) {
+    if (!forcedTarget.community && atlasWorkbookImportMode === "replace_scope") {
       csvLog.push(`✅ Replace scope mode reset the selected month rollup to ${touchedCommunities.size} uploaded communit${touchedCommunities.size === 1 ? "y" : "ies"} and cleared stale month data from ${replacedScopeCommunities} previously saved communit${replacedScopeCommunities === 1 ? "y" : "ies"}.`);
     }
     if (!forcedTarget.community && activeMasterCommunities.length > 0) {
@@ -26291,6 +26801,11 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
       if (unresolvedWorkbookRows.length > 6) {
         csvLog.push(`ℹ ${unresolvedWorkbookRows.length - 6} additional workbook row(s) also failed mapping validation.`);
       }
+    }
+    if (missingLeadSourceRows.length > 0) {
+      const sample = missingLeadSourceRows.slice(0, 6).map(item => `${item.community} (${item.month} · ${item.leads} leads)`).join(", ");
+      csvError = `Lead-source mix is missing for ${missingLeadSourceRows.length} workbook row(s). ATLAS imported totals but did not rebalance source buckets. Review: ${sample}${missingLeadSourceRows.length > 6 ? `, plus ${missingLeadSourceRows.length - 6} more.` : "."}`;
+      csvLog.push(`❌ Lead-source validation: ${missingLeadSourceRows.length} row(s) had lead totals without source mix. No silent rebalancing was applied.`);
     }
       csvLog.push(`ℹ Community records updated across tabs/calculations for ${touchedCommunities.size} communit${touchedCommunities.size === 1 ? "y" : "ies"}, including portfolio Overview / Traffic & Funnel and each matching community Traffic & Funnel month record.`);
     renderTab();
