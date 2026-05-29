@@ -293,6 +293,7 @@
   .code-block { background: var(--bg); border-radius: 8px; padding: 12px; overflow-x: auto; font-size: 0.7rem; color: #3fb950; font-family: 'JetBrains Mono', monospace; white-space: pre; }
   .alert-green { background: rgba(63,185,80,0.08); border: 1px solid rgba(63,185,80,0.4); border-radius: 8px; padding: 10px 14px; font-size: 0.75rem; }
   .alert-red { background: rgba(248,81,73,0.08); border: 1px solid rgba(248,81,73,0.4); border-radius: 8px; padding: 10px 14px; font-size: 0.75rem; color: #f85149; }
+  .alert-yellow { background: rgba(210,153,34,0.12); border: 1px solid rgba(210,153,34,0.42); border-radius: 8px; padding: 10px 14px; font-size: 0.75rem; color: #9a6700; }
   .mb4 { margin-bottom: 16px; }
   .mb8 { margin-bottom: 8px; }
   .mb2 { margin-bottom: 8px; }
@@ -1506,6 +1507,23 @@ function hashFloorPlanSeed(seed = "") {
 }
 
 function buildSurveyFloorPlanRowId(row, index = 0) {
+  if (row && typeof row === "object") {
+    const existingId = String(row.id ?? "").trim();
+    if (existingId) return existingId;
+    const seed = [
+      row.name ?? row.planName ?? "",
+      row.sourceSheet ?? "",
+      row.sqft ?? "",
+      row.beds ?? "",
+      row.baths ?? "",
+      row.units ?? "",
+      row.marketRent ?? "",
+      index ?? 0
+    ].join("|");
+    const nextId = `floorplan_survey_${hashFloorPlanSeed(seed)}`;
+    row.id = nextId;
+    return nextId;
+  }
   return `floorplan_survey_${hashFloorPlanSeed(String(index ?? 0))}`;
 }
 
@@ -2678,6 +2696,528 @@ function normalizeDlrSummary(data) {
     },
     dailyBoxScore: normalizeDlrBoxScoreSnapshot(input.dailyBoxScore)
   };
+}
+
+const DLR_REPORT_ONLY_WORKBOOK_SHEETS = {
+  monthlyUpload: "Monthly_Upload",
+  dailySummary: "DLR_Daily_Source_Summary",
+  floorPlans: "Floor_Plan_Rent_Mapping"
+};
+
+function defaultDlrWorkbookCommunityOverlay() {
+  return {
+    communityName: "",
+    communityId: "",
+    reportDateIso: "",
+    reportDateLabel: "",
+    totalUnits: null,
+    occupiedUnits: null,
+    leasedUnits: null,
+    preleasedUnits: null,
+    vacantUnits: null,
+    occupancyPct: null,
+    leasedPct: null,
+    avgBudgetRent: null,
+    avgInPlaceRent: null,
+    avgNetEffectiveRent: null,
+    traffic: null,
+    leads: null,
+    tours: null,
+    applications: null,
+    approvedApplications: null,
+    moveIns: null,
+    moveOuts: null,
+    renewalsSigned: null,
+    dailyLeases: null,
+    notices: null,
+    readyVacant: null,
+    notReadyVacant: null,
+    floorPlanRows: [],
+    editableNotes: {
+      tours: "",
+      applications: "",
+      highlights: "",
+      wins: ""
+    }
+  };
+}
+
+function normalizeDlrWorkbookCommunityOverlay(input = {}) {
+  const defaults = defaultDlrWorkbookCommunityOverlay();
+  return {
+    ...defaults,
+    communityName: String(input.communityName ?? defaults.communityName).trim(),
+    communityId: String(input.communityId ?? defaults.communityId).trim(),
+    reportDateIso: String(input.reportDateIso ?? defaults.reportDateIso).trim(),
+    reportDateLabel: String(input.reportDateLabel ?? defaults.reportDateLabel).trim(),
+    totalUnits: normalizeOptionalNumber(input.totalUnits),
+    occupiedUnits: normalizeOptionalNumber(input.occupiedUnits),
+    leasedUnits: normalizeOptionalNumber(input.leasedUnits),
+    preleasedUnits: normalizeOptionalNumber(input.preleasedUnits),
+    vacantUnits: normalizeOptionalNumber(input.vacantUnits),
+    occupancyPct: normalizeOptionalNumber(input.occupancyPct),
+    leasedPct: normalizeOptionalNumber(input.leasedPct),
+    avgBudgetRent: normalizeOptionalNumber(input.avgBudgetRent),
+    avgInPlaceRent: normalizeOptionalNumber(input.avgInPlaceRent),
+    avgNetEffectiveRent: normalizeOptionalNumber(input.avgNetEffectiveRent),
+    traffic: normalizeOptionalNumber(input.traffic),
+    leads: normalizeOptionalNumber(input.leads),
+    tours: normalizeOptionalNumber(input.tours),
+    applications: normalizeOptionalNumber(input.applications),
+    approvedApplications: normalizeOptionalNumber(input.approvedApplications),
+    moveIns: normalizeOptionalNumber(input.moveIns),
+    moveOuts: normalizeOptionalNumber(input.moveOuts),
+    renewalsSigned: normalizeOptionalNumber(input.renewalsSigned),
+    dailyLeases: normalizeOptionalNumber(input.dailyLeases),
+    notices: normalizeOptionalNumber(input.notices),
+    readyVacant: normalizeOptionalNumber(input.readyVacant),
+    notReadyVacant: normalizeOptionalNumber(input.notReadyVacant),
+    floorPlanRows: Array.isArray(input.floorPlanRows) ? input.floorPlanRows : [],
+    editableNotes: {
+      tours: String(input.editableNotes?.tours ?? defaults.editableNotes.tours).trim(),
+      applications: String(input.editableNotes?.applications ?? defaults.editableNotes.applications).trim(),
+      highlights: String(input.editableNotes?.highlights ?? defaults.editableNotes.highlights).trim(),
+      wins: String(input.editableNotes?.wins ?? defaults.editableNotes.wins).trim()
+    }
+  };
+}
+
+function defaultDlrWorkbookReportState() {
+  return {
+    sourceFileName: "",
+    importedAt: "",
+    reportDateIso: "",
+    reportDateLabel: "",
+    reportMonthIdx: null,
+    reportYear: null,
+    communityOrder: [],
+    communities: {}
+  };
+}
+
+function normalizeDlrWorkbookReportState(input = {}) {
+  const defaults = defaultDlrWorkbookReportState();
+  const sourceCommunities = input.communities && typeof input.communities === "object" ? input.communities : {};
+  return {
+    ...defaults,
+    sourceFileName: String(input.sourceFileName ?? defaults.sourceFileName).trim(),
+    importedAt: String(input.importedAt ?? defaults.importedAt).trim(),
+    reportDateIso: String(input.reportDateIso ?? defaults.reportDateIso).trim(),
+    reportDateLabel: String(input.reportDateLabel ?? defaults.reportDateLabel).trim(),
+    reportMonthIdx: Number.isInteger(input.reportMonthIdx) ? input.reportMonthIdx : normalizeOptionalNumber(input.reportMonthIdx),
+    reportYear: Number.isInteger(input.reportYear) ? input.reportYear : normalizeOptionalNumber(input.reportYear),
+    communityOrder: Array.isArray(input.communityOrder) ? input.communityOrder.map(name => matchPropertyName(name, { fallbackToCurrent: false }) || String(name ?? "").trim()).filter(Boolean) : [],
+    communities: Object.fromEntries(
+      Object.entries(sourceCommunities)
+        .map(([key, value]) => {
+          const matched = matchPropertyName(key, { fallbackToCurrent: false }) || String(key ?? "").trim();
+          return matched ? [matched, normalizeDlrWorkbookCommunityOverlay({ ...value, communityName: matched })] : null;
+        })
+        .filter(Boolean)
+    )
+  };
+}
+
+let dlrWorkbookReportState = defaultDlrWorkbookReportState();
+
+function hasDlrWorkbookReportState() {
+  return !!(dlrWorkbookReportState?.sourceFileName && Object.keys(dlrWorkbookReportState?.communities ?? {}).length > 0);
+}
+
+function isDlrWorkbookStateForPeriod(monthIdx = getReportHubMonthIndex(), year = getReportHubYear()) {
+  if (!hasDlrWorkbookReportState()) return false;
+  return Number(dlrWorkbookReportState.reportMonthIdx) === Number(monthIdx) && Number(dlrWorkbookReportState.reportYear) === Number(year);
+}
+
+function getDlrWorkbookOverlayCommunityNames() {
+  if (!hasDlrWorkbookReportState()) return [];
+  const order = Array.isArray(dlrWorkbookReportState.communityOrder) ? dlrWorkbookReportState.communityOrder : [];
+  return order.filter(name => dlrWorkbookReportState.communities?.[name]);
+}
+
+function getDlrWorkbookOverlayForCommunity(propName, monthIdx = getReportHubMonthIndex(), year = getReportHubYear()) {
+  if (!isDlrWorkbookStateForPeriod(monthIdx, year)) return null;
+  const matchedName = matchPropertyName(propName, { fallbackToCurrent: false }) || String(propName ?? "").trim();
+  return matchedName ? normalizeDlrWorkbookCommunityOverlay(dlrWorkbookReportState.communities?.[matchedName]) : null;
+}
+
+function updateDlrWorkbookOverlayCommunity(communityName, updater) {
+  if (!hasDlrWorkbookReportState()) return false;
+  const matchedName = matchPropertyName(communityName, { fallbackToCurrent: false }) || String(communityName ?? "").trim();
+  if (!matchedName || !dlrWorkbookReportState.communities?.[matchedName]) return false;
+  const currentOverlay = normalizeDlrWorkbookCommunityOverlay(dlrWorkbookReportState.communities[matchedName]);
+  const nextOverlay = normalizeDlrWorkbookCommunityOverlay(
+    typeof updater === "function" ? updater(currentOverlay) : updater
+  );
+  dlrWorkbookReportState = normalizeDlrWorkbookReportState({
+    ...dlrWorkbookReportState,
+    communities: {
+      ...dlrWorkbookReportState.communities,
+      [matchedName]: nextOverlay
+    }
+  });
+  return true;
+}
+
+function normalizeWorkbookPercentToReportPct(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return numeric <= 1 ? numeric * 100 : numeric;
+}
+
+function parseWorkbookReportDateValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number" && typeof XLSX !== "undefined" && XLSX.SSF?.parse_date_code) {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed?.y && parsed?.m && parsed?.d) {
+      return new Date(parsed.y, parsed.m - 1, parsed.d, 12, 0, 0, 0);
+    }
+  }
+  const stringValue = String(value).trim();
+  if (!stringValue) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(stringValue)) {
+    const parsed = new Date(`${stringValue}T12:00:00`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  const parsed = new Date(stringValue);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function buildWorkbookOnlyForwardLook(monthIdx, year, occupancyPct, moveInsNeeded = 0) {
+  return Array.from({ length: 4 }, (_, offset) => {
+    const nextMonth = clampNumber(monthIdx + offset, 0, 11);
+    return {
+      monthIdx: nextMonth,
+      label: formatDlrMonthYear(nextMonth, year),
+      leaseExpirations: 0,
+      mtm: 0,
+      pendingMoveOuts: 0,
+      pendingMoveIns: 0,
+      budgetedOccupancy: 0,
+      projectedOccupancy: Number(occupancyPct ?? 0) || 0,
+      moveInsNeeded: offset === 0 ? Math.max(0, Number(moveInsNeeded) || 0) : 0
+    };
+  });
+}
+
+function buildDlrWorkbookStatusLabel(occupancyPct, leasedPct) {
+  const occ = Number(occupancyPct ?? 0) || 0;
+  const leased = Number(leasedPct ?? 0) || 0;
+  if (leased >= 95 || occ >= 95) return "On Track";
+  if (leased >= 90 || occ >= 90) return "Watch";
+  return "Needs Attention";
+}
+
+async function parseRonaldoDailyDlrWorkbook(file) {
+  if (!file) return null;
+  if (typeof XLSX === "undefined") {
+    throw new Error("The XLSX library did not load, so the Ronaldo DLR workbook parser is unavailable.");
+  }
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+  const monthlySheet = workbook.Sheets?.[DLR_REPORT_ONLY_WORKBOOK_SHEETS.monthlyUpload];
+  const summarySheet = workbook.Sheets?.[DLR_REPORT_ONLY_WORKBOOK_SHEETS.dailySummary];
+  if (!monthlySheet || !summarySheet) return null;
+  const monthlyRows = XLSX.utils.sheet_to_json(monthlySheet, { defval: null });
+  const summaryRows = XLSX.utils.sheet_to_json(summarySheet, { defval: null });
+  if (!Array.isArray(monthlyRows) || monthlyRows.length === 0 || !Array.isArray(summaryRows) || summaryRows.length === 0) return null;
+  const parsedDate = parseWorkbookReportDateValue(monthlyRows[0]?.Report_Month ?? summaryRows[0]?.Report_Month);
+  const reportDateIso = parsedDate ? buildDlrDateInputValue(parsedDate) : "";
+  const reportDateLabel = parsedDate ? formatPresentationDate(parsedDate) : "";
+  const reportMonthIdx = parsedDate ? parsedDate.getMonth() : getReportHubMonthIndex();
+  const reportYear = parsedDate ? parsedDate.getFullYear() : getReportHubYear();
+  const summaryByCommunity = new Map();
+  summaryRows.forEach(row => {
+    const matchedName = getKnownAtlasCommunityName(row?.Community_ID) || matchPropertyName(row?.["Source Property Name"], { fallbackToCurrent: false });
+    if (!matchedName) return;
+    summaryByCommunity.set(matchedName, row);
+  });
+  const floorPlanRows = workbook.Sheets?.[DLR_REPORT_ONLY_WORKBOOK_SHEETS.floorPlans]
+    ? XLSX.utils.sheet_to_json(workbook.Sheets[DLR_REPORT_ONLY_WORKBOOK_SHEETS.floorPlans], { defval: null })
+    : [];
+  const floorPlansByCommunity = new Map();
+  floorPlanRows.forEach(row => {
+    const matchedName = getKnownAtlasCommunityName(row?.Community_ID) || matchPropertyName(row?.["Source_Property_Name"], { fallbackToCurrent: false });
+    if (!matchedName) return;
+    const current = floorPlansByCommunity.get(matchedName) || [];
+    current.push({
+      id: makeFloorPlanId(),
+      name: String(row?.ATLAS_Floor_Plan_Label ?? row?.Matched_Box_Score_Floor_Plan_Code ?? "").trim(),
+      sqft: normalizeOptionalNumber(row?.Avg_SQFT),
+      budgetRent: normalizeOptionalNumber(row?.Avg_Market_Rent_Budgeted),
+      marketRent: normalizeOptionalNumber(row?.Avg_Scheduled_Rent_Used),
+      units: normalizeOptionalNumber(row?.Units),
+      occupiedUnits: normalizeOptionalNumber(row?.Occupied_Units),
+      leasedPct: normalizeWorkbookPercentToReportPct(row?.Leased_%),
+      occupancyPct: null
+    });
+    floorPlansByCommunity.set(matchedName, current);
+  });
+  const communities = {};
+  const communityOrder = [];
+  monthlyRows.forEach(row => {
+    const matchedName = getKnownAtlasCommunityName(row?.Community_ID) || matchPropertyName(row?.Community_Name, { fallbackToCurrent: false });
+    if (!matchedName) return;
+    const summaryRow = summaryByCommunity.get(matchedName) || {};
+    communities[matchedName] = normalizeDlrWorkbookCommunityOverlay({
+      communityName: matchedName,
+      communityId: row?.Community_ID,
+      reportDateIso,
+      reportDateLabel,
+      totalUnits: row?.Total_Units ?? summaryRow?.Total_Units,
+      occupiedUnits: row?.Occupied_Units ?? summaryRow?.Occupied_Units,
+      leasedUnits: row?.Leased_Units ?? summaryRow?.Leased_Units,
+      preleasedUnits: row?.Preleased_Units,
+      vacantUnits: row?.Vacant_Units,
+      occupancyPct: normalizeWorkbookPercentToReportPct(row?.["Physical_Occupancy_%"] ?? summaryRow?.["Physical_Occupancy_%"]),
+      leasedPct: normalizeWorkbookPercentToReportPct(row?.["Leased_%"] ?? summaryRow?.["Leased_%"]),
+      avgBudgetRent: row?.Avg_Market_Rent,
+      avgInPlaceRent: row?.Avg_Market_Rent,
+      avgNetEffectiveRent: row?.Actual_Rent,
+      traffic: summaryRow?.Traffic ?? row?.Traffic,
+      leads: summaryRow?.Leads ?? row?.Leads,
+      tours: summaryRow?.Tours ?? row?.Tours,
+      applications: summaryRow?.Applications ?? row?.Applications,
+      approvedApplications: summaryRow?.Approved_Applications ?? row?.Approved_Applications,
+      moveIns: summaryRow?.Move_Ins ?? row?.Move_Ins,
+      moveOuts: summaryRow?.Move_Outs ?? row?.Move_Outs,
+      renewalsSigned: summaryRow?.Renewals_Signed ?? row?.Renewals_Signed,
+      dailyLeases: summaryRow?.["Daily Leases"],
+      notices: summaryRow?.Notices,
+      readyVacant: summaryRow?.["Ready Vacant"],
+      notReadyVacant: summaryRow?.["Not Ready Vacant"],
+      floorPlanRows: floorPlansByCommunity.get(matchedName) || []
+    });
+    if (!communityOrder.includes(matchedName)) communityOrder.push(matchedName);
+  });
+  return normalizeDlrWorkbookReportState({
+    sourceFileName: String(file.name ?? "").trim(),
+    importedAt: new Date().toISOString(),
+    reportDateIso,
+    reportDateLabel,
+    reportMonthIdx,
+    reportYear,
+    communityOrder,
+    communities
+  });
+}
+
+function isDlrReportOnlyWorkbook(report) {
+  return report?.reportSourceMode === "ronaldo_dlr_workbook";
+}
+
+function buildWorkbookOnlyDlrInvestorOverview(communityName, overlay, monthIdx, year) {
+  const matchedName = matchPropertyName(communityName, { fallbackToCurrent: false }) || communityName;
+  const record = getPersistedCommunityRecordForScope(matchedName, { allowCurrentFallback: true });
+  const occupancyPct = Number(overlay.occupancyPct ?? 0) || 0;
+  const leasedPct = Number(overlay.leasedPct ?? 0) || 0;
+  const totalUnits = Number(overlay.totalUnits ?? 0) || 0;
+  const occupiedUnits = Number(overlay.occupiedUnits ?? 0) || 0;
+  const leasedUnits = Number(overlay.leasedUnits ?? 0) || 0;
+  const dailyTraffic = {
+    walkIn: null,
+    offSiteEvent: null,
+    phoneCalls: null,
+    emailsOnline: null,
+    textChatOther: null,
+    guestCards: normalizeOptionalNumber(overlay.leads ?? overlay.traffic),
+    newLeads: normalizeOptionalNumber(overlay.leads ?? overlay.traffic),
+    tours: normalizeOptionalNumber(overlay.tours),
+    applications: normalizeOptionalNumber(overlay.applications),
+    approvals: normalizeOptionalNumber(overlay.approvedApplications),
+    denials: null,
+    cancelled: null,
+    pendingDecision: null,
+    leases: normalizeOptionalNumber(overlay.dailyLeases),
+    moveIns: normalizeOptionalNumber(overlay.moveIns),
+    moveOuts: normalizeOptionalNumber(overlay.moveOuts),
+    renewals: normalizeOptionalNumber(overlay.renewalsSigned),
+    activityEmails: null,
+    activityCalls: null,
+    activityChats: null,
+    activityTexts: null,
+    firstVisitsTours: normalizeOptionalNumber(overlay.tours)
+  };
+  const mtdTraffic = {
+    ...dailyTraffic,
+    rolledGuestCards: dailyTraffic.guestCards,
+    sourceMode: "daily_box_score",
+    guestCards: dailyTraffic.guestCards,
+    monthAbsorption: (Number(dailyTraffic.moveIns ?? 0) || 0) - (Number(dailyTraffic.moveOuts ?? 0) || 0)
+  };
+  const generatedNotes = buildDlrInvestorNotes({
+    reportDateLabel: overlay.reportDateLabel,
+    monthLabel: formatDlrMonthYear(monthIdx, year),
+    leadSources: mtdTraffic,
+    dailyTraffic,
+    mtdTraffic,
+    prevMonthTraffic: {},
+    trafficMetricsSourceMode: "daily_box_score",
+    occupancyPct,
+    leasedPct,
+    trendingOccupancyPct: occupancyPct,
+    budgetOccPct: 0,
+    avgInPlaceRent: overlay.avgInPlaceRent,
+    avgBudgetRent: overlay.avgBudgetRent,
+    retentionRate: 0,
+    renewalsSigned: overlay.renewalsSigned,
+    expirations: 0
+  });
+  const editableNotes = {};
+  Object.keys(generatedNotes).forEach(key => {
+    editableNotes[key] = String(overlay.editableNotes?.[key] ?? "").trim() || formatDlrEditableNoteText(generatedNotes[key]);
+  });
+  return {
+    communityName: matchedName,
+    reportMonthIdx: monthIdx,
+    reportYear: year,
+    reportMonthLabel: formatDlrMonthYear(monthIdx, year),
+    reportPeriodLabel: overlay.reportDateLabel || formatDlrMonthYear(monthIdx, year),
+    reportDateIso: overlay.reportDateIso,
+    reportDateLabel: overlay.reportDateLabel,
+    generatedAt: new Date(),
+    status: buildDlrWorkbookStatusLabel(occupancyPct, leasedPct),
+    totalUnits,
+    occupiedUnits,
+    leasedUnits,
+    occupancyPct,
+    leasedPct,
+    trendingOccupancyPct: occupancyPct,
+    budgetOccPct: 0,
+    moveInGoalPerWeek: null,
+    moveInsNeeded: 0,
+    monthAbsorption: Number(mtdTraffic.monthAbsorption ?? 0) || 0,
+    trafficMetrics: mtdTraffic,
+    dailyTraffic,
+    pricing: {
+      totalUnits,
+      leasedUnits,
+      occupiedUnits,
+      avgBudgetRent: normalizeOptionalNumber(overlay.avgBudgetRent),
+      avgInPlaceRent: normalizeOptionalNumber(overlay.avgInPlaceRent),
+      avgNetEffectiveRent: normalizeOptionalNumber(overlay.avgNetEffectiveRent),
+      rentRollTotal: null,
+      concessions: null
+    },
+    forwardLook: buildWorkbookOnlyForwardLook(monthIdx, year, occupancyPct),
+    renewalSnapshot: {
+      expirations: 0,
+      signed: normalizeOptionalNumber(overlay.renewalsSigned) || 0,
+      undecided: 0,
+      projectedAttrition: normalizeOptionalNumber(overlay.notices) || 0,
+      retentionRate: 0,
+      previousRetentionRate: 0
+    },
+    dailyBoxScoreSourceFile: dlrWorkbookReportState.sourceFileName || "",
+    dailyBoxScoreImportedAt: dlrWorkbookReportState.importedAt || "",
+    notes: generatedNotes,
+    editableNotes,
+    marketing: { ready: false, narrative: "", entries: [], completedCount: 0 },
+    communityPhotoAsset: normalizeCommunityPhotoBank(record?.photoBank)[0] || null,
+    communityPhotoPreviewSrc: String(normalizeCommunityPhotoBank(record?.photoBank)[0]?.previewSrc || normalizeCommunityPhotoBank(record?.photoBank)[0]?.src || ""),
+    sourceSummary: `${matchedName} · ${overlay.reportDateLabel || formatDlrMonthYear(monthIdx, year)} · report-only Ronaldo daily upload`,
+    floorPlanVarianceRows: Array.isArray(overlay.floorPlanRows) ? overlay.floorPlanRows.map(row => ({
+      ...row,
+      variance: (row.marketRent != null && row.budgetRent != null) ? Number(row.marketRent) - Number(row.budgetRent) : null
+    })) : [],
+    unmatchedMarketFloorPlans: [],
+    marketSurveyUpdatedOn: "",
+    reportSourceMode: "ronaldo_dlr_workbook",
+    reportOnly: true
+  };
+}
+
+function applyWorkbookOverlayToDlrReport(report, overlay) {
+  if (!report || !overlay) return report;
+  const nextReport = {
+    ...report,
+    reportDateIso: overlay.reportDateIso || report.reportDateIso,
+    reportDateLabel: overlay.reportDateLabel || report.reportDateLabel,
+    reportPeriodLabel: overlay.reportDateLabel || report.reportPeriodLabel,
+    totalUnits: Number(overlay.totalUnits ?? report.totalUnits) || report.totalUnits,
+    occupiedUnits: Number(overlay.occupiedUnits ?? report.occupiedUnits) || report.occupiedUnits,
+    leasedUnits: Number(overlay.leasedUnits ?? report.leasedUnits) || report.leasedUnits,
+    occupancyPct: Number(overlay.occupancyPct ?? report.occupancyPct) || report.occupancyPct,
+    leasedPct: Number(overlay.leasedPct ?? report.leasedPct) || report.leasedPct,
+    status: buildDlrWorkbookStatusLabel(overlay.occupancyPct ?? report.occupancyPct, overlay.leasedPct ?? report.leasedPct),
+    pricing: {
+      ...report.pricing,
+      totalUnits: Number(overlay.totalUnits ?? report.pricing?.totalUnits) || report.pricing?.totalUnits,
+      occupiedUnits: Number(overlay.occupiedUnits ?? report.pricing?.occupiedUnits) || report.pricing?.occupiedUnits,
+      leasedUnits: Number(overlay.leasedUnits ?? report.pricing?.leasedUnits) || report.pricing?.leasedUnits,
+      avgBudgetRent: overlay.avgBudgetRent ?? report.pricing?.avgBudgetRent,
+      avgInPlaceRent: overlay.avgInPlaceRent ?? report.pricing?.avgInPlaceRent,
+      avgNetEffectiveRent: overlay.avgNetEffectiveRent ?? report.pricing?.avgNetEffectiveRent
+    },
+    renewalSnapshot: {
+      ...report.renewalSnapshot,
+      signed: overlay.renewalsSigned ?? report.renewalSnapshot?.signed,
+      projectedAttrition: overlay.notices ?? report.renewalSnapshot?.projectedAttrition
+    },
+    dailyBoxScoreSourceFile: dlrWorkbookReportState.sourceFileName || report.dailyBoxScoreSourceFile,
+    dailyBoxScoreImportedAt: dlrWorkbookReportState.importedAt || report.dailyBoxScoreImportedAt,
+    reportSourceMode: "ronaldo_dlr_workbook",
+    reportOnly: true
+  };
+  nextReport.dailyTraffic = {
+    ...report.dailyTraffic,
+    walkIn: null,
+    offSiteEvent: null,
+    phoneCalls: null,
+    emailsOnline: null,
+    textChatOther: null,
+    guestCards: overlay.leads ?? overlay.traffic,
+    newLeads: overlay.leads ?? overlay.traffic,
+    tours: overlay.tours,
+    applications: overlay.applications,
+    approvals: overlay.approvedApplications,
+    denials: null,
+    cancelled: null,
+    pendingDecision: null,
+    leases: overlay.dailyLeases,
+    moveIns: overlay.moveIns,
+    moveOuts: overlay.moveOuts,
+    renewals: overlay.renewalsSigned,
+    activityEmails: null,
+    activityCalls: null,
+    activityChats: null,
+    activityTexts: null,
+    firstVisitsTours: overlay.tours
+  };
+  nextReport.trafficMetrics = {
+    ...report.trafficMetrics,
+    sourceMode: "daily_box_score"
+  };
+  if (!Number(nextReport.trafficMetrics.guestCards)) {
+    nextReport.trafficMetrics.guestCards = overlay.leads ?? overlay.traffic;
+    nextReport.trafficMetrics.rolledGuestCards = overlay.leads ?? overlay.traffic;
+  }
+  if (!Number(nextReport.trafficMetrics.tours)) nextReport.trafficMetrics.tours = overlay.tours;
+  if (!Number(nextReport.trafficMetrics.applications)) nextReport.trafficMetrics.applications = overlay.applications;
+  if (!Number(nextReport.trafficMetrics.approvals)) nextReport.trafficMetrics.approvals = overlay.approvedApplications;
+  if (!Number(nextReport.trafficMetrics.moveIns)) nextReport.trafficMetrics.moveIns = overlay.moveIns;
+  if (!Number(nextReport.trafficMetrics.moveOuts)) nextReport.trafficMetrics.moveOuts = overlay.moveOuts;
+  if (!Number(nextReport.trafficMetrics.renewals)) nextReport.trafficMetrics.renewals = overlay.renewalsSigned;
+  nextReport.sourceSummary = `${nextReport.communityName} · ${nextReport.reportPeriodLabel} · report-only Ronaldo daily upload overlay`;
+  nextReport.editableNotes = {
+    ...nextReport.editableNotes,
+    tours: String(overlay.editableNotes?.tours ?? "").trim() || nextReport.editableNotes?.tours || "",
+    applications: String(overlay.editableNotes?.applications ?? "").trim() || nextReport.editableNotes?.applications || "",
+    highlights: String(overlay.editableNotes?.highlights ?? "").trim() || nextReport.editableNotes?.highlights || "",
+    wins: String(overlay.editableNotes?.wins ?? "").trim() || nextReport.editableNotes?.wins || ""
+  };
+  nextReport.notes = {
+    tours: parseDlrEditableNoteText(nextReport.editableNotes.tours),
+    applications: parseDlrEditableNoteText(nextReport.editableNotes.applications),
+    highlights: parseDlrEditableNoteText(nextReport.editableNotes.highlights),
+    wins: parseDlrEditableNoteText(nextReport.editableNotes.wins)
+  };
+  if ((!Array.isArray(nextReport.floorPlanVarianceRows) || nextReport.floorPlanVarianceRows.length === 0) && Array.isArray(overlay.floorPlanRows) && overlay.floorPlanRows.length > 0) {
+    nextReport.floorPlanVarianceRows = overlay.floorPlanRows.map(row => ({
+      ...row,
+      variance: (row.marketRent != null && row.budgetRent != null) ? Number(row.marketRent) - Number(row.budgetRent) : null
+    }));
+  }
+  return nextReport;
 }
 
 function cloneMetricList(metrics) {
@@ -4733,9 +5273,19 @@ function renderPropGrid() {
   if (workspaceSubline) {
     const portfolioScopeKey = getPortfolioScopePeriodKey(getSelectedDashboardMonthIndex());
     const hasScopedPortfolioMonth = Array.isArray(portfolioMonthScopeByPeriod?.[portfolioScopeKey]) && portfolioMonthScopeByPeriod[portfolioScopeKey].length > 0;
-    const scopeStorageLabel = isPortfolioWorkspaceSelected() && hasScopedPortfolioMonth
-      ? `${savedCount} communities still saved in this browser`
-      : `${savedCount} of ${totalCount} communities saved in this browser`;
+    const savedScopedCount = details.filter(detail => !!savedData[detail.name]).length;
+    const liveDraftScopedCount = Math.max(details.length - savedScopedCount, 0);
+    let scopeStorageLabel = `${savedCount} of ${totalCount} communities saved in this browser`;
+    if (isPortfolioWorkspaceSelected()) {
+      if (hasScopedPortfolioMonth) {
+        scopeStorageLabel = `${details.length} communities in the saved portfolio scope for ${FULL_MONTHS[getSelectedDashboardMonthIndex()]}`;
+      } else {
+        const scopeParts = [];
+        if (savedScopedCount > 0) scopeParts.push(`${savedScopedCount} saved`);
+        if (liveDraftScopedCount > 0) scopeParts.push(`${liveDraftScopedCount} live draft`);
+        scopeStorageLabel = `${scopeParts.length ? scopeParts.join(" + ") : "0 saved"} communities in current portfolio scope`;
+      }
+    }
     workspaceSubline.textContent = `${isPortfolioWorkspaceSelected() ? `${details.length} communities · ${aggregate.totalUnits.toLocaleString()} units` : getHeaderSubText()} · Reporting month ${FULL_MONTHS[getSelectedDashboardMonthIndex()]} · ${scopeStorageLabel}.`;
   }
   if (workspaceCount) {
@@ -5994,6 +6544,14 @@ function resolveFloorPlanSelectionIds(section, propName, availableIds = []) {
   }
   for (const value of Object.values(bucket)) {
     const matched = pickIds(value);
+    if (matched.length > 0) return matched;
+  }
+  const scope = document.querySelector(`[data-floor-plan-selection-section="${section}"]`);
+  if (scope) {
+    const domMatches = Array.from(scope.querySelectorAll("[data-floor-plan-row-checkbox]:checked"))
+      .map(input => String(input.getAttribute("data-floor-plan-id") || "").trim())
+      .filter(Boolean);
+    const matched = pickIds(domMatches);
     if (matched.length > 0) return matched;
   }
   return [];
@@ -7945,6 +8503,12 @@ function autoCalcConvRate() {
   return Math.round(Math.min(95, achievableBias) * 10) / 10;
 }
 
+function applyBlendedConversionRate() {
+  conversionRate = autoCalcConvRate();
+  saveCommunityData(true);
+  renderTab();
+}
+
 // ─── Auto-Populate Leasing Pace % Target ─────────────────────────────────────
 function autoPopulateLeasingPace() {
   const totalUnits = getTotalUnits();
@@ -9091,7 +9655,7 @@ function renderPortfolioScopedImportTab() {
   const dlrLoaded = readinessDetails.filter(detail => detail.readiness.dlrLoaded).length;
   const surveyLoaded = readinessDetails.filter(detail => detail.readiness.surveyLoaded).length;
   const renewalLoaded = readinessDetails.filter(detail => detail.readiness.renewalLoaded).length;
-  const errorHTML = csvError ? `<div class="alert-red" style="margin-top:12px">${csvError}</div>` : "";
+  const errorHTML = csvError ? `<div class="${getCsvAlertClass(csvError)}" style="margin-top:12px">${csvError}</div>` : "";
   const logHTML = csvLog.length > 0 ? `<div class="alert-green" style="margin-top:12px">${csvLog.map((line, idx) => `<div style="${idx===0?"color:#3fb950;font-weight:600":"color:var(--muted)"}">${escapeHtml(line)}</div>`).join("")}</div>` : "";
   const marketSurveyLogHTML = marketSurveyImportLog.length > 0
     ? `<div class="alert-green" style="margin-top:12px">${marketSurveyImportLog.map((line, idx) => `<div style="${idx===0?"color:#3fb950;font-weight:600":"color:var(--muted)"}">${escapeHtml(line)}</div>`).join("")}</div>`
@@ -10551,7 +11115,7 @@ function renderOverviewTab() {
     <div class="card">
       <div class="label">Blended Conversion Rate %</div>
       ${numInp("conversionRate", conversionRate, "", 1, 100)}
-      <div class="pct-goal">${autoCalcConvRate() !== conversionRate ? `<span style="color:#4493f8;cursor:pointer" onclick="conversionRate=${autoCalcConvRate()};renderTab()">Blend: ${autoCalcConvRate()}% ← click to apply</span>` : "Tour→App + App→Lease + historical trend blend"}</div>
+      <div class="pct-goal">${autoCalcConvRate() !== conversionRate ? `<span style="color:#4493f8;cursor:pointer" onclick="applyBlendedConversionRate()">Blend: ${autoCalcConvRate()}% ← click to apply</span>` : "Tour→App + App→Lease + historical trend blend"}</div>
     </div>
     <div class="card">
       <div class="label">Reporting Context</div>
@@ -11645,6 +12209,15 @@ function setDlrReportDateFromInput(value) {
 function persistDlrEditableNoteField(sectionKey, value) {
   if (!DLR_EDITABLE_NOTE_SECTIONS.some(section => section.key === sectionKey)) return false;
   const matchedCommunity = getHistoricalImportCommunityName();
+  if (isDlrWorkbookStateForPeriod()) {
+    return updateDlrWorkbookOverlayCommunity(matchedCommunity, overlay => ({
+      ...overlay,
+      editableNotes: {
+        ...overlay.editableNotes,
+        [sectionKey]: String(value ?? "").trim()
+      }
+    }));
+  }
   const periodKey = getDlrEditableNotePeriodKey();
   return updateCommunityDlrSummary(matchedCommunity, summary => {
     const nextSummary = normalizeDlrSummary(summary);
@@ -11666,6 +12239,19 @@ function persistDlrEditableNoteField(sectionKey, value) {
 
 function resetDlrEditableNotes() {
   const matchedCommunity = getHistoricalImportCommunityName();
+  if (isDlrWorkbookStateForPeriod()) {
+    updateDlrWorkbookOverlayCommunity(matchedCommunity, overlay => ({
+      ...overlay,
+      editableNotes: {
+        tours: "",
+        applications: "",
+        highlights: "",
+        wins: ""
+      }
+    }));
+    renderTab();
+    return;
+  }
   const periodKey = getDlrEditableNotePeriodKey();
   updateCommunityDlrSummary(matchedCommunity, summary => {
     const nextSummary = normalizeDlrSummary(summary);
@@ -12391,6 +12977,25 @@ async function processDlrBoxScoreFiles(files) {
   const messages = [];
   for (const file of acceptedFiles) {
     try {
+      const lowerName = String(file?.name ?? "").toLowerCase();
+      const isWorkbookCandidate = /\.(xlsx|xlsm|xls)$/i.test(lowerName);
+      if (isWorkbookCandidate) {
+        const workbookOverlay = await parseRonaldoDailyDlrWorkbook(file);
+        if (workbookOverlay) {
+          dlrWorkbookReportState = workbookOverlay;
+          reportHubMonth = workbookOverlay.reportMonthIdx ?? reportHubMonth;
+          reportHubYear = workbookOverlay.reportYear ?? reportHubYear;
+          historicalImportTarget = normalizeHistoricalImportTarget({
+            ...historicalImportTarget,
+            community: getDlrWorkbookOverlayCommunityNames()[0] || targetCommunity,
+            month: workbookOverlay.reportMonthIdx ?? getHistoricalImportMonthIndex(),
+            year: workbookOverlay.reportYear ?? getHistoricalImportYear()
+          });
+          persistOpsGlobalData();
+          messages.push(`✅ ${file.name} loaded as a report-only Ronaldo DLR workbook for ${workbookOverlay.reportDateLabel || formatDlrMonthYear(workbookOverlay.reportMonthIdx, workbookOverlay.reportYear)}. Portfolio DLR and individual community DLR previews now read from the workbook without updating saved dashboard data.`);
+          continue;
+        }
+      }
       const parsed = await parseDailyBoxScoreFile(file);
       const snapshot = parsed?.snapshot ?? null;
       const importedFloorPlanRows = Array.isArray(parsed?.floorPlanRows) ? parsed.floorPlanRows : [];
@@ -13903,7 +14508,9 @@ function setBonusQuarter(q) {
 }
 
 function setBonusCalcView(view) {
-  bonusCalcView = view;
+  bonusCalcView = isPortfolioWorkspaceSelected()
+    ? "jac"
+    : (view === "jac" ? "jac" : "property");
   persistOpsGlobalData();
   renderTab();
 }
@@ -15133,11 +15740,19 @@ function renderJacsTeamBonusTab() {
 }
 
 function renderBonusTab() {
-  const innerTabs = `<div class="bonus-inner-tabs">
-    <button class="bonus-inner-tab ${bonusCalcView==="property"?"active":""}" onclick="setBonusCalcView('property')">🏢 Property Team</button>
-    <button class="bonus-inner-tab ${bonusCalcView==="jac"?"active":""}" onclick="setBonusCalcView('jac')">👥 Jac's Team</button>
-  </div>`;
-  return innerTabs + (bonusCalcView === "jac" ? renderJacsTeamBonusTab() : renderPropertyBonusTab());
+  const effectiveBonusCalcView = isPortfolioWorkspaceSelected()
+    ? "jac"
+    : (bonusCalcView === "jac" ? "jac" : "property");
+  const innerTabs = isPortfolioWorkspaceSelected()
+    ? `<div class="bonus-inner-tabs">
+        <button class="bonus-inner-tab active" type="button">👥 Jac's Team</button>
+      </div>
+      <div style="margin:-6px 0 12px;font-size:0.72rem;color:var(--muted)">Portfolio scope keeps Bonus Calc on Jac's Team because property-team payouts are community specific.</div>`
+    : `<div class="bonus-inner-tabs">
+        <button class="bonus-inner-tab ${effectiveBonusCalcView==="property"?"active":""}" onclick="setBonusCalcView('property')">🏢 Property Team</button>
+        <button class="bonus-inner-tab ${effectiveBonusCalcView==="jac"?"active":""}" onclick="setBonusCalcView('jac')">👥 Jac's Team</button>
+      </div>`;
+  return innerTabs + (effectiveBonusCalcView === "jac" ? renderJacsTeamBonusTab() : renderPropertyBonusTab());
 }
 
 function getPortfolioPriorityToneColor(tone = "watch") {
@@ -15309,6 +15924,7 @@ function buildPortfolioHomePriorities(details = [], selectedMonth = getSelectedD
     const record = detail.record ?? {};
     const currentEntry = record.monthlyData?.[selectedMonth] ?? {};
     const previousEntry = previousMonthIdx !== null ? (record.monthlyData?.[previousMonthIdx] ?? {}) : null;
+    const summary = getCommunitySummary(detail.name, record);
     const renewal = getRenewalSummaryForMonth(currentEntry);
     const explicitUndecided = Math.max(0, Number(currentEntry.renewalUndecided) || 0);
     const undecidedRenewals = Math.max(renewal.undecided, explicitUndecided);
@@ -15326,19 +15942,17 @@ function buildPortfolioHomePriorities(details = [], selectedMonth = getSelectedD
       });
     }
 
-    const reputation = normalizeReputationData(record.reputationData);
-    const googleRating = reputation.googleQuarterlyRating > 0 ? reputation.googleQuarterlyRating : reputation.googleLifetimeRating;
-    if (googleRating > 0 && googleRating < 4) {
+    if (summary && Number(summary.budgetOccPct ?? 0) > 0 && (Number(summary.occGapUnits ?? 0) >= 4 || Number(summary.leasedGapUnits ?? 0) >= 6)) {
       priorities.push({
         community: detail.name,
-        title: `Google score is below 4 stars`,
-        body: `${detail.name} is sitting at ${googleRating.toFixed(2)} stars. Tighten review response, resident recovery, and post-service review asks before sentiment drags leasing trust.`,
-        value: googleRating.toFixed(2),
-        valueSub: "Google rating",
-        tone: googleRating < 3.7 ? "critical" : "warn",
-        severity: 78 + Math.max(0, 4 - googleRating) * 10,
-        tabIdx: 6,
-        actionLabel: "Open Reputation"
+        title: `Occupancy is off the saved leasing pace`,
+        body: `${detail.name} is ${Math.max(0, Math.round(summary.occGapUnits ?? 0))} occupied unit${Math.round(summary.occGapUnits ?? 0) === 1 ? "" : "s"} and ${Math.max(0, Math.round(summary.leasedGapUnits ?? 0))} leased unit${Math.round(summary.leasedGapUnits ?? 0) === 1 ? "" : "s"} behind the saved budget path for ${FULL_MONTHS[selectedMonth]}. Tighten pending closeouts and near-term move-in execution before the gap widens.`,
+        value: `${Number(summary.occPct ?? 0).toFixed(1)}%`,
+        valueSub: `budget ${Number(summary.budgetOccPct ?? 0).toFixed(1)}%`,
+        tone: Number(summary.occGapUnits ?? 0) >= 8 ? "critical" : "warn",
+        severity: 84 + Math.min(Math.max(Number(summary.occGapUnits ?? 0), Number(summary.leasedGapUnits ?? 0)), 12),
+        tabIdx: 2,
+        actionLabel: "Open Overview"
       });
     }
 
@@ -15365,23 +15979,22 @@ function buildPortfolioHomePriorities(details = [], selectedMonth = getSelectedD
       }
     }
 
-    const market = normalizeMarketSurveyData(record.marketSurveyData);
-    if (hasMarketSurveyData(market) && Number(market.applicationsLast30 ?? 0) > 0 && Number(market.leasesLast30 ?? 0) === 0) {
+    if (summary && Number(summary.tours ?? 0) >= 5 && Number(summary.tourToLeasePct ?? 0) > 0 && Number(summary.tourToLeasePct ?? 0) < 25) {
       priorities.push({
         community: detail.name,
-        title: `APTIQ traffic is not converting to leases`,
-        body: `${Math.round(market.applicationsLast30)} APTIQ applications are showing in the last 30 days with no executed leases captured. Review approval friction, cancellations, and pricing follow-up.`,
-        value: `${Math.round(market.applicationsLast30)}`,
-        valueSub: "apps last 30",
+        title: `Tour-to-lease conversion is too soft`,
+        body: `${detail.name} is converting at ${Number(summary.tourToLeasePct ?? 0).toFixed(1)}% on ${Math.round(summary.tours ?? 0)} tours in ${FULL_MONTHS[selectedMonth]}. Response speed, follow-up discipline, and application closeout need attention before traffic waste compounds.`,
+        value: `${Number(summary.tourToLeasePct ?? 0).toFixed(1)}%`,
+        valueSub: `${Math.round(summary.tours ?? 0)} tours`,
         tone: "warn",
-        severity: 68,
-        tabIdx: 4,
-        actionLabel: "Open Comp Calc"
+        severity: 76 + Math.min(25 - Number(summary.tourToLeasePct ?? 0), 15),
+        tabIdx: 3,
+        actionLabel: "Open Traffic"
       });
     }
 
     const financial = getFinancialSummaryForMonth(record, selectedMonth);
-    if (financial.hasData && Math.abs(financial.noiVariance) >= 1000) {
+    if (financial.hasData && financial.noiVariance <= -1000) {
       const isUnderBudget = financial.noiVariance < 0;
       priorities.push({
         community: detail.name,
@@ -15402,7 +16015,7 @@ function buildPortfolioHomePriorities(details = [], selectedMonth = getSelectedD
   });
   return priorities
     .sort((a, b) => (Number(b.severity) || 0) - (Number(a.severity) || 0) || String(a.community).localeCompare(String(b.community)))
-    .slice(0, 6);
+    .slice(0, 3);
 }
 
 function renderPortfolioPriorityItem(priority) {
@@ -17300,7 +17913,7 @@ function renderPortfolioHomeTab() {
     const prioritiesHtml = renderSafeSection(
       () => portfolioPriorities.length > 0
         ? portfolioPriorities.map(renderPortfolioPriorityItem).join("")
-        : `<div class="alert-green">No internal priority signals are currently tripping for ${selectedLabel}. Keep monitoring renewal saves, reputation, traffic source mix, and AptIQ velocity.</div>`,
+        : `<div class="alert-green">No high-priority operating issues are currently surfacing for ${selectedLabel}. Keep monitoring renewals, pace to budget, conversion, and NOI pressure.</div>`,
       `<div class="alert alert-info">Portfolio priorities are temporarily unavailable for this snapshot.</div>`
     );
     const trendScopeTitle = isPortfolioWorkspaceSelected() ? "Portfolio" : getProp().name;
@@ -17373,7 +17986,7 @@ function renderPortfolioHomeTab() {
         const projectedYearEndRow = trendRows[trendRows.length - 1] || null;
         return buildPortfolioTrendCard({
           title: `${trendScopeTitle} leased occupancy trend`,
-          subtitle: `Actual leased occupancy through ${selectedLabel} ${new Date().getFullYear()}, then projected forward using scheduled move-ins and effective move-outs.`,
+          subtitle: `Actual leased occupancy through ${selectedLabel} ${new Date().getFullYear()}, then projected forward using the saved Monthly Leasing Schedule move-ins and effective move-outs for each community.`,
           summaryLabel: "Selected / Year-end",
           summaryValue: selectedTrendRow && selectedTrendRow.communityCount > 0
             ? `${formatPortfolioTrendMetricValue(selectedTrendRow.leasedOccupancyPct, "pct")} → ${formatPortfolioTrendMetricValue(projectedYearEndRow?.leasedOccupancyPct, "pct")}`
@@ -17407,21 +18020,29 @@ function renderPortfolioHomeTab() {
     const tourToLeaseTrendCard = renderSafeSection(
       () => buildPortfolioTrendCard({
         title: "Tour to lease close-rate trend",
-        subtitle: lastClosedTrendMonth >= 0
-          ? `${trendScopeTitle} closed-month tour-to-lease percentages from Jan ${new Date().getFullYear()} through ${FULL_MONTHS[lastClosedTrendMonth]} ${new Date().getFullYear()}.`
-          : `Closed-month tour-to-lease percentages will appear here once the first month closes in ${new Date().getFullYear()}.`,
-        summaryLabel: lastClosedTrendRow ? FULL_MONTHS[lastClosedTrendRow.monthIdx] : "Closed month",
-        summaryValue: lastClosedTrendRow && lastClosedTrendRow.communityCount > 0 ? formatPortfolioTrendMetricValue(lastClosedTrendRow.tourToLeaseClosedPct, "pct") : "—",
-        summarySub: lastClosedTrendRow ? `${formatPortfolioTrendMetricValue(lastClosedTrendRow.tours, "number")} tours · ${formatPortfolioTrendMetricValue(lastClosedTrendRow.closes, "number")} closes` : "Open current month intentionally excluded",
+        subtitle: selectedTrendRow && selectedTrendRow.monthIdx === selectedMonth
+          ? `${trendScopeTitle} tour-to-lease percentages from Jan ${new Date().getFullYear()} through ${selectedLabel} ${new Date().getFullYear()}, with ${selectedLabel} shown as the current month-to-date blended conversion rate.`
+          : lastClosedTrendMonth >= 0
+            ? `${trendScopeTitle} closed-month tour-to-lease percentages from Jan ${new Date().getFullYear()} through ${FULL_MONTHS[lastClosedTrendMonth]} ${new Date().getFullYear()}.`
+            : `Tour-to-lease percentages will appear here once the first month records tours and closes in ${new Date().getFullYear()}.`,
+        summaryLabel: selectedTrendRow && Number.isFinite(Number(selectedTrendRow.tourToLeaseTrendPct))
+          ? FULL_MONTHS[selectedTrendRow.monthIdx]
+          : (lastClosedTrendRow ? FULL_MONTHS[lastClosedTrendRow.monthIdx] : "Current month"),
+        summaryValue: selectedTrendRow && Number.isFinite(Number(selectedTrendRow.tourToLeaseTrendPct))
+          ? formatPortfolioTrendMetricValue(selectedTrendRow.tourToLeaseTrendPct, "pct")
+          : (lastClosedTrendRow && lastClosedTrendRow.communityCount > 0 ? formatPortfolioTrendMetricValue(lastClosedTrendRow.tourToLeaseClosedPct, "pct") : "—"),
+        summarySub: selectedTrendRow && Number.isFinite(Number(selectedTrendRow.tourToLeaseTrendPct))
+          ? `${formatPortfolioTrendMetricValue(selectedTrendRow.tours, "number")} tours · ${formatPortfolioTrendMetricValue(selectedTrendRow.closes, "number")} closes${selectedTrendRow.monthIdx === selectedMonth ? " · current month blended rate" : ""}`
+          : (lastClosedTrendRow ? `${formatPortfolioTrendMetricValue(lastClosedTrendRow.tours, "number")} tours · ${formatPortfolioTrendMetricValue(lastClosedTrendRow.closes, "number")} closes` : "No current month tours recorded yet"),
         chips: [
-          `<strong>${formatPortfolioTrendMetricValue(trendRows[0]?.tourToLeaseClosedPct, "pct")}</strong> January close rate`,
-          `<strong>${lastClosedTrendMonth >= 0 ? FULL_MONTHS[lastClosedTrendMonth] : "No closed month"}</strong> latest closed month`,
+          `<strong>${formatPortfolioTrendMetricValue(trendRows[0]?.tourToLeaseTrendPct, "pct")}</strong> January rate`,
+          `<strong>${selectedTrendRow && Number.isFinite(Number(selectedTrendRow.tourToLeaseTrendPct)) ? FULL_MONTHS[selectedTrendRow.monthIdx] : (lastClosedTrendMonth >= 0 ? FULL_MONTHS[lastClosedTrendMonth] : "No active month")}</strong> latest plotted month`,
           `<strong>${lastClosedTrendRow?.communityCount ?? 0}</strong> active communities included`
         ],
         chartHtml: buildPortfolioTrendLineChart(
           trendRows.map(row => ({
             shortLabel: row.shortLabel,
-            value: row.communityCount > 0 && row.monthIdx <= lastClosedTrendMonth ? row.tourToLeaseClosedPct : null,
+            value: row.communityCount > 0 && row.monthIdx <= selectedMonth ? row.tourToLeaseTrendPct : null,
             projected: false
           })),
           {
@@ -17435,8 +18056,7 @@ function renderPortfolioHomeTab() {
       }),
       `<div class="portfolio-list-card"><h3>Tour to lease close-rate trend</h3><p>Trend data is temporarily unavailable for this snapshot.</p></div>`
     );
-    return `<div class="dashboard-home-grid">
-    <div>
+    return `<div>
       <div class="portfolio-hero">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap">
           <div>
@@ -17460,11 +18080,11 @@ function renderPortfolioHomeTab() {
         </div>`).join("")}
       </div>
     </div>
-    <div class="portfolio-list-card">
+  </div>
+  <div class="portfolio-list-card" style="margin-top:16px">
       <h3>Portfolio priorities</h3>
       <p>${isPortfolioWorkspaceSelected() ? "Internally-facing items that may need a management touch before they show up as missed outcomes." : "Internally-facing items that may need a management touch before they show up as missed outcomes for this community."}</p>
       <div class="portfolio-rank-list">${prioritiesHtml}</div>
-    </div>
   </div>
   <div class="portfolio-section-grid" style="margin-top:16px">
     ${approvedTrendCard}
@@ -18205,8 +18825,16 @@ function getPortfolioReportSectionLabel(sectionKey) {
 }
 
 function getReportableCommunityNames(monthIdx = getReportHubMonthIndex()) {
-  return getPortfolioScopedCommunityRecordsForMonth(monthIdx, savedData, { includeCurrent: true, includeInactive: false })
+  const names = getPortfolioScopedCommunityRecordsForMonth(monthIdx, savedData, { includeCurrent: true, includeInactive: false })
     .map(entry => entry.name);
+  if (!isDlrWorkbookStateForPeriod(monthIdx, getReportHubYear())) return names;
+  const seen = new Set(names);
+  getDlrWorkbookOverlayCommunityNames().forEach(name => {
+    if (seen.has(name)) return;
+    seen.add(name);
+    names.push(name);
+  });
+  return names;
 }
 
 function getInvestorReportFilterOptions() {
@@ -18527,7 +19155,8 @@ function buildPortfolioHomeMonthlyTrendRows(anchorMonth = getSelectedDashboardMo
       tours: totals.tours,
       closes: totals.closes,
       leasedOccupancyPct: totals.occupancyBaseUnits > 0 ? (totals.leasedUnits / totals.occupancyBaseUnits) * 100 : null,
-      tourToLeaseClosedPct: totals.tours > 0 ? (totals.closes / totals.tours) * 100 : null
+      tourToLeaseClosedPct: totals.tours > 0 ? (totals.closes / totals.tours) * 100 : null,
+      tourToLeaseTrendPct: monthIdx <= anchorMonth && totals.tours > 0 ? (totals.closes / totals.tours) * 100 : null
     };
   });
 }
@@ -22164,7 +22793,10 @@ function requireDlrDailyBoxScoreForReport(report, options = {}) {
   if (options.alert !== false) {
     const communityName = report?.communityName || getDlrReportCommunityName();
     const reportDate = report?.reportDateLabel || report?.reportPeriodLabel || "the selected DLR date";
-    alert(`Upload a daily box score for ${communityName} before exporting this DLR. The DLR report now uses the uploaded daily box score for ${reportDate} instead of falling back to saved month-to-date traffic.`);
+    const sourceLabel = isDlrReportOnlyWorkbook(report)
+      ? "Upload a Ronaldo DLR workbook for the selected date"
+      : `Upload a daily box score for ${communityName}`;
+    alert(`${sourceLabel} before exporting this DLR. The DLR report now uses the uploaded report-only daily source for ${reportDate} instead of falling back to saved month-to-date traffic.`);
   }
   return false;
 }
@@ -22177,6 +22809,7 @@ function focusReportingDlrPreview() {
 function renderDlrReportingWorkspace() {
   const monthIdx = getReportHubMonthIndex();
   const year = getReportHubYear();
+  const workbookMode = isDlrWorkbookStateForPeriod(monthIdx, year);
   const communityOptions = getReportableCommunityNames(monthIdx);
   if (communityOptions.length === 0) {
     return `<div id="reporting-dlr-workspace" class="report-hub-card" style="margin-top:14px">
@@ -22198,14 +22831,24 @@ function renderDlrReportingWorkspace() {
     ? `${report.dailyBoxScoreSourceFile}${report.dailyBoxScoreImportedAt ? ` · uploaded ${formatSavedTimestampLabel(report.dailyBoxScoreImportedAt)}` : ""}`
     : "No daily box score uploaded yet";
   const ready = isDlrDailyBoxScoreReady(report);
-  const sourceModeText = ready
-    ? "Today's leasing activity is sourced from the uploaded daily box score."
-    : "Upload the daily box score to activate the export, print, email, and editable HTML controls.";
+  const sourceModeText = workbookMode
+    ? "This DLR preview is running from the uploaded Ronaldo workbook. It is report-only and does not update saved dashboard tabs, sections, or communities."
+    : (ready
+      ? "Today's leasing activity is sourced from the uploaded daily box score."
+      : "Upload the daily box score to activate the export, print, email, and editable HTML controls.");
+  const dateHelperText = workbookMode
+    ? `${reportDateLabel} · locked to the Ronaldo workbook report date`
+    : reportDateLabel;
+  const notesHelperText = workbookMode
+    ? "These note edits stay only in this workbook-backed DLR session. They flow into exports, but they do not save back to the dashboard."
+    : "Edit these notes before you export, print, or draft the DLR email. Your edits flow into the investor-facing output for this selected community.";
   return `<div id="reporting-dlr-workspace" class="report-hub-card" style="margin-top:14px">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
       <div>
         <div class="card-title" style="margin-bottom:6px">DLR Daily Box Score Setup</div>
-        <p>The DLR reports one community and one daily box score at a time. Pick the community, set the DLR date, upload the daily box score, then review the in-screen preview below before exporting.</p>
+        <p>${workbookMode
+          ? "The DLR is currently using a Ronaldo daily upload. Each community can be previewed and exported separately, and the same upload also powers the portfolio-wide DLR for that date."
+          : "The DLR reports one community and one daily box score at a time. Pick the community, set the DLR date, upload the daily box score or Ronaldo daily workbook, then review the in-screen preview below before exporting."}</p>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-gray btn-sm" onclick="draftDlrOutlookEmail()" ${ready ? "" : "disabled"}>✉ Draft Outlook Email</button>
@@ -22224,8 +22867,8 @@ function renderDlrReportingWorkspace() {
       </div>
       <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px">
         <div class="card-title" style="margin-bottom:6px">DLR Date</div>
-        <input type="date" value="${dateInput}" onchange="setReportingDlrDate(this.value)">
-        <div style="font-size:0.64rem;color:var(--muted);margin-top:6px">${escapeHtml(reportDateLabel)}</div>
+        <input type="date" value="${dateInput}" onchange="setReportingDlrDate(this.value)" ${workbookMode ? "disabled" : ""}>
+        <div style="font-size:0.64rem;color:var(--muted);margin-top:6px">${escapeHtml(dateHelperText)}</div>
       </div>
       <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px">
         <div class="card-title" style="margin-bottom:6px">Daily Box Score Upload</div>
@@ -22233,6 +22876,7 @@ function renderDlrReportingWorkspace() {
           <input type="file" accept=".csv,.pdf,.xlsx,.xls,.xlsm" class="dlr-box-score-input" style="display:none" multiple>
         </label>
         <div style="font-size:0.64rem;color:var(--muted);margin-top:8px">${escapeHtml(sourceLine)}</div>
+        <div style="font-size:0.64rem;color:var(--muted);margin-top:4px">${workbookMode ? "Ronaldo uploads are report-only and only populate DLR reports." : "Ronaldo workbook uploads are accepted here for report-only DLR generation."}</div>
       </div>
     </div>
     <div class="${ready ? "alert-green" : "alert-red"}" style="margin-bottom:12px">${escapeHtml(sourceModeText)}</div>
@@ -22263,7 +22907,9 @@ function renderDlrReportingWorkspace() {
             <div>Renewals Signed: <strong>${formatDlrMetricValue(report.renewalSnapshot?.signed)}</strong></div>
             <div>Undecided / M2M: <strong>${formatDlrMetricValue(report.renewalSnapshot?.undecided)}</strong></div>
           </div>
-          <div style="font-size:0.64rem;color:var(--muted);margin-top:8px">Built from saved ATLAS RISE values for ${escapeHtml(report.reportMonthLabel)} · ${escapeHtml(sourceModeText)} · generated ${escapeHtml(formatSavedTimestampLabel(report.generatedAt))}</div>
+          <div style="font-size:0.64rem;color:var(--muted);margin-top:8px">${workbookMode
+            ? `Built from the uploaded Ronaldo workbook for ${escapeHtml(report.reportDateLabel || report.reportMonthLabel)} · generated ${escapeHtml(formatSavedTimestampLabel(report.generatedAt))}`
+            : `Built from saved ATLAS RISE values for ${escapeHtml(report.reportMonthLabel)} · ${escapeHtml(sourceModeText)} · generated ${escapeHtml(formatSavedTimestampLabel(report.generatedAt))}`}</div>
         </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
@@ -22286,7 +22932,7 @@ function renderDlrReportingWorkspace() {
             <div class="card-title" style="margin-bottom:0">Leasing Notes</div>
             <button class="btn btn-gray btn-sm" onclick="resetDlrEditableNotes()">Reset To Generated Notes</button>
           </div>
-          <div style="font-size:0.66rem;color:var(--muted);margin-bottom:10px">Edit these notes before you export, print, or draft the DLR email. Your edits flow into the investor-facing output for this selected community.</div>
+          <div style="font-size:0.66rem;color:var(--muted);margin-bottom:10px">${escapeHtml(notesHelperText)}</div>
           <div style="display:grid;gap:10px">
             ${DLR_EDITABLE_NOTE_SECTIONS.map(section => `<label style="display:block">
               <div style="font-size:0.68rem;font-weight:700;color:var(--text);margin-bottom:4px">${escapeHtml(section.label)}</div>
@@ -22349,6 +22995,187 @@ function buildPortfolioDlrOverviewData(options = {}) {
   const silent = options.silent === true;
   const monthIdx = getReportHubMonthIndex();
   const year = getReportHubYear();
+  if (isDlrWorkbookStateForPeriod(monthIdx, year)) {
+    const communityNames = getDlrWorkbookOverlayCommunityNames();
+    const communityReports = communityNames
+      .map(name => buildDashboardDlrInvestorOverview(name, monthIdx, year))
+      .filter(Boolean);
+    if (communityReports.length === 0) {
+      if (!silent) alert("The uploaded Ronaldo DLR workbook did not produce any reportable community rows.");
+      return null;
+    }
+    const sumMetrics = (items, path) => (Array.isArray(items) ? items : []).reduce((total, item) => total + (Number(path(item)) || 0), 0);
+    const totalUnits = sumMetrics(communityReports, report => report.totalUnits);
+    const occupiedUnits = sumMetrics(communityReports, report => report.occupiedUnits);
+    const leasedUnits = sumMetrics(communityReports, report => report.leasedUnits);
+    const dailyTraffic = {
+      walkIn: sumMetrics(communityReports, report => report.dailyTraffic?.walkIn),
+      offSiteEvent: sumMetrics(communityReports, report => report.dailyTraffic?.offSiteEvent),
+      phoneCalls: sumMetrics(communityReports, report => report.dailyTraffic?.phoneCalls),
+      emailsOnline: sumMetrics(communityReports, report => report.dailyTraffic?.emailsOnline),
+      textChatOther: sumMetrics(communityReports, report => report.dailyTraffic?.textChatOther),
+      guestCards: sumMetrics(communityReports, report => report.dailyTraffic?.guestCards),
+      newLeads: sumMetrics(communityReports, report => report.dailyTraffic?.newLeads),
+      tours: sumMetrics(communityReports, report => report.dailyTraffic?.tours),
+      applications: sumMetrics(communityReports, report => report.dailyTraffic?.applications),
+      approvals: sumMetrics(communityReports, report => report.dailyTraffic?.approvals),
+      denials: sumMetrics(communityReports, report => report.dailyTraffic?.denials),
+      cancelled: sumMetrics(communityReports, report => report.dailyTraffic?.cancelled),
+      pendingDecision: sumMetrics(communityReports, report => report.dailyTraffic?.pendingDecision),
+      leases: sumMetrics(communityReports, report => report.dailyTraffic?.leases),
+      moveIns: sumMetrics(communityReports, report => report.dailyTraffic?.moveIns),
+      moveOuts: sumMetrics(communityReports, report => report.dailyTraffic?.moveOuts),
+      renewals: sumMetrics(communityReports, report => report.dailyTraffic?.renewals),
+      activityEmails: sumMetrics(communityReports, report => report.dailyTraffic?.activityEmails),
+      activityCalls: sumMetrics(communityReports, report => report.dailyTraffic?.activityCalls),
+      activityChats: sumMetrics(communityReports, report => report.dailyTraffic?.activityChats),
+      activityTexts: sumMetrics(communityReports, report => report.dailyTraffic?.activityTexts),
+      firstVisitsTours: sumMetrics(communityReports, report => report.dailyTraffic?.firstVisitsTours)
+    };
+    const mtdTraffic = {
+      walkIn: sumMetrics(communityReports, report => report.trafficMetrics?.walkIn),
+      offSiteEvent: sumMetrics(communityReports, report => report.trafficMetrics?.offSiteEvent),
+      phoneCalls: sumMetrics(communityReports, report => report.trafficMetrics?.phoneCalls),
+      emailsOnline: sumMetrics(communityReports, report => report.trafficMetrics?.emailsOnline),
+      textChatOther: sumMetrics(communityReports, report => report.trafficMetrics?.textChatOther),
+      guestCards: sumMetrics(communityReports, report => report.trafficMetrics?.guestCards),
+      rolledGuestCards: sumMetrics(communityReports, report => report.trafficMetrics?.rolledGuestCards ?? report.trafficMetrics?.guestCards),
+      tours: sumMetrics(communityReports, report => report.trafficMetrics?.tours),
+      applications: sumMetrics(communityReports, report => report.trafficMetrics?.applications),
+      approvals: sumMetrics(communityReports, report => report.trafficMetrics?.approvals),
+      denials: sumMetrics(communityReports, report => report.trafficMetrics?.denials),
+      cancelled: sumMetrics(communityReports, report => report.trafficMetrics?.cancelled),
+      pendingDecision: sumMetrics(communityReports, report => report.trafficMetrics?.pendingDecision),
+      leases: sumMetrics(communityReports, report => report.trafficMetrics?.leases),
+      renewals: sumMetrics(communityReports, report => report.trafficMetrics?.renewals),
+      moveIns: sumMetrics(communityReports, report => report.trafficMetrics?.moveIns),
+      moveOuts: sumMetrics(communityReports, report => report.trafficMetrics?.moveOuts),
+      monthAbsorption: sumMetrics(communityReports, report => report.monthAbsorption)
+    };
+    const weightedAverage = (items, valuePath) => {
+      const totals = (Array.isArray(items) ? items : []).reduce((acc, item) => {
+        const value = Number(valuePath(item) ?? 0) || 0;
+        const weight = Math.max(1, Number(item.occupiedUnits ?? item.leasedUnits ?? item.totalUnits ?? 0) || 0);
+        if (value <= 0) return acc;
+        acc.weight += weight;
+        acc.total += value * weight;
+        return acc;
+      }, { weight: 0, total: 0 });
+      return totals.weight > 0 ? totals.total / totals.weight : null;
+    };
+    const forwardLook = Array.from({ length: 4 }, (_, idx) => {
+      const sample = communityReports.find(report => report.forwardLook?.[idx])?.forwardLook?.[idx] || null;
+      return {
+        monthIdx: sample?.monthIdx ?? clampNumber(monthIdx + idx, 0, 11),
+        label: sample?.label || formatDlrMonthYear(clampNumber(monthIdx + idx, 0, 11), year),
+        leaseExpirations: sumMetrics(communityReports, report => report.forwardLook?.[idx]?.leaseExpirations),
+        mtm: sumMetrics(communityReports, report => report.forwardLook?.[idx]?.mtm),
+        pendingMoveOuts: sumMetrics(communityReports, report => report.forwardLook?.[idx]?.pendingMoveOuts),
+        pendingMoveIns: sumMetrics(communityReports, report => report.forwardLook?.[idx]?.pendingMoveIns),
+        moveInsNeeded: sumMetrics(communityReports, report => report.forwardLook?.[idx]?.moveInsNeeded),
+        budgetedOccupancy: weightedAverage(communityReports.map(report => ({ ...report, occupiedUnits: report.totalUnits })), report => report.forwardLook?.[idx]?.budgetedOccupancy) || 0,
+        projectedOccupancy: weightedAverage(communityReports.map(report => ({ ...report, occupiedUnits: report.totalUnits })), report => report.forwardLook?.[idx]?.projectedOccupancy) || 0
+      };
+    });
+    const aggregate = {
+      totalUnits,
+      occupied: occupiedUnits,
+      leased: leasedUnits,
+      occPct: totalUnits > 0 ? (occupiedUnits / totalUnits) * 100 : 0,
+      leasedPct: totalUnits > 0 ? (leasedUnits / totalUnits) * 100 : 0,
+      budgetOccPct: weightedAverage(communityReports.map(report => ({ ...report, occupiedUnits: report.totalUnits })), report => report.budgetOccPct) || 0,
+      applications: sumMetrics(communityReports, report => report.trafficMetrics?.applications),
+      applicationsApproved: sumMetrics(communityReports, report => report.trafficMetrics?.approvals),
+      tours: sumMetrics(communityReports, report => report.trafficMetrics?.tours),
+      leasesSigned: sumMetrics(communityReports, report => report.trafficMetrics?.leases),
+      monthAbsorption: sumMetrics(communityReports, report => report.monthAbsorption),
+      renewalExpirations: sumMetrics(communityReports, report => report.renewalSnapshot?.expirations),
+      renewalsSigned: sumMetrics(communityReports, report => report.renewalSnapshot?.signed),
+      renewalUndecided: sumMetrics(communityReports, report => report.renewalSnapshot?.undecided),
+      renewalProjectedAttrition: sumMetrics(communityReports, report => report.renewalSnapshot?.projectedAttrition)
+    };
+    aggregate.renewalRetentionRate = aggregate.renewalExpirations > 0 ? (aggregate.renewalsSigned / aggregate.renewalExpirations) * 100 : 0;
+    aggregate.moveInGoal = sumMetrics(communityReports, report => report.moveInGoalPerWeek);
+    aggregate.occGapUnits = Math.max(Math.round(((aggregate.budgetOccPct || 0) / 100) * totalUnits) - occupiedUnits, 0);
+    const dateLabels = [...new Set(communityReports.map(report => String(report.reportDateLabel || "").trim()).filter(Boolean))];
+    const reportDateLabel = dateLabels.length === 1 ? dateLabels[0] : (dlrWorkbookReportState.reportDateLabel || "");
+    const notes = buildPortfolioDlrOverviewNotes({
+      reportDateLabel,
+      monthLabel: formatDlrMonthYear(monthIdx, year),
+      detailCount: communityReports.length,
+      dailyCoverageCount: communityReports.length,
+      aggregate,
+      previousAggregate: null,
+      dailyTraffic,
+      mtdTraffic,
+      scopeSummary: `${communityReports.length} communities from the uploaded Ronaldo DLR workbook`
+    });
+    const details = communityReports.map(report => ({
+      name: report.communityName,
+      record: getPersistedCommunityRecordForScope(report.communityName, { allowCurrentFallback: true }) || {},
+      summary: {
+        occupied: report.occupiedUnits,
+        leased: report.leasedUnits,
+        totalUnits: report.totalUnits,
+        applicationsApproved: report.trafficMetrics?.approvals ?? 0,
+        monthAbsorption: report.monthAbsorption ?? 0,
+        renewalRetentionRate: report.renewalSnapshot?.retentionRate ?? 0
+      }
+    }));
+    return {
+      title: "ATLAS RISE Portfolio Daily Leasing Report",
+      communityName: `${communityReports.length} communities from the uploaded Ronaldo DLR workbook`,
+      scopeSummary: `${communityReports.length} communities from the uploaded Ronaldo DLR workbook`,
+      reportMonthIdx: monthIdx,
+      reportYear: year,
+      reportMonthLabel: formatDlrMonthYear(monthIdx, year),
+      reportPeriodLabel: reportDateLabel ? `${reportDateLabel} · portfolio scope` : `${formatDlrMonthYear(monthIdx, year)} portfolio scope`,
+      reportDateLabel,
+      generatedAt: new Date(),
+      status: buildDlrWorkbookStatusLabel(aggregate.occPct, aggregate.leasedPct),
+      totalUnits,
+      occupiedUnits,
+      leasedUnits,
+      occupancyPct: aggregate.occPct,
+      leasedPct: aggregate.leasedPct,
+      trendingOccupancyPct: Number(forwardLook[Math.min(3, Math.max(forwardLook.length - 1, 0))]?.projectedOccupancy ?? aggregate.occPct) || aggregate.occPct,
+      budgetOccPct: aggregate.budgetOccPct,
+      moveInGoalPerWeek: aggregate.moveInGoal || null,
+      moveInsNeeded: Number(forwardLook[0]?.moveInsNeeded ?? aggregate.occGapUnits ?? 0),
+      monthAbsorption: aggregate.monthAbsorption,
+      trafficMetrics: { ...mtdTraffic, sourceMode: "daily_box_score" },
+      dailyTraffic,
+      pricing: {
+        totalUnits,
+        leasedUnits,
+        occupiedUnits,
+        avgBudgetRent: weightedAverage(communityReports, report => report.pricing?.avgBudgetRent),
+        avgInPlaceRent: weightedAverage(communityReports, report => report.pricing?.avgInPlaceRent),
+        avgNetEffectiveRent: weightedAverage(communityReports, report => report.pricing?.avgNetEffectiveRent),
+        rentRollTotal: null,
+        concessions: null
+      },
+      forwardLook,
+      renewalSnapshot: {
+        expirations: aggregate.renewalExpirations,
+        signed: aggregate.renewalsSigned,
+        undecided: aggregate.renewalUndecided,
+        projectedAttrition: aggregate.renewalProjectedAttrition,
+        retentionRate: aggregate.renewalRetentionRate,
+        previousRetentionRate: 0
+      },
+      notes,
+      marketing: { ready: false, narrative: "" },
+      details,
+      communityReports,
+      photoPool: [],
+      communityPhotoAsset: null,
+      communityPhotoPreviewSrc: "",
+      sourceSummary: `${communityReports.length} communities included from the report-only Ronaldo daily upload`,
+      reportSourceMode: "ronaldo_dlr_workbook",
+      reportOnly: true
+    };
+  }
   const allDetails = buildPortfolioDetailsForMonth(monthIdx);
   const details = getInvestorScopedPortfolioDetails(allDetails);
   if (details.length === 0) {
@@ -22572,18 +23399,21 @@ function buildPortfolioDlrOverviewDocument(report) {
     { label: "Renewal Retention", value: formatDlrPercent(report.renewalSnapshot.retentionRate, 0), sub: `${formatDlrMetricValue(report.renewalSnapshot.signed)} signed of ${formatDlrMetricValue(report.renewalSnapshot.expirations)}` },
     { label: "Today's Apps", value: formatDlrMetricValue(report.dailyTraffic?.applications), sub: `${formatDlrMetricValue(report.dailyTraffic?.approvals)} approved · ${formatDlrMetricValue(report.dailyTraffic?.denials)} denied` }
   ];
-  const scopeRows = report.details.map(detail => {
-    const communityReport = report.communityReports.find(item => item.communityName === detail.name) || null;
+  const scopeRows = (report.communityReports ?? []).map(communityReport => {
+    const detail = (report.details ?? []).find(item => item.name === communityReport.communityName) || { name: communityReport.communityName, record: {}, summary: {} };
+    const investorName = getInvestorPortfolioName(detail.record) || (isDlrReportOnlyWorkbook(report) ? "Report-only upload" : "Unassigned investor");
+    const physicalPct = Number(communityReport.occupancyPct ?? 0) || 0;
+    const leasedPct = Number(communityReport.leasedPct ?? 0) || 0;
     return `<tr>
       <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px">
-        <div style="font-weight:700;color:#0f172a">${escapeHtml(detail.name)}</div>
-        <div style="font-size:11px;color:#64748b">${escapeHtml(getInvestorPortfolioName(detail.record) || "Unassigned investor")}</div>
+        <div style="font-weight:700;color:#0f172a">${escapeHtml(communityReport.communityName)}</div>
+        <div style="font-size:11px;color:#64748b">${escapeHtml(investorName)}</div>
       </td>
-      <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${getSummaryOccPct(detail.summary).toFixed(1)}%</td>
-      <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${getSummaryLeasedPct(detail.summary).toFixed(1)}%</td>
-      <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${Math.round(detail.summary?.applicationsApproved ?? 0)}</td>
-      <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${formatSignedDisplay(detail.summary?.monthAbsorption ?? 0)}</td>
-      <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${(detail.summary?.renewalRetentionRate ?? 0).toFixed(1)}%</td>
+      <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${physicalPct.toFixed(1)}%</td>
+      <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${leasedPct.toFixed(1)}%</td>
+      <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${Math.round(communityReport.trafficMetrics?.approvals ?? 0)}</td>
+      <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${formatSignedDisplay(communityReport.monthAbsorption ?? 0)}</td>
+      <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${Number(communityReport.renewalSnapshot?.retentionRate ?? 0).toFixed(1)}%</td>
       <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center">${communityReport && isDlrDailyBoxScoreReady(communityReport) ? "Live DLR" : "Saved MTD"}</td>
     </tr>`;
   }).join("");
@@ -22722,11 +23552,14 @@ function renderPortfolioDlrReportingWorkspace() {
   const selectedCommunities = report.details.map(detail => detail.name);
   const coverageCount = report.communityReports.filter(item => isDlrDailyBoxScoreReady(item)).length;
   const imageCount = report.photoPool.length;
+  const workbookMode = isDlrReportOnlyWorkbook(report);
   return `<div id="reporting-portfolio-dlr-workspace" class="report-hub-card" style="margin-top:14px">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
       <div>
         <div class="card-title" style="margin-bottom:6px">Portfolio DLR Scope</div>
-        <p style="font-size:0.72rem;color:var(--muted)">This report follows the current Investor Scope Builder below. Use investor groups or highlighted community overrides to decide which properties roll into the branded portfolio DLR.</p>
+        <p style="font-size:0.72rem;color:var(--muted)">${workbookMode
+          ? "This portfolio DLR is powered by the uploaded Ronaldo daily workbook. It is report-only for the uploaded date and does not write back into saved dashboard records."
+          : "This report follows the current Investor Scope Builder below. Use investor groups or highlighted community overrides to decide which properties roll into the branded portfolio DLR."}</p>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-gray btn-sm" onclick="downloadPortfolioDlrOverviewHtml()">⬇ Editable HTML</button>
@@ -22746,7 +23579,7 @@ function renderPortfolioDlrReportingWorkspace() {
       <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px">
         <div class="card-title" style="margin-bottom:6px">Image Library Pull</div>
         <div style="font-size:1.4rem;font-weight:700;font-family:'JetBrains Mono',monospace;color:#2dd4bf">${imageCount}</div>
-        <div style="font-size:0.66rem;color:var(--muted);margin-top:6px">${imageCount > 0 ? "Report will use saved community photos from the library." : "Add community photos in the library to enrich the hero strip."}</div>
+        <div style="font-size:0.66rem;color:var(--muted);margin-top:6px">${workbookMode ? (imageCount > 0 ? "Report can still use saved community photos from the library." : "Add community photos in the library to enrich the hero strip.") : (imageCount > 0 ? "Report will use saved community photos from the library." : "Add community photos in the library to enrich the hero strip.")}</div>
       </div>
       <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px">
         <div class="card-title" style="margin-bottom:6px">Report Period</div>
@@ -23437,7 +24270,11 @@ function resolveDlrSummaryUnits(summary, totalUnits, metric = "occupied") {
 function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommunityName(), monthIdx = getHistoricalImportMonthIndex(), year = getHistoricalImportYear()) {
   const communityName = matchPropertyName(propName, { fallbackToCurrent: false }) || getProp().name;
   const normalizedMonthIdx = clampNumber(monthIdx, 0, 11);
-  const record = getPersistedCommunityRecordForScope(communityName);
+  const workbookOverlay = getDlrWorkbookOverlayForCommunity(communityName, normalizedMonthIdx, year);
+  const record = getPersistedCommunityRecordForScope(communityName, { allowCurrentFallback: true });
+  if (!record && workbookOverlay) {
+    return buildWorkbookOnlyDlrInvestorOverview(communityName, workbookOverlay, normalizedMonthIdx, year);
+  }
   if (!record) return null;
   const primaryCommunityPhotoAsset = normalizeCommunityPhotoBank(record?.photoBank)[0] || null;
   const reportDetail = buildPortfolioDetailsForMonth(normalizedMonthIdx, { [communityName]: record })[0] || null;
@@ -23449,6 +24286,7 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   const surveyData = normalizeMarketSurveyData(record.marketSurveyData);
   const dlrSummary = normalizeDlrSummary(record.latestDlrSummary);
   const dailyBoxScore = normalizeDlrBoxScoreSnapshot(dlrSummary.dailyBoxScore);
+  const hasMatchingDlrSummary = isDlrSummaryForRequestedPeriod(dlrSummary, normalizedMonthIdx, year);
   const hasDailyBoxScore = hasDlrBoxScoreSnapshot(dailyBoxScore);
   const dailyBoxScoreDate = parseDlrSpecificDate(dailyBoxScore.reportDateIso);
   const hasMatchingDailyBoxScore = hasDailyBoxScore && (!dailyBoxScoreDate || (dailyBoxScoreDate.getMonth() === clampNumber(monthIdx, 0, 11) && dailyBoxScoreDate.getFullYear() === Number(year)));
@@ -23485,7 +24323,7 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   const appMetrics = getApplicationDecisionMetrics(monthEntry);
   const prevAppMetrics = getApplicationDecisionMetrics(prevMonthEntry);
   const scheduleRow = schedule[reportMetricMonthIdx] ?? {};
-  const nextRows = MONTHS.map((_, idx) => idx)
+  const scheduledNextRows = MONTHS.map((_, idx) => idx)
     .filter(idx => idx >= reportMetricMonthIdx)
     .slice(0, 4)
     .map(idx => {
@@ -23504,17 +24342,44 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
         moveInsNeeded: Number(row.netOccLeases) || 0
       };
     });
-  const occupiedUnits = reportAnchorOccupiedUnits;
-  const leasedUnits = reportAnchorLeasedUnits;
-  const occupancyPct = getOccupancyPctFromUnits(occupiedUnits, totalUnits, corporateUnits);
-  const leasedPct = getOccupancyPctFromUnits(leasedUnits, totalUnits, corporateUnits);
+  const summaryForwardLook = hasMatchingDlrSummary ? dlrSummary.forwardLook : defaultDlrSummary().forwardLook;
+  const summaryNextRows = Array.isArray(summaryForwardLook.months) && summaryForwardLook.months.length > 0
+    ? summaryForwardLook.months.slice(0, 4).map((label, idx) => ({
+        monthIdx: parseMonthIndexValue(label) ?? Math.min(11, reportMetricMonthIdx + idx),
+        label: String(label ?? "").trim() || formatDlrMonthYear(Math.min(11, reportMetricMonthIdx + idx), year),
+        leaseExpirations: Number(summaryForwardLook.leaseExpirations?.[idx] ?? 0) || 0,
+        mtm: Number(summaryForwardLook.mtm?.[idx] ?? 0) || 0,
+        pendingMoveOuts: Number(summaryForwardLook.pendingMoveOuts?.[idx] ?? 0) || 0,
+        pendingMoveIns: Number(summaryForwardLook.pendingMoveIns?.[idx] ?? 0) || 0,
+        budgetedOccupancy: Number(summaryForwardLook.budgetedOccupancy?.[idx] ?? 0) || 0,
+        projectedOccupancy: Number(summaryForwardLook.projectedOccupancy?.[idx] ?? 0) || 0,
+        moveInsNeeded: Number(summaryForwardLook.moveInsNeeded?.[idx] ?? 0) || 0
+      }))
+    : [];
+  const nextRows = summaryNextRows.length > 0 ? summaryNextRows : scheduledNextRows;
+  const occupiedUnits = hasMatchingDlrSummary
+    ? (resolveDlrSummaryUnits(dlrSummary, totalUnits, "occupied") ?? reportAnchorOccupiedUnits)
+    : reportAnchorOccupiedUnits;
+  const leasedUnits = hasMatchingDlrSummary
+    ? (resolveDlrSummaryUnits(dlrSummary, totalUnits, "leased") ?? reportAnchorLeasedUnits)
+    : reportAnchorLeasedUnits;
+  const occupancyPct = hasMatchingDlrSummary && Number.isFinite(Number(dlrSummary.occupancyPct))
+    ? Number(dlrSummary.occupancyPct)
+    : getOccupancyPctFromUnits(occupiedUnits, totalUnits, corporateUnits);
+  const leasedPct = hasMatchingDlrSummary && Number.isFinite(Number(dlrSummary.leasedPct))
+    ? Number(dlrSummary.leasedPct)
+    : getOccupancyPctFromUnits(leasedUnits, totalUnits, corporateUnits);
   const projectedTrendRow = nextRows[Math.min(3, Math.max(nextRows.length - 1, 0))] || nextRows[nextRows.length - 1] || null;
   const projectedEndingOccupancy = computeProjectedEndingPhysicalOccupancy(record, totalUnits, reportMetricMonthIdx, 3);
-  const trendingOccupancyPct = Number(projectedTrendRow?.projectedOccupancy ?? projectedEndingOccupancy.pct ?? occupancyPct) || occupancyPct;
+  const trendingOccupancyPct = hasMatchingDlrSummary && Number.isFinite(Number(dlrSummary.trendingOccupancyPct))
+    ? Number(dlrSummary.trendingOccupancyPct)
+    : (Number(projectedTrendRow?.projectedOccupancy ?? projectedEndingOccupancy.pct ?? occupancyPct) || occupancyPct);
   const budgetOccPct = getRecordSavedBudgetOccPct(record, reportMetricMonthIdx);
   const moveInsNeeded = Number(scheduleRow.netOccLeases) || 0;
-  const moveInGoalPerWeek = moveInsNeeded > 0 ? Math.max(1, Math.ceil(moveInsNeeded / 4)) : 0;
-  const mtdTraffic = buildDlrTrafficMetricsFromSummary({}, monthEntry, {}, {
+  const moveInGoalPerWeek = hasMatchingDlrSummary && Number.isFinite(Number(dlrSummary.moveInGoalPerWeek))
+    ? Number(dlrSummary.moveInGoalPerWeek)
+    : (moveInsNeeded > 0 ? Math.max(1, Math.ceil(moveInsNeeded / 4)) : 0);
+  const mtdTraffic = buildDlrTrafficMetricsFromSummary(hasMatchingDlrSummary ? dlrSummary : {}, monthEntry, {}, {
     preferDailyBoxScore: false
   });
   mtdTraffic.guestCards = Math.max(0, Number(reportSummary.guestCards ?? mtdTraffic.guestCards) || 0);
@@ -23548,6 +24413,9 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   prevMonthTraffic.renewals = Math.max(0, Number(previousReportSummary.renewalsSigned ?? prevMonthTraffic.renewals) || 0);
   prevMonthTraffic.moveIns = Math.max(0, Number(previousReportSummary.moveIns ?? prevMonthTraffic.moveIns) || 0);
   prevMonthTraffic.moveOuts = Math.max(0, Number(previousReportSummary.moveOuts ?? prevMonthTraffic.moveOuts) || 0);
+  const reportTrafficSourceMode = hasMatchingDailyBoxScore
+    ? "daily_box_score"
+    : (hasMatchingDlrSummary && mtdTraffic.sourceMode === "dlr_summary" ? "dlr_summary" : "dashboard_mtd");
   const dailyLeadSources = hasMatchingDailyBoxScore
     ? {
         walkIn: Math.max(0, Number(dailyBoxScore.walkIn) || 0),
@@ -23627,7 +24495,7 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
     dailyTraffic,
     mtdTraffic,
     prevMonthTraffic,
-    trafficMetricsSourceMode: hasMatchingDailyBoxScore ? "daily_box_score" : "dashboard_mtd",
+    trafficMetricsSourceMode: reportTrafficSourceMode,
     occupancyPct,
     leasedPct,
     trendingOccupancyPct,
@@ -23651,7 +24519,7 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
     ? (dailyBoxScore.reportDateLabel || dlrSummary.reportDateLabel)
     : dlrSummary.reportDateLabel;
   const reportPeriodLabel = reportDateLabel || dlrSummary.reportPeriodLabel || `${formatDlrMonthYear(reportMetricMonthIdx, year)} operating snapshot`;
-  return {
+  const baseReport = {
     communityName,
     reportMonthIdx: reportMetricMonthIdx,
     reportYear: year,
@@ -23673,7 +24541,7 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
     monthAbsorption: Number(reportSummary.monthAbsorption ?? mtdTraffic.monthAbsorption ?? 0) || 0,
     trafficMetrics: {
       ...mtdTraffic,
-      sourceMode: hasMatchingDailyBoxScore ? "daily_box_score" : "dashboard_mtd"
+      sourceMode: reportTrafficSourceMode
     },
     dailyTraffic,
     pricing: {
@@ -23702,11 +24570,12 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
     marketing,
     communityPhotoAsset: primaryCommunityPhotoAsset,
     communityPhotoPreviewSrc: String(primaryCommunityPhotoAsset?.previewSrc || primaryCommunityPhotoAsset?.src || ""),
-    sourceSummary: `${communityName} · ${reportPeriodLabel} · ${hasMatchingDailyBoxScore ? "today's leasing activity imported from box score with month-to-date metrics sourced from ATLAS RISE" : "generated from ATLAS RISE saved month-to-date data"}`,
+    sourceSummary: `${communityName} · ${reportPeriodLabel} · ${hasMatchingDailyBoxScore ? "today's leasing activity imported from box score with month-to-date metrics sourced from ATLAS RISE" : (hasMatchingDlrSummary ? "month-to-date report sections sourced from the uploaded DLR summary" : "generated from ATLAS RISE saved month-to-date data")}`,
     floorPlanVarianceRows: floorPlanVarianceData.rows,
     unmatchedMarketFloorPlans: floorPlanVarianceData.unmatchedRates,
     marketSurveyUpdatedOn: surveyData.updatedOn
   };
+  return workbookOverlay ? applyWorkbookOverlayToDlrReport(baseReport, workbookOverlay) : baseReport;
 }
 
 function renderDashboardDlrActivityMiniTable(report) {
@@ -23957,7 +24826,7 @@ async function openDlrInvestorOverview(printImmediately = false) {
   const win = window.open("", "_blank");
   if (!win) return;
   const matchedCommunity = matchPropertyName(report.communityName, { fallbackToCurrent: false }) || report.communityName;
-  const record = getPropertyRecordForApply(matchedCommunity);
+  const record = isDlrReportOnlyWorkbook(report) ? null : getPropertyRecordForApply(matchedCommunity);
   if (record) {
     const periodKey = buildPeriodKey(report.reportMonthIdx, report.reportYear);
     const nextTracking = setRecordPeriodImportStamp(record, "dlrExports", periodKey, {
@@ -24001,7 +24870,7 @@ async function downloadDlrInvestorOverviewHtml() {
   if (!requireDlrDailyBoxScoreForReport(report)) return;
   report.communityPhotoSrc = await resolveDlrInvestorOverviewPhotoSrc(report.communityPhotoAsset);
   const matchedCommunity = matchPropertyName(report.communityName, { fallbackToCurrent: false }) || report.communityName;
-  const record = getPropertyRecordForApply(matchedCommunity);
+  const record = isDlrReportOnlyWorkbook(report) ? null : getPropertyRecordForApply(matchedCommunity);
   if (record) {
     const periodKey = buildPeriodKey(report.reportMonthIdx, report.reportYear);
     const nextTracking = setRecordPeriodImportStamp(record, "dlrExports", periodKey, {
@@ -24039,7 +24908,7 @@ async function downloadPortfolioDlrOverviewHtml() {
 
 function renderCSVTab() {
   if (isPortfolioWorkspaceSelected()) return renderPortfolioScopedImportTab();
-  const errorHTML = csvError ? `<div class="alert-red mb4">${csvError}</div>` : "";
+  const errorHTML = csvError ? `<div class="${getCsvAlertClass(csvError)} mb4">${csvError}</div>` : "";
   const logHTML = csvLog.length > 0 ? `<div class="alert-green mb4">${csvLog.map((l,i) => `<div style="${i===0?"color:#3fb950;font-weight:600":"color:var(--muted)"}">${l}</div>`).join('')}</div>` : "";
   const imageInventory = getPresentationImageInventory();
   const historicalCommunity = getHistoricalImportCommunityName();
@@ -24791,6 +25660,13 @@ function clearExtractedDashboardRows() {
   extractedSourceLabel = "";
   csvLog = ["🧹 Cleared extracted preview rows."];
   renderTab();
+}
+
+function getCsvAlertClass(message = "") {
+  const normalized = String(message ?? "").trim().toLowerCase();
+  if (!normalized) return "alert-red";
+  if (normalized.startsWith("lead-source mix is missing")) return "alert-yellow";
+  return "alert-red";
 }
 
 function renderExtractFieldMapControls() {
@@ -25866,10 +26742,10 @@ async function processRonaldoMonthlyBackfillFiles(files, options = {}) {
     await handleAtlasAdvancedWorkbook(file, workbookImportOptions);
   }
   if (workbookFiles.length > 0) {
-    const workbookResult = await processRonaldoMonthlyReferenceFiles(workbookFiles, { forcedMonthIdx: targetMonthIdx, forcedYear: targetYear });
-    if (workbookResult.notes.length > 0) {
-      csvLog = [...workbookResult.notes, ...csvLog];
-    }
+    csvLog = [
+      "ℹ ATLAS monthly workbooks are no longer re-parsed as Ronaldo reference files. Use CSV/PDF box-score references for short-term lead-source backfill, and let the workbook handle totals/occupancy fields.",
+      ...csvLog
+    ];
   }
   if (referenceFiles.length > 0) {
     const referenceResult = await processRonaldoMonthlyReferenceFiles(referenceFiles, { forcedMonthIdx: targetMonthIdx, forcedYear: targetYear });
@@ -26681,6 +27557,15 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
         renewal_early_termination: ""
       };
       const targetRecord = getPropertyRecordForApply(mappedName);
+      const leadSourceFieldMap = {
+        walk_in: "walk_in",
+        off_site_event: "off_site_event",
+        phone_calls: "phone_calls",
+        emails_online: "emails_online",
+        text_chat_other: "text_chat_other"
+      };
+      const hasLeadSourceBreakdown = leadSourceValues.some(value => value !== null);
+      const shouldFlagMissingLeadMix = !hasLeadSourceBreakdown && guestCardsValue !== null && guestCardsValue > 0;
       if (targetRecord) {
         touchedCommunities.add(mappedName);
         const monthlyFieldMap = {
@@ -26704,15 +27589,6 @@ async function handleAtlasAdvancedWorkbook(file, options = {}) {
           renewal_expirations: "renewal_expirations",
           renewals_signed: "renewals_signed"
         };
-        const leadSourceFieldMap = {
-          walk_in: "walk_in",
-          off_site_event: "off_site_event",
-          phone_calls: "phone_calls",
-          emails_online: "emails_online",
-          text_chat_other: "text_chat_other"
-        };
-        const hasLeadSourceBreakdown = leadSourceValues.some(value => value !== null);
-        const shouldFlagMissingLeadMix = !hasLeadSourceBreakdown && guestCardsValue !== null && guestCardsValue > 0;
         if (shouldFlagMissingLeadMix) {
           missingLeadSourceRows.push({
             community: mappedName,
