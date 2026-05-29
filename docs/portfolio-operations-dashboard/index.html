@@ -1507,6 +1507,23 @@ function hashFloorPlanSeed(seed = "") {
 }
 
 function buildSurveyFloorPlanRowId(row, index = 0) {
+  if (row && typeof row === "object") {
+    const existingId = String(row.id ?? "").trim();
+    if (existingId) return existingId;
+    const seed = [
+      row.name ?? row.planName ?? "",
+      row.sourceSheet ?? "",
+      row.sqft ?? "",
+      row.beds ?? "",
+      row.baths ?? "",
+      row.units ?? "",
+      row.marketRent ?? "",
+      index ?? 0
+    ].join("|");
+    const nextId = `floorplan_survey_${hashFloorPlanSeed(seed)}`;
+    row.id = nextId;
+    return nextId;
+  }
   return `floorplan_survey_${hashFloorPlanSeed(String(index ?? 0))}`;
 }
 
@@ -4734,9 +4751,19 @@ function renderPropGrid() {
   if (workspaceSubline) {
     const portfolioScopeKey = getPortfolioScopePeriodKey(getSelectedDashboardMonthIndex());
     const hasScopedPortfolioMonth = Array.isArray(portfolioMonthScopeByPeriod?.[portfolioScopeKey]) && portfolioMonthScopeByPeriod[portfolioScopeKey].length > 0;
-    const scopeStorageLabel = isPortfolioWorkspaceSelected() && hasScopedPortfolioMonth
-      ? `${savedCount} communities still saved in this browser`
-      : `${savedCount} of ${totalCount} communities saved in this browser`;
+    const savedScopedCount = details.filter(detail => !!savedData[detail.name]).length;
+    const liveDraftScopedCount = Math.max(details.length - savedScopedCount, 0);
+    let scopeStorageLabel = `${savedCount} of ${totalCount} communities saved in this browser`;
+    if (isPortfolioWorkspaceSelected()) {
+      if (hasScopedPortfolioMonth) {
+        scopeStorageLabel = `${details.length} communities in the saved portfolio scope for ${FULL_MONTHS[getSelectedDashboardMonthIndex()]}`;
+      } else {
+        const scopeParts = [];
+        if (savedScopedCount > 0) scopeParts.push(`${savedScopedCount} saved`);
+        if (liveDraftScopedCount > 0) scopeParts.push(`${liveDraftScopedCount} live draft`);
+        scopeStorageLabel = `${scopeParts.length ? scopeParts.join(" + ") : "0 saved"} communities in current portfolio scope`;
+      }
+    }
     workspaceSubline.textContent = `${isPortfolioWorkspaceSelected() ? `${details.length} communities · ${aggregate.totalUnits.toLocaleString()} units` : getHeaderSubText()} · Reporting month ${FULL_MONTHS[getSelectedDashboardMonthIndex()]} · ${scopeStorageLabel}.`;
   }
   if (workspaceCount) {
@@ -5995,6 +6022,14 @@ function resolveFloorPlanSelectionIds(section, propName, availableIds = []) {
   }
   for (const value of Object.values(bucket)) {
     const matched = pickIds(value);
+    if (matched.length > 0) return matched;
+  }
+  const scope = document.querySelector(`[data-floor-plan-selection-section="${section}"]`);
+  if (scope) {
+    const domMatches = Array.from(scope.querySelectorAll("[data-floor-plan-row-checkbox]:checked"))
+      .map(input => String(input.getAttribute("data-floor-plan-id") || "").trim())
+      .filter(Boolean);
+    const matched = pickIds(domMatches);
     if (matched.length > 0) return matched;
   }
   return [];
@@ -7944,6 +7979,12 @@ function autoCalcConvRate() {
   const blended = blendParts.reduce((sum, part) => sum + (part.value * part.weight), 0) / weightTotal;
   const achievableBias = blended * 1.08;
   return Math.round(Math.min(95, achievableBias) * 10) / 10;
+}
+
+function applyBlendedConversionRate() {
+  conversionRate = autoCalcConvRate();
+  saveCommunityData(true);
+  renderTab();
 }
 
 // ─── Auto-Populate Leasing Pace % Target ─────────────────────────────────────
@@ -10552,7 +10593,7 @@ function renderOverviewTab() {
     <div class="card">
       <div class="label">Blended Conversion Rate %</div>
       ${numInp("conversionRate", conversionRate, "", 1, 100)}
-      <div class="pct-goal">${autoCalcConvRate() !== conversionRate ? `<span style="color:#4493f8;cursor:pointer" onclick="conversionRate=${autoCalcConvRate()};renderTab()">Blend: ${autoCalcConvRate()}% ← click to apply</span>` : "Tour→App + App→Lease + historical trend blend"}</div>
+      <div class="pct-goal">${autoCalcConvRate() !== conversionRate ? `<span style="color:#4493f8;cursor:pointer" onclick="applyBlendedConversionRate()">Blend: ${autoCalcConvRate()}% ← click to apply</span>` : "Tour→App + App→Lease + historical trend blend"}</div>
     </div>
     <div class="card">
       <div class="label">Reporting Context</div>
@@ -13904,7 +13945,9 @@ function setBonusQuarter(q) {
 }
 
 function setBonusCalcView(view) {
-  bonusCalcView = view;
+  bonusCalcView = isPortfolioWorkspaceSelected()
+    ? "jac"
+    : (view === "jac" ? "jac" : "property");
   persistOpsGlobalData();
   renderTab();
 }
@@ -15134,11 +15177,19 @@ function renderJacsTeamBonusTab() {
 }
 
 function renderBonusTab() {
-  const innerTabs = `<div class="bonus-inner-tabs">
-    <button class="bonus-inner-tab ${bonusCalcView==="property"?"active":""}" onclick="setBonusCalcView('property')">🏢 Property Team</button>
-    <button class="bonus-inner-tab ${bonusCalcView==="jac"?"active":""}" onclick="setBonusCalcView('jac')">👥 Jac's Team</button>
-  </div>`;
-  return innerTabs + (bonusCalcView === "jac" ? renderJacsTeamBonusTab() : renderPropertyBonusTab());
+  const effectiveBonusCalcView = isPortfolioWorkspaceSelected()
+    ? "jac"
+    : (bonusCalcView === "jac" ? "jac" : "property");
+  const innerTabs = isPortfolioWorkspaceSelected()
+    ? `<div class="bonus-inner-tabs">
+        <button class="bonus-inner-tab active" type="button">👥 Jac's Team</button>
+      </div>
+      <div style="margin:-6px 0 12px;font-size:0.72rem;color:var(--muted)">Portfolio scope keeps Bonus Calc on Jac's Team because property-team payouts are community specific.</div>`
+    : `<div class="bonus-inner-tabs">
+        <button class="bonus-inner-tab ${effectiveBonusCalcView==="property"?"active":""}" onclick="setBonusCalcView('property')">🏢 Property Team</button>
+        <button class="bonus-inner-tab ${effectiveBonusCalcView==="jac"?"active":""}" onclick="setBonusCalcView('jac')">👥 Jac's Team</button>
+      </div>`;
+  return innerTabs + (effectiveBonusCalcView === "jac" ? renderJacsTeamBonusTab() : renderPropertyBonusTab());
 }
 
 function getPortfolioPriorityToneColor(tone = "watch") {
@@ -17368,7 +17419,7 @@ function renderPortfolioHomeTab() {
         const projectedYearEndRow = trendRows[trendRows.length - 1] || null;
         return buildPortfolioTrendCard({
           title: `${trendScopeTitle} leased occupancy trend`,
-          subtitle: `Actual leased occupancy through ${selectedLabel} ${new Date().getFullYear()}, then projected forward using scheduled move-ins and effective move-outs.`,
+          subtitle: `Actual leased occupancy through ${selectedLabel} ${new Date().getFullYear()}, then projected forward using the saved Monthly Leasing Schedule move-ins and effective move-outs for each community.`,
           summaryLabel: "Selected / Year-end",
           summaryValue: selectedTrendRow && selectedTrendRow.communityCount > 0
             ? `${formatPortfolioTrendMetricValue(selectedTrendRow.leasedOccupancyPct, "pct")} → ${formatPortfolioTrendMetricValue(projectedYearEndRow?.leasedOccupancyPct, "pct")}`
@@ -17402,21 +17453,29 @@ function renderPortfolioHomeTab() {
     const tourToLeaseTrendCard = renderSafeSection(
       () => buildPortfolioTrendCard({
         title: "Tour to lease close-rate trend",
-        subtitle: lastClosedTrendMonth >= 0
-          ? `${trendScopeTitle} closed-month tour-to-lease percentages from Jan ${new Date().getFullYear()} through ${FULL_MONTHS[lastClosedTrendMonth]} ${new Date().getFullYear()}.`
-          : `Closed-month tour-to-lease percentages will appear here once the first month closes in ${new Date().getFullYear()}.`,
-        summaryLabel: lastClosedTrendRow ? FULL_MONTHS[lastClosedTrendRow.monthIdx] : "Closed month",
-        summaryValue: lastClosedTrendRow && lastClosedTrendRow.communityCount > 0 ? formatPortfolioTrendMetricValue(lastClosedTrendRow.tourToLeaseClosedPct, "pct") : "—",
-        summarySub: lastClosedTrendRow ? `${formatPortfolioTrendMetricValue(lastClosedTrendRow.tours, "number")} tours · ${formatPortfolioTrendMetricValue(lastClosedTrendRow.closes, "number")} closes` : "Open current month intentionally excluded",
+        subtitle: selectedTrendRow && selectedTrendRow.monthIdx === selectedMonth
+          ? `${trendScopeTitle} tour-to-lease percentages from Jan ${new Date().getFullYear()} through ${selectedLabel} ${new Date().getFullYear()}, with ${selectedLabel} shown as the current month-to-date blended conversion rate.`
+          : lastClosedTrendMonth >= 0
+            ? `${trendScopeTitle} closed-month tour-to-lease percentages from Jan ${new Date().getFullYear()} through ${FULL_MONTHS[lastClosedTrendMonth]} ${new Date().getFullYear()}.`
+            : `Tour-to-lease percentages will appear here once the first month records tours and closes in ${new Date().getFullYear()}.`,
+        summaryLabel: selectedTrendRow && Number.isFinite(Number(selectedTrendRow.tourToLeaseTrendPct))
+          ? FULL_MONTHS[selectedTrendRow.monthIdx]
+          : (lastClosedTrendRow ? FULL_MONTHS[lastClosedTrendRow.monthIdx] : "Current month"),
+        summaryValue: selectedTrendRow && Number.isFinite(Number(selectedTrendRow.tourToLeaseTrendPct))
+          ? formatPortfolioTrendMetricValue(selectedTrendRow.tourToLeaseTrendPct, "pct")
+          : (lastClosedTrendRow && lastClosedTrendRow.communityCount > 0 ? formatPortfolioTrendMetricValue(lastClosedTrendRow.tourToLeaseClosedPct, "pct") : "—"),
+        summarySub: selectedTrendRow && Number.isFinite(Number(selectedTrendRow.tourToLeaseTrendPct))
+          ? `${formatPortfolioTrendMetricValue(selectedTrendRow.tours, "number")} tours · ${formatPortfolioTrendMetricValue(selectedTrendRow.closes, "number")} closes${selectedTrendRow.monthIdx === selectedMonth ? " · current month blended rate" : ""}`
+          : (lastClosedTrendRow ? `${formatPortfolioTrendMetricValue(lastClosedTrendRow.tours, "number")} tours · ${formatPortfolioTrendMetricValue(lastClosedTrendRow.closes, "number")} closes` : "No current month tours recorded yet"),
         chips: [
-          `<strong>${formatPortfolioTrendMetricValue(trendRows[0]?.tourToLeaseClosedPct, "pct")}</strong> January close rate`,
-          `<strong>${lastClosedTrendMonth >= 0 ? FULL_MONTHS[lastClosedTrendMonth] : "No closed month"}</strong> latest closed month`,
+          `<strong>${formatPortfolioTrendMetricValue(trendRows[0]?.tourToLeaseTrendPct, "pct")}</strong> January rate`,
+          `<strong>${selectedTrendRow && Number.isFinite(Number(selectedTrendRow.tourToLeaseTrendPct)) ? FULL_MONTHS[selectedTrendRow.monthIdx] : (lastClosedTrendMonth >= 0 ? FULL_MONTHS[lastClosedTrendMonth] : "No active month")}</strong> latest plotted month`,
           `<strong>${lastClosedTrendRow?.communityCount ?? 0}</strong> active communities included`
         ],
         chartHtml: buildPortfolioTrendLineChart(
           trendRows.map(row => ({
             shortLabel: row.shortLabel,
-            value: row.communityCount > 0 && row.monthIdx <= lastClosedTrendMonth ? row.tourToLeaseClosedPct : null,
+            value: row.communityCount > 0 && row.monthIdx <= selectedMonth ? row.tourToLeaseTrendPct : null,
             projected: false
           })),
           {
@@ -18489,7 +18548,8 @@ function buildPortfolioHomeMonthlyTrendRows(anchorMonth = getSelectedDashboardMo
       tours: totals.tours,
       closes: totals.closes,
       leasedOccupancyPct: totals.occupancyBaseUnits > 0 ? (totals.leasedUnits / totals.occupancyBaseUnits) * 100 : null,
-      tourToLeaseClosedPct: totals.tours > 0 ? (totals.closes / totals.tours) * 100 : null
+      tourToLeaseClosedPct: totals.tours > 0 ? (totals.closes / totals.tours) * 100 : null,
+      tourToLeaseTrendPct: monthIdx <= anchorMonth && totals.tours > 0 ? (totals.closes / totals.tours) * 100 : null
     };
   });
 }
