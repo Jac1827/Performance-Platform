@@ -10959,21 +10959,22 @@ function renderOverviewTab() {
 
   // ── Weekly pace alerts ──────────────────────────────────────────────────────
   const cm = monthlyData[currentMonth] ?? {};
-  const weeksElapsed = Math.max(1, Math.min(4, Math.ceil(new Date().getDate() / 7)));
-  const weeksLeft    = Math.max(1, 4 - weeksElapsed + 1);
+  const paceContext  = getMonthlyPaceContext(currentMonth);
+  const weeksElapsed = paceContext.weeksElapsed;
+  const weeksLeft    = paceContext.weeksLeft;
   const leasesNeeded  = currentRow.grossLeases ?? 0;
   const leasedSoFar   = cm.leasesSignedActual ?? 0;
   const leasesRemain  = Math.max(leasesNeeded - leasedSoFar, 0);
   const weeklyPace    = leasedSoFar > 0 ? (leasedSoFar / weeksElapsed).toFixed(1) : "0";
-  const weeklyTarget  = weeksLeft > 0 ? Math.ceil(leasesRemain / weeksLeft) : 0;
+  const weeklyTarget  = paceContext.isLivePaceMonth && weeksLeft > 0 ? Math.ceil(leasesRemain / weeksLeft) : 0;
   const paceRatio     = leasesNeeded > 0 ? leasedSoFar / leasesNeeded : 0;
   const gcSoFar       = getLeadSourceTotal(cm);
   const gcNeeded      = currentRow.guestCardsNeeded ?? 0;
   const gcPace        = gcSoFar > 0 ? (gcSoFar / weeksElapsed).toFixed(1) : "0";
-  const gcWeeklyNeeded = gcNeeded > 0 ? Math.ceil((gcNeeded - gcSoFar) / weeksLeft) : 0;
+  const gcWeeklyNeeded = paceContext.isLivePaceMonth && gcNeeded > 0 && weeksLeft > 0 ? Math.ceil((gcNeeded - gcSoFar) / weeksLeft) : 0;
 
   // Velocity: projected month-end leases based on current pace
-  const projectedMonthEndLeases = parseFloat(weeklyPace) * 4;
+  const projectedMonthEndLeases = paceContext.isLivePaceMonth ? (parseFloat(weeklyPace) * 4) : leasedSoFar;
   const velocityStatus = projectedMonthEndLeases >= leasesNeeded ? "on-pace" : projectedMonthEndLeases >= leasesNeeded * 0.75 ? "warn" : "behind";
 
   let alertBanners = "";
@@ -11449,8 +11450,9 @@ function renderTrafficTab() {
   </div>`;
 
   // ── Leasing Velocity / Pace ───────────────────────────────────────────────
-  const weeksElapsed = Math.max(1, Math.min(4, Math.ceil(new Date().getDate() / 7)));
-  const weeksLeft    = Math.max(1, 4 - weeksElapsed + 1);
+  const paceContext = getMonthlyPaceContext(currentMonth);
+  const weeksElapsed = paceContext.weeksElapsed;
+  const weeksLeft    = paceContext.weeksLeft;
   const leasesGoal   = currentRow.grossLeases ?? 0;
   const leasedActual = grossLeaseActual;
   const approvalsActual = applicationMetrics.approvals;
@@ -11463,27 +11465,29 @@ function renderTrafficTab() {
   const approvalsGoal = leasesGoal;
 
   const weeklyLeasePace  = (leasedActual / weeksElapsed).toFixed(1);
-  const projectedLeases  = parseFloat(weeklyLeasePace) * 4;
+  const projectedLeases  = paceContext.isLivePaceMonth ? (parseFloat(weeklyLeasePace) * 4) : leasedActual;
   const projVsGoal       = leasesGoal > 0 ? projectedLeases - leasesGoal : 0;
   const weeklyGCPace     = (gcActual / weeksElapsed).toFixed(1);
-  const neededPerWeekGC  = gcGoal > 0 ? Math.max(Math.ceil((gcGoal - gcActual) / weeksLeft), 0) : 0;
-  const neededPerWeekL   = leasesGoal > 0 ? Math.max(Math.ceil((leasesGoal - leasedActual) / weeksLeft), 0) : 0;
+  const neededPerWeekGC  = paceContext.isLivePaceMonth && gcGoal > 0 && weeksLeft > 0 ? Math.max(Math.ceil((gcGoal - gcActual) / weeksLeft), 0) : 0;
+  const neededPerWeekL   = paceContext.isLivePaceMonth && leasesGoal > 0 && weeksLeft > 0 ? Math.max(Math.ceil((leasesGoal - leasedActual) / weeksLeft), 0) : 0;
 
   // Overall conversion projection: use the configured overall conversion rate as the only driver
-  const overallConversionProjection = gcActual > 0 ? Math.round(gcActual * (conversionRate / 100)) : 0;
+  const overallConversionProjection = paceContext.isLivePaceMonth && gcActual > 0
+    ? Math.round(gcActual * (conversionRate / 100))
+    : leasedActual;
   const conversionProjectionPct = leasesGoal > 0 ? (overallConversionProjection / leasesGoal * 100) : 0;
 
   const velocityCard = `<div class="pace-card mb4">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:12px">
       <div>
         <h2 style="font-size:0.9rem;font-weight:600">📈 ${MONTHS[currentMonth]} Leasing Velocity</h2>
-        <p style="font-size:0.72rem;color:var(--muted);margin-top:2px">Week ${weeksElapsed} of 4 · ${weeksLeft} week(s) remaining</p>
+        <p style="font-size:0.72rem;color:var(--muted);margin-top:2px">${paceContext.isLivePaceMonth ? `Week ${weeksElapsed} of 4 · ${weeksLeft} week(s) remaining` : `Reporting month closed · ${weeksElapsed} weeks complete`}</p>
       </div>
       <div style="text-align:right">
-        <div style="font-size:0.68rem;color:var(--muted)">Pace-Based Projection <span style="color:var(--border)">·</span> extrapolates current signing rate</div>
+        <div style="font-size:0.68rem;color:var(--muted)">${paceContext.isLivePaceMonth ? "Pace-Based Projection" : "Closed Month Projection"} <span style="color:var(--border)">·</span> ${paceContext.isLivePaceMonth ? "extrapolates current signing rate" : "uses completed month totals"}</div>
         <div style="font-size:1.4rem;font-weight:700;font-family:'JetBrains Mono',monospace;color:${projVsGoal>=0?"#3fb950":"#f85149"}">${projectedLeases.toFixed(0)} leases</div>
         <div style="font-size:0.68rem;color:${projVsGoal>=0?"#3fb950":"#f85149"}">${projVsGoal>=0?"▲":"▼"} ${Math.abs(projVsGoal).toFixed(0)} vs goal of ${leasesGoal}</div>
-        <div style="font-size:0.63rem;color:var(--muted);margin-top:2px">${leasedActual} ${applicationMetrics.approvals > 0 ? "approved / gross leases" : "signed leases"} ÷ ${weeksElapsed} wk × 4 wks</div>
+        <div style="font-size:0.63rem;color:var(--muted);margin-top:2px">${paceContext.isLivePaceMonth ? `${leasedActual} ${applicationMetrics.approvals > 0 ? "approved / gross leases" : "signed leases"} ÷ ${weeksElapsed} wk × 4 wks` : `${leasedActual} ${applicationMetrics.approvals > 0 ? "approved / gross leases" : "signed leases"} in the selected month`}</div>
       </div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
@@ -11500,11 +11504,11 @@ function renderTrafficTab() {
     </div>
     <div style="margin-top:12px;padding:10px;background:var(--bg3);border-radius:8px;font-size:0.72rem">
       <div style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin-bottom:4px">Pipeline-Based Projection <span style="font-weight:400;text-transform:none;letter-spacing:0">— driven only by the Overall Conversion Rate %</span></div>
-      <span style="color:var(--muted)">Overall Conversion Projection: </span>
+      <span style="color:var(--muted)">${paceContext.isLivePaceMonth ? "Overall Conversion Projection" : "Closed Month Conversion Total"}: </span>
       <strong style="color:${conversionProjectionPct>=100?"#3fb950":conversionProjectionPct>=70?"#d29922":"#f85149"}">${overallConversionProjection} leases</strong>
-      <span style="color:var(--muted)"> from ${gcActual} leads × ${conversionRate}% overall conversion · </span>
+      <span style="color:var(--muted)">${paceContext.isLivePaceMonth ? ` from ${gcActual} leads × ${conversionRate}% overall conversion · ` : " from the selected month totals · "}</span>
       <strong style="color:${conversionProjectionPct>=100?"#3fb950":conversionProjectionPct>=70?"#d29922":"#f85149"}">${conversionProjectionPct.toFixed(0)}% of ${leasesGoal} goal</strong>
-      <div style="font-size:0.63rem;color:var(--muted);margin-top:4px">This projection ignores intermediate tour-to-lease or app-to-lease ratios and uses only the configured conversion percentage. Applications approved are tracked separately below and do not overwrite lease totals.</div>
+      <div style="font-size:0.63rem;color:var(--muted);margin-top:4px">${paceContext.isLivePaceMonth ? "This projection ignores intermediate tour-to-lease or app-to-lease ratios and uses only the configured conversion percentage. Applications approved are tracked separately below and do not overwrite lease totals." : "The selected month is closed, so this view shows completed totals instead of an in-progress pace extrapolation."}</div>
     </div>
     </div>
   </div>`;
@@ -15777,6 +15781,22 @@ function getCurrentCalendarDayContext(selectedMonth = getSelectedDashboardMonthI
     isCurrentCalendarMonth,
     dayOfMonth,
     daysInMonth
+  };
+}
+
+function getMonthlyPaceContext(selectedMonth = getSelectedDashboardMonthIndex(), year = new Date().getFullYear()) {
+  const calendarContext = getCurrentCalendarDayContext(selectedMonth, year);
+  const weeksElapsed = calendarContext.isCurrentCalendarMonth
+    ? Math.max(1, Math.min(4, Math.ceil(calendarContext.dayOfMonth / 7)))
+    : 4;
+  const weeksLeft = calendarContext.isCurrentCalendarMonth
+    ? Math.max(1, 4 - weeksElapsed + 1)
+    : 0;
+  return {
+    ...calendarContext,
+    weeksElapsed,
+    weeksLeft,
+    isLivePaceMonth: calendarContext.isCurrentCalendarMonth
   };
 }
 
