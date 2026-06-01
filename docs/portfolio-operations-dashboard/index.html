@@ -26050,6 +26050,31 @@ function renderCommunityProgressReportingWorkspace() {
     </div>`;
   }
   const alerts = Array.isArray(report.dataAlerts) ? report.dataAlerts : [];
+  const communitySectionsHtml = Array.isArray(report.communityReports) && report.communityReports.length > 1
+    ? `<div class="report-hub-card" style="margin-top:12px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+          <div>
+            <div class="card-title" style="margin-bottom:6px">By Community</div>
+            <p style="font-size:0.72rem;color:var(--muted)">Each selected community is rendered below so the rollup can be compared against the individual property views.</p>
+          </div>
+          <div style="font-size:0.72rem;color:var(--muted)">${escapeHtml(String(report.communityCount || 0))} communities selected</div>
+        </div>
+        <div class="progress-community-stack">
+          ${report.communityReports.map(child => {
+            const childDoc = buildCommunityProgressReportDocument(child);
+            return `<div class="progress-community-frame">
+              <div class="progress-community-frame-header">
+                <div>
+                  <div class="progress-community-frame-title">${escapeHtml(child.communityName)}</div>
+                  <div class="progress-community-frame-sub">${escapeHtml(child.reportPeriodLabel)} · individual community view</div>
+                </div>
+              </div>
+              <iframe title="${escapeHtml(child.communityName)} community progress report" srcdoc="${escapeHtml(childDoc)}"></iframe>
+            </div>`;
+          }).join("")}
+        </div>
+      </div>`
+    : "";
   return `<div id="reporting-community-progress-workspace" class="report-hub-card" style="margin-top:14px">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
       <div>
@@ -26143,7 +26168,7 @@ function renderCommunityProgressReportingWorkspace() {
           </div>
         </div>
       </div>
-      <div class="report-hub-card">
+    <div class="report-hub-card">
         <div class="card-title" style="margin-bottom:8px">Source Alerts</div>
         ${alerts.length > 0 ? alerts.map(alertItem => `<div style="margin-bottom:8px"><div style="font-size:0.72rem;font-weight:700;color:var(--text)">${escapeHtml(alertItem.title)}</div><div style="font-size:0.68rem;color:var(--muted);line-height:1.6">${escapeHtml(alertItem.body)}</div></div>`).join("") : `<div style="font-size:0.72rem;color:var(--muted)">No source alerts surfaced for the selected month.</div>`}
       </div>
