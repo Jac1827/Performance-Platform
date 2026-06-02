@@ -18049,12 +18049,16 @@ function renderPortfolioHomeTab() {
       {
         label: "Approved Applications",
         value: `${Math.round(aggregate.applicationsApproved ?? 0)}`,
-        sub: previousAggregate ? formatPortfolioTrendValue(aggregate.applicationsApproved ?? 0, previousAggregate.applicationsApproved ?? 0, "count_pct").replace("MoM", "vs prior month") : "Month-to-date approved applications"
+        sub: previousAggregate
+          ? formatPortfolioProjectedTrendValue(aggregate.applicationsApproved ?? 0, previousAggregate.applicationsApproved ?? 0, "count_pct", selectedMonth, new Date().getFullYear())
+          : "Month-to-date approved applications"
       },
       {
         label: "Net Absorption",
         value: formatSignedDisplay(aggregate.monthAbsorption ?? 0),
-        sub: previousAggregate ? formatPortfolioTrendValue(aggregate.monthAbsorption ?? 0, previousAggregate.monthAbsorption ?? 0, "number_diff").replace("MoM", "vs prior month") : "Move-ins minus move-outs"
+        sub: previousAggregate
+          ? formatPortfolioProjectedTrendValue(aggregate.monthAbsorption ?? 0, previousAggregate.monthAbsorption ?? 0, "number_diff", selectedMonth, new Date().getFullYear())
+          : "Move-ins minus move-outs"
       },
       {
         label: "Renewal Retention",
@@ -18114,7 +18118,7 @@ function renderPortfolioHomeTab() {
         summaryLabel: selectedLabel,
         summaryValue: selectedTrendRow && selectedTrendRow.communityCount > 0 ? formatPortfolioTrendMetricValue(selectedTrendRow.approvedApps, "number") : "—",
         summarySub: selectedMonth > 0 && selectedTrendRow && trendRows[selectedMonth - 1]?.communityCount > 0
-          ? formatPortfolioTrendValue(selectedTrendRow.approvedApps ?? 0, trendRows[selectedMonth - 1]?.approvedApps ?? 0, "count_pct").replace("MoM", "vs prior month")
+          ? formatPortfolioProjectedTrendValue(selectedTrendRow.approvedApps ?? 0, trendRows[selectedMonth - 1]?.approvedApps ?? 0, "count_pct", selectedMonth, new Date().getFullYear())
           : "Approved apps saved in the selected reporting month",
         chips: [
           `<strong>${selectedTrendRow?.communityCount ?? 0}</strong> active communities`,
@@ -18145,7 +18149,7 @@ function renderPortfolioHomeTab() {
         summaryLabel: selectedLabel,
         summaryValue: selectedTrendRow && selectedTrendRow.communityCount > 0 ? formatPortfolioTrendMetricValue(selectedTrendRow.netAbsorption, "signed") : "—",
         summarySub: selectedMonth > 0 && selectedTrendRow && trendRows[selectedMonth - 1]?.communityCount > 0
-          ? formatPortfolioTrendValue(selectedTrendRow.netAbsorption ?? 0, trendRows[selectedMonth - 1]?.netAbsorption ?? 0, "number_diff").replace("MoM", "vs prior month")
+          ? formatPortfolioProjectedTrendValue(selectedTrendRow.netAbsorption ?? 0, trendRows[selectedMonth - 1]?.netAbsorption ?? 0, "number_diff", selectedMonth, new Date().getFullYear())
           : "Move-ins less effective move-outs for the selected month",
         chips: [
           `<strong>${formatPortfolioTrendMetricValue(selectedTrendRow?.moveIns, "number")}</strong> move-ins`,
@@ -19325,6 +19329,38 @@ function formatPortfolioTrendValue(currentValue, previousValue, mode = "count_pc
   const pctChange = ((current - previous) / Math.abs(previous)) * 100;
   if (Math.abs(pctChange) < 0.1) return "flat MoM";
   return `${pctChange >= 0 ? "▲" : "▼"}${Math.abs(pctChange).toFixed(1)}% MoM`;
+}
+
+function formatPortfolioProjectedTrendValue(currentValue, previousValue, mode = "count_pct", selectedMonth = getSelectedDashboardMonthIndex(), year = new Date().getFullYear()) {
+  const current = Number(currentValue) || 0;
+  const previous = Number(previousValue) || 0;
+  const calendarContext = getCurrentCalendarDayContext(selectedMonth, year);
+  if (!calendarContext.isCurrentCalendarMonth) {
+    return formatPortfolioTrendValue(current, previous, mode).replace("MoM", "vs prior month");
+  }
+  const projected = (current / Math.max(calendarContext.dayOfMonth, 1)) * calendarContext.daysInMonth;
+  if (mode === "point") {
+    const diff = projected - previous;
+    if (Math.abs(diff) < 0.05) return "on pace with prior month";
+    return `${diff >= 0 ? "▲" : "▼"}${Math.abs(diff).toFixed(1)} pts projected vs prior month`;
+  }
+  if (mode === "number_diff") {
+    const diff = projected - previous;
+    if (Math.abs(diff) < 0.5) return "on pace with prior month";
+    return `${diff >= 0 ? "▲" : "▼"}${Math.abs(diff).toFixed(0)} units projected vs prior month`;
+  }
+  if (mode === "currency_diff") {
+    const diff = projected - previous;
+    if (Math.abs(diff) < 0.5) return "on pace with prior month";
+    return `${diff >= 0 ? "▲" : "▼"}$${Math.abs(diff).toLocaleString(undefined, { maximumFractionDigits: 0 })} projected vs prior month`;
+  }
+  if (previous === 0) {
+    if (projected === 0) return "on pace with prior month";
+    return "new projected month";
+  }
+  const pctChange = ((projected - previous) / Math.abs(previous)) * 100;
+  if (Math.abs(pctChange) < 0.1) return "on pace with prior month";
+  return `${pctChange >= 0 ? "▲" : "▼"}${Math.abs(pctChange).toFixed(1)}% projected vs prior month`;
 }
 
 function formatPortfolioReportValueWithTrend(value, kind, previousValue, trendMode = "count_pct") {
