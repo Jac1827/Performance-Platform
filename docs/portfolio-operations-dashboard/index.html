@@ -25926,6 +25926,13 @@ function buildCommunityProgressDualLineChart(points = [], options = {}) {
   const secondaryPoints = seriesPoints("secondary");
   const tickCount = 4;
   const highlightMonthIdx = Number.isInteger(options.highlightMonthIdx) ? options.highlightMonthIdx : getSelectedDashboardMonthIndex();
+  const pointLabelFormatter = typeof options.pointLabelFormatter === "function"
+    ? options.pointLabelFormatter
+    : (value) => {
+      if (typeof options.axisFormatter === "function") return options.axisFormatter(value);
+      return formatPortfolioTrendMetricValue(value, options.kind || "pct");
+    };
+  const pointLabelY = (point, seriesOffset = 0) => Math.max(8, Math.min(height - 18, point.y - 10 - seriesOffset));
   const ticks = Array.from({ length: tickCount + 1 }, (_, idx) => {
     const value = minValue + (((maxValue - minValue) / tickCount) * idx);
     return {
@@ -25947,6 +25954,12 @@ function buildCommunityProgressDualLineChart(points = [], options = {}) {
     </g>`).join("")}
     ${lineFor(primaryPoints, options.primaryLineColor || "#1d4ed8", options.primaryDash || "")}
     ${lineFor(secondaryPoints, options.secondaryLineColor || "#0f766e", options.secondaryDash || "")}
+    ${primaryPoints.map(point => `
+      <text x="${point.x}" y="${pointLabelY(point, 0)}" text-anchor="middle" font-size="10" font-weight="700" fill="${options.primaryDotColor || "#1d4ed8"}" stroke="#ffffff" stroke-width="3" paint-order="stroke">${escapeHtml(pointLabelFormatter(point.value))}</text>
+    `).join("")}
+    ${secondaryPoints.map(point => `
+      <text x="${point.x}" y="${pointLabelY(point, 12)}" text-anchor="middle" font-size="10" font-weight="700" fill="${options.secondaryDotColor || "#0f766e"}" stroke="#ffffff" stroke-width="3" paint-order="stroke">${escapeHtml(pointLabelFormatter(point.value))}</text>
+    `).join("")}
     ${dotsFor(primaryPoints, options.primaryDotColor || "#1d4ed8")}
     ${dotsFor(secondaryPoints, options.secondaryDotColor || "#0f766e")}
     ${points.map((point, idx) => {
