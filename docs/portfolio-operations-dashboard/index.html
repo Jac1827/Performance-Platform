@@ -1312,6 +1312,23 @@ let reportHubMonth = DEFAULT_CURRENT_MONTH;
 let reportHubYear = new Date().getFullYear();
 let reportRecommendationOverrides = {};
 let sideNavCollapsed = false;
+const COMMUNITY_PROGRESS_VIEW_MODE_KEY = "rise_community_progress_view_mode_v1";
+function normalizeCommunityProgressViewMode(value) {
+  return String(value || "preview") === "pdf" ? "pdf" : "preview";
+}
+let communityProgressViewMode = normalizeCommunityProgressViewMode(
+  window.localStorage?.getItem(COMMUNITY_PROGRESS_VIEW_MODE_KEY) || "preview"
+);
+function persistCommunityProgressViewMode(value) {
+  communityProgressViewMode = normalizeCommunityProgressViewMode(value);
+  try {
+    window.localStorage.setItem(COMMUNITY_PROGRESS_VIEW_MODE_KEY, communityProgressViewMode);
+  } catch (_error) {}
+}
+function setCommunityProgressViewMode(value) {
+  persistCommunityProgressViewMode(value);
+  renderTab();
+}
 const DASHBOARD_EXTRACT_HEADERS = ["property","month","occupied","leased","move_outs","move_ins","guest_cards","walk_in","off_site_event","phone_calls","emails_online","text_chat_other","tours","applications","applications_approved","denied","cancelled","pending_decision","leases_signed","budget_occ","market_rent","budget_rent","budget_ner","rent_roll_total","concessions","ner","renewal_expirations","renewals_signed","renewal_ntvs","renewal_transfers","renewal_undecided","renewal_early_termination"];
 const EXTRACT_MAPPABLE_FIELDS = ["occupied","leased","move_outs","move_ins","guest_cards","walk_in","off_site_event","phone_calls","emails_online","text_chat_other","tours","applications","applications_approved","denied","cancelled","pending_decision","leases_signed","budget_occ","market_rent","budget_rent","budget_ner","rent_roll_total","concessions","ner","renewal_expirations","renewals_signed","renewal_ntvs","renewal_transfers","renewal_undecided","renewal_early_termination"];
 const DEFAULT_EXTRACT_FIELD_MAP = {
@@ -23156,7 +23173,8 @@ function getReportHubActionOptions(type = reportHubType) {
   if (["investor_snapshot", "investor_marketing_report"].includes(normalizedType)) return [...common, { value: "export_csv", label: "Export CSV" }, { value: "export_excel", label: "Export Excel" }];
   if (normalizedType === "monthly_investor_deck") return [...common, { value: "export_html", label: "Download Editable HTML" }];
   if (normalizedType === "dlr") return [...common, { value: "export_html", label: "Download Editable HTML" }];
-  if (normalizedType === "community_progress" || normalizedType === "market_comparison") return [...common, { value: "export_html", label: "Download Editable HTML" }];
+  if (normalizedType === "community_progress") return [...common, { value: "export_html", label: "Download Editable HTML" }, { value: "export_individual_pdfs", label: "Separate PDFs" }];
+  if (normalizedType === "market_comparison") return [...common, { value: "export_html", label: "Download Editable HTML" }];
   if (normalizedType === "bonus_payout") return [...common, { value: "export_csv", label: "Export CSV" }];
   return common;
 }
@@ -24163,6 +24181,13 @@ async function runReportHubAction() {
     if (type === "market_comparison") return downloadMarketComparisonReportHtml();
     syncDlrTargetFromReportHub({ preserveCommunity: true });
     return downloadDlrInvestorOverviewHtml();
+  }
+  if (reportHubAction === "export_individual_pdfs") {
+    if (type === "community_progress") {
+      setCommunityProgressViewMode("pdf");
+      return openCommunityProgressIndividualReports(true);
+    }
+    return null;
   }
   if (reportHubAction === "email") {
     const draft = buildReportHubEmailDraft(type);
@@ -25785,6 +25810,46 @@ function buildCommunityProgressNarrative({
   ];
 }
 
+function buildCommunityProgressLeadershipPanel(report) {
+  const staff = Array.isArray(report?.regionalStaff)
+    ? report.regionalStaff.filter(member => normalizePhotoAsset(member?.photo))
+    : [];
+  if (staff.length === 0) {
+    return `<div class="progress-card section">
+      <div style="font-size:14px;font-weight:700;margin-bottom:10px">Leadership In Scope</div>
+      <div style="font-size:12px;line-height:1.7;color:#64748b">No VP or Regional headshots are currently saved for the selected communities.</div>
+    </div>`;
+  }
+  return `<div class="progress-card section">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+      <div>
+        <div style="font-size:14px;font-weight:700;margin-bottom:4px">Leadership In Scope</div>
+        <div style="font-size:12px;color:#64748b;line-height:1.6">VP and assigned Regional headshots for the selected community scope.</div>
+      </div>
+      <div style="font-size:12px;color:#475569">${escapeHtml(report.communityCount > 1 ? `${report.communityCount} communities selected` : "Single-community view")}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
+      ${staff.map(member => {
+        const photo = normalizePhotoAsset(member.photo);
+        const communities = Array.isArray(member.communities) ? member.communities.filter(Boolean) : [];
+        const communityLabel = member.roleId === "vp_ops"
+          ? "VP"
+          : `${communities.length} communit${communities.length === 1 ? "y" : "ies"} represented`;
+        return `<div style="border:1px solid #dbe4f0;border-radius:16px;overflow:hidden;background:#f8fafc">
+          <div style="position:relative;aspect-ratio:1/1;background:#0f172a">
+            <img src="${photo.src}" alt="" style="width:100%;height:100%;object-fit:cover;display:block">
+          </div>
+          <div style="padding:12px 12px 14px">
+            <div style="font-size:13px;font-weight:800;color:#0f172a;line-height:1.35">${escapeHtml(member.name)}</div>
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;margin-top:4px">${escapeHtml(communityLabel)}</div>
+            ${communities.length > 0 ? `<div style="font-size:11px;color:#475569;line-height:1.5;margin-top:6px">${escapeHtml(communities.join(", "))}</div>` : ""}
+          </div>
+        </div>`;
+      }).join("")}
+    </div>
+  </div>`;
+}
+
 function extractHtmlBodyContent(documentHtml) {
   const html = String(documentHtml || "");
   const match = html.match(/<body[^>]*>([\s\S]*)<\/body>\s*<\/html>\s*$/i);
@@ -26130,6 +26195,7 @@ function buildCommunityProgressSingleReportData(options = {}) {
     communityCount: 1,
     scopeLabel: communityName,
     sourceRecord: record,
+    regionalStaff: getMonthlyPresentationRegionalStaffForDetails([{ name: communityName, record }]),
     currentMonthLabel: getDashboardMonthLabel(monthIdx),
     reportMonthIdx: monthIdx,
     reportYear: year,
@@ -26297,6 +26363,9 @@ function buildCommunityProgressReportData(options = {}) {
   };
   const selectedReportPhotos = collectInterleavedMonthlyPresentationPhotos(communityReports, 6);
   const communityNamesLabel = getCommunityProgressReportScopeLabel();
+  const regionalStaff = getMonthlyPresentationRegionalStaffForDetails(
+    communityReports.map(item => ({ name: item.communityName, record: item.sourceRecord }))
+  );
   const forwardLook = MONTHS.map((_, idx) => idx)
     .filter(idx => idx >= monthIdx)
     .slice(0, 4)
@@ -26339,6 +26408,7 @@ function buildCommunityProgressReportData(options = {}) {
     scopeLabel: communityNamesLabel,
     sourceRecord: communityReports[0]?.sourceRecord || null,
     communityReports,
+    regionalStaff,
     currentMonthLabel: getDashboardMonthLabel(monthIdx),
     reportMonthIdx: monthIdx,
     reportYear: year,
@@ -26519,29 +26589,39 @@ function buildCommunityProgressReportDocument(report) {
     <td style="padding:8px 10px;border-top:1px solid #e5e7eb;font-size:12px;text-align:center;font-weight:700">${formatDlrMetricValue(row.moveInsNeeded)}</td>
   </tr>`).join("");
   const communitySectionsHtml = Array.isArray(report.communityReports) && report.communityReports.length > 1
-    ? `<div class="progress-card section">
-        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
-          <div>
-            <div style="font-size:14px;font-weight:700;margin-bottom:4px">By Community</div>
-            <div style="font-size:12px;color:#64748b">Each selected community is appended below as a full report page so the rollup can be compared against the individual property views in the exported PDF.</div>
+    ? (communityProgressViewMode === "pdf"
+      ? `<div class="progress-card section">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+            <div>
+              <div style="font-size:14px;font-weight:700;margin-bottom:4px">By Community</div>
+              <div style="font-size:12px;color:#64748b">This export stays aggregate-only in separate-PDF mode. Open the individual community PDFs from the Reporting Hub or the workspace view.</div>
+            </div>
+            <div style="font-size:12px;color:#475569">${escapeHtml(String(report.communityCount || 0))} communities selected</div>
           </div>
-          <div style="font-size:12px;color:#475569">${escapeHtml(String(report.communityCount || 0))} communities selected</div>
-        </div>
-        <div class="progress-community-export-stack">
-          ${report.communityReports.map(child => {
-            const childDocBody = extractHtmlBodyContent(buildCommunityProgressReportDocument(child));
-            return `<section class="progress-community-report-page">
-              <div class="progress-community-frame-header">
-                <div>
-                  <div class="progress-community-frame-title">${escapeHtml(child.communityName)}</div>
-                  <div class="progress-community-frame-sub">${escapeHtml(child.reportPeriodLabel)} · individual community view</div>
+        </div>`
+      : `<div class="progress-card section">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+            <div>
+              <div style="font-size:14px;font-weight:700;margin-bottom:4px">By Community</div>
+              <div style="font-size:12px;color:#64748b">Each selected community is appended below as a full report page so the rollup can be compared against the individual property views in the exported PDF.</div>
+            </div>
+            <div style="font-size:12px;color:#475569">${escapeHtml(String(report.communityCount || 0))} communities selected</div>
+          </div>
+          <div class="progress-community-export-stack">
+            ${report.communityReports.map(child => {
+              const childDocBody = extractHtmlBodyContent(buildCommunityProgressReportDocument(child));
+              return `<section class="progress-community-report-page">
+                <div class="progress-community-frame-header">
+                  <div>
+                    <div class="progress-community-frame-title">${escapeHtml(child.communityName)}</div>
+                    <div class="progress-community-frame-sub">${escapeHtml(child.reportPeriodLabel)} · individual community view</div>
+                  </div>
                 </div>
-              </div>
-              <div class="progress-community-export-body">${childDocBody}</div>
-            </section>`;
-          }).join("")}
-        </div>
-      </div>`
+                <div class="progress-community-export-body">${childDocBody}</div>
+              </section>`;
+            }).join("")}
+          </div>
+        </div>`)
     : "";
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(report.title)}</title><style>
     *{box-sizing:border-box}
@@ -26626,9 +26706,7 @@ function buildCommunityProgressReportDocument(report) {
         <div style="font-size:12px;color:#475569">${escapeHtml(card.sub)}</div>
       </div>`).join("")}
     </div>
-    <div class="progress-narrative">
-      ${report.notes.map((paragraph, idx) => `<p style="font-size:13px;line-height:1.7;color:#1f2937;margin:${idx === 0 ? "0 0 10px" : "0"}">${escapeHtml(paragraph)}</p>`).join("")}
-    </div>
+    ${buildCommunityProgressLeadershipPanel(report)}
     ${buildCommunityProgressTrendSection(report)}
     ${alerts.length > 0 ? `<div class="progress-alert-grid">
         ${alerts.map(alertItem => `<div class="progress-alert ${alertItem.level || "info"}">
@@ -26687,30 +26765,67 @@ function renderCommunityProgressReportingWorkspace() {
     </div>`;
   }
   const alerts = Array.isArray(report.dataAlerts) ? report.dataAlerts : [];
-  const communitySectionsHtml = Array.isArray(report.communityReports) && report.communityReports.length > 1
-    ? `<div class="report-hub-card" style="margin-top:12px">
-        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
-          <div>
-            <div class="card-title" style="margin-bottom:6px">By Community</div>
-            <p style="font-size:0.72rem;color:var(--muted)">Each selected community is rendered below so the rollup can be compared against the individual property views.</p>
-          </div>
-          <div style="font-size:0.72rem;color:var(--muted)">${escapeHtml(String(report.communityCount || 0))} communities selected</div>
-        </div>
-        <div class="progress-community-stack">
-          ${report.communityReports.map(child => {
-            const childDoc = buildCommunityProgressReportDocument(child);
+  const multiCommunity = Array.isArray(report.communityReports) && report.communityReports.length > 1;
+  const communitySectionsHtml = multiCommunity
+    ? (() => {
+        const pdfMode = communityProgressViewMode === "pdf";
+        const childCards = report.communityReports.map(child => {
+          if (pdfMode) {
             return `<div class="progress-community-frame">
               <div class="progress-community-frame-header">
                 <div>
                   <div class="progress-community-frame-title">${escapeHtml(child.communityName)}</div>
-                  <div class="progress-community-frame-sub">${escapeHtml(child.reportPeriodLabel)} · individual community view</div>
+                  <div class="progress-community-frame-sub">${escapeHtml(child.reportPeriodLabel)} · separate PDF</div>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <button class="btn btn-gray btn-sm" onclick='openSingleCommunityProgressReport(${JSON.stringify(child.communityName)})'>Open PDF</button>
+                  <button class="btn btn-blue btn-sm" onclick='openSingleCommunityProgressReport(${JSON.stringify(child.communityName)}, true)'>Print PDF</button>
                 </div>
               </div>
-              <iframe title="${escapeHtml(child.communityName)} community progress report" srcdoc="${escapeHtml(childDoc)}"></iframe>
+              <div style="padding:16px;background:#ffffff">
+                <div style="font-size:12px;color:#475569;line-height:1.6;margin-bottom:10px">${escapeHtml(child.communityName)} is ready as a standalone PDF. Use the buttons above to open or print it separately.</div>
+                <div style="font-size:11px;color:#64748b">${escapeHtml(child.communityName)} · ${escapeHtml(child.reportPeriodLabel)}</div>
+              </div>
             </div>`;
-          }).join("")}
-        </div>
-      </div>`
+          }
+          const childDoc = buildCommunityProgressReportDocument(child);
+          return `<div class="progress-community-frame">
+            <div class="progress-community-frame-header">
+              <div>
+                <div class="progress-community-frame-title">${escapeHtml(child.communityName)}</div>
+                <div class="progress-community-frame-sub">${escapeHtml(child.reportPeriodLabel)} · individual community view</div>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn btn-gray btn-sm" onclick='openSingleCommunityProgressReport(${JSON.stringify(child.communityName)})'>Open PDF</button>
+                <button class="btn btn-blue btn-sm" onclick='openSingleCommunityProgressReport(${JSON.stringify(child.communityName)}, true)'>Print PDF</button>
+              </div>
+            </div>
+            <iframe title="${escapeHtml(child.communityName)} community progress report" srcdoc="${escapeHtml(childDoc)}"></iframe>
+          </div>`;
+        }).join("");
+        return `<div class="report-hub-card" style="margin-top:12px">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+            <div>
+              <div class="card-title" style="margin-bottom:6px">By Community</div>
+              <p style="font-size:0.72rem;color:var(--muted)">The top report stays aggregated. Switch to separate PDFs when you want to open or print each selected community on its own.</p>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+              <div style="display:flex;flex-direction:column;gap:4px;min-width:180px">
+                <div style="font-size:0.66rem;color:var(--muted);font-weight:700;letter-spacing:0.06em;text-transform:uppercase">View mode</div>
+                <select onchange="setCommunityProgressViewMode(this.value)">
+                  <option value="preview" ${communityProgressViewMode === "preview" ? "selected" : ""}>Embedded preview</option>
+                  <option value="pdf" ${communityProgressViewMode === "pdf" ? "selected" : ""}>Separate PDFs</option>
+                </select>
+              </div>
+              <button class="btn btn-gray btn-sm" onclick="setCommunityProgressViewMode('${communityProgressViewMode === 'preview' ? 'pdf' : 'preview'}')">${communityProgressViewMode === "preview" ? "Switch to PDFs" : "Switch to Preview"}</button>
+              <button class="btn btn-blue btn-sm" onclick="${communityProgressViewMode === 'pdf' ? "openCommunityProgressIndividualReports(true)" : "openCommunityProgressReport(true)"}">${communityProgressViewMode === "pdf" ? "Print All PDFs" : "Print Aggregate"}</button>
+            </div>
+          </div>
+          <div class="progress-community-stack">
+            ${childCards}
+          </div>
+        </div>`;
+      })()
     : "";
   return `<div id="reporting-community-progress-workspace" class="report-hub-card" style="margin-top:14px">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
@@ -26759,8 +26874,7 @@ function renderCommunityProgressReportingWorkspace() {
       </div>
       <div class="progress-grid-2" style="margin-bottom:12px">
         <div class="report-hub-card">
-          <div class="card-title" style="margin-bottom:8px">Community Progress Narrative</div>
-          <div style="font-size:0.72rem;line-height:1.7;color:var(--text)">${report.notes.map(item => escapeHtml(item)).join("<br><br>")}</div>
+          ${buildCommunityProgressLeadershipPanel(report)}
         </div>
         <div class="report-hub-card">
           <div class="card-title" style="margin-bottom:8px">Traffic Mix Check</div>
@@ -26825,6 +26939,39 @@ function openCommunityProgressReport(printImmediately = false) {
   const win = window.open("", "_blank");
   if (!win) return;
   win.document.write(buildCommunityProgressReportDocument(report));
+  win.document.close();
+  if (printImmediately) {
+    win.focus();
+    setTimeout(() => win.print(), 200);
+  }
+}
+
+function openCommunityProgressIndividualReports(printImmediately = false) {
+  const report = buildCommunityProgressReportData({ silent: true });
+  if (!report || !Array.isArray(report.communityReports) || report.communityReports.length === 0) return;
+  report.communityReports.forEach(child => {
+    const win = window.open("", "_blank");
+    if (!win) return;
+    win.document.write(buildCommunityProgressReportDocument(child));
+    win.document.close();
+    if (printImmediately) {
+      win.focus();
+      setTimeout(() => win.print(), 200);
+    }
+  });
+}
+
+function openSingleCommunityProgressReport(communityName, printImmediately = false) {
+  const report = buildCommunityProgressReportData({ silent: true });
+  if (!report) return;
+  const target = Array.isArray(report.communityReports) && report.communityReports.length > 0
+    ? report.communityReports.find(child => child.communityName === communityName)
+    : (report.communityName === communityName ? report : null);
+  const finalReport = target || (report.communityName === communityName ? report : null);
+  if (!finalReport) return;
+  const win = window.open("", "_blank");
+  if (!win) return;
+  win.document.write(buildCommunityProgressReportDocument(finalReport));
   win.document.close();
   if (printImmediately) {
     win.focus();
