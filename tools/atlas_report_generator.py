@@ -335,6 +335,19 @@ TABLE_SCHEMAS = {
         "Mapping_Method",
         "Source_File_Name",
     ],
+    "audit_move_in_out": [
+        "Report_Month",
+        "Community_ID",
+        "Source_File_Name",
+        "Source_Move_Ins",
+        "Source_Move_Outs",
+        "Uploaded_Move_Ins",
+        "Uploaded_Move_Outs",
+        "Final_Move_Ins",
+        "Final_Move_Outs",
+        "Audit_Status",
+        "Correction_Note",
+    ],
     "source_file_log": [
         "Source_File_Name",
         "Source_Path",
@@ -521,6 +534,44 @@ def clean_text(value: Any) -> str:
     if value is None:
         return ""
     return re.sub(r"\s+", " ", str(value)).strip()
+
+
+MARKET_SURVEY_PROPERTY_HEADERS = {
+    "Property Name",
+    "Property Snapshot",
+}
+
+MARKET_SURVEY_SECTION_LABELS = {
+    "Property Rent Comparison",
+    "Property Metric Rankings",
+    "Asking Rent",
+    "Asking Rent / Sq Ft",
+    "Effective Rent",
+    "Effective Rent / Sq Ft",
+    "Sq Ft",
+    "Concessions",
+    "Concession %",
+    "Total Avail. Units",
+    "Exposure %",
+    "Leased %",
+    "Applications Last 7 Days",
+    "Applications Last 30 Days",
+    "Total Leased Units",
+    "Vacant Units",
+}
+
+
+def is_market_survey_property_row(source_property: str, distance: Any) -> bool:
+    label = clean_text(source_property)
+    if not label or label.lower().startswith("average"):
+        return False
+    if label in MARKET_SURVEY_PROPERTY_HEADERS:
+        return False
+    if label in MARKET_SURVEY_SECTION_LABELS:
+        return False
+    if label == "Property":
+        return False
+    return isinstance(distance, (int, float, dt.datetime, dt.date)) or to_number(distance) is not None
 
 
 def iso_date(value: Any) -> str:
@@ -1063,10 +1114,8 @@ def parse_market_survey(path: Path, state: RunState, fallback_month: str, force_
             ws = workbook["Visual Market Survey"]
             for row_index in range(5, ws.max_row + 1):
                 source_property = clean_text(cell(ws, row_index, 1))
-                if not source_property or source_property.lower().startswith("average"):
-                    continue
                 distance = cell(ws, row_index, 2)
-                if source_property in {"Property Name", "Property Snapshot"}:
+                if not is_market_survey_property_row(source_property, distance):
                     continue
                 is_subject = "Yes" if normalize_name(source_property) == normalize_name(subject_property) else "No"
                 row = dict(
@@ -1139,7 +1188,7 @@ def parse_market_survey(path: Path, state: RunState, fallback_month: str, force_
                                 report_month,
                                 community_id,
                                 source_property,
-                                cell(ws, row_index, 2),
+                                clean_text(cell(ws, row_index, 2)),
                                 cell(ws, row_index, 3),
                                 cell(ws, row_index, 4),
                                 cell(ws, row_index, 5),
@@ -1730,11 +1779,15 @@ def write_combined_workbook(output_dir: Path, table_rows: Dict[str, Sequence[Dic
         "exceptions": "A43A3A",
         "source_file_log": "6A7F8F",
         "manifest": "6A7F8F",
+        "audit_move_in_out": "6A7F8F",
+    }
+    sheet_names = {
+        "audit_move_in_out": "Audit_MoveInOut",
     }
 
     for table_name, rows in table_rows.items():
         fields = TABLE_SCHEMAS[table_name]
-        sheet = workbook.create_sheet(table_name[:31])
+        sheet = workbook.create_sheet(sheet_names.get(table_name, table_name[:31]))
         sheet.sheet_properties.tabColor = tab_colors.get(table_name, "5D9AB5")
         sheet.append(fields)
         for cell_obj in sheet[1]:
@@ -1867,10 +1920,93 @@ def append_run_consistency_warnings(state: RunState) -> None:
         )
 
 
+def append_agent_note(row: Dict[str, Any], note: str) -> None:
+    if not note:
+        return
+    existing = [item.strip() for item in str(row.get("Agent_Notes", "")).split(" | ") if item.strip()]
+    if note not in existing:
+        existing.append(note)
+    row["Agent_Notes"] = " | ".join(existing)
+
+
+def build_move_in_out_audit_rows(state: RunState) -> List[Dict[str, Any]]:
+    trend_rows = state.detail_rows.get("trending_occupancy_monthly", [])
+    trend_by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for row in trend_rows:
+        report_month = clean_text(row.get("Report_Month"))
+        community_id = clean_text(row.get("Community_ID"))
+        if not report_month or not community_id:
+            continue
+        trend_by_key[(report_month, community_id)] = row
+
+    audit_rows: List[Dict[str, Any]] = []
+    all_keys = sorted(set(state.monthly_rows.keys()) | set(trend_by_key.keys()))
+    for key in all_keys:
+        report_month, community_id = key
+        monthly_row = state.monthly_rows.get(key)
+        trend_row = trend_by_key.get(key)
+        uploaded_move_ins = to_intish(monthly_row.get("Move_Ins")) if monthly_row else None
+        uploaded_move_outs = to_intish(monthly_row.get("Move_Outs")) if monthly_row else None
+        source_move_ins = to_intish(trend_row.get("Move_Ins")) if trend_row else None
+        source_move_outs = to_intish(trend_row.get("Move_Outs")) if trend_row else None
+        final_move_ins = uploaded_move_ins
+        final_move_outs = uploaded_move_outs
+        audit_status = "PASS"
+        correction_note = ""
+
+        if trend_row is None:
+            audit_status = "FAIL"
+            correction_note = "No occupancy trend source row was available for this community-month."
+        else:
+            if monthly_row is None:
+                monthly_row = community_base_row(report_month, community_id)
+                state.monthly_rows[key] = monthly_row
+                state.monthly_priority[key] = SOURCE_PRIORITY["Trending Occupancy"]
+            if uploaded_move_ins != source_move_ins or uploaded_move_outs != source_move_outs:
+                audit_status = "FAIL"
+                final_move_ins = source_move_ins
+                final_move_outs = source_move_outs
+                monthly_row["Move_Ins"] = source_move_ins if source_move_ins is not None else ""
+                monthly_row["Move_Outs"] = source_move_outs if source_move_outs is not None else ""
+                correction_note = (
+                    f"Corrected Move_Ins/Move_Outs from {uploaded_move_ins if uploaded_move_ins is not None else 'blank'}"
+                    f"/{uploaded_move_outs if uploaded_move_outs is not None else 'blank'} to "
+                    f"{source_move_ins if source_move_ins is not None else 'blank'}/{source_move_outs if source_move_outs is not None else 'blank'} "
+                    "from Trending Occupancy."
+                )
+                append_agent_note(monthly_row, correction_note)
+                monthly_row["Row_Status"] = "REVIEW"
+                detail = clean_text(monthly_row.get("Error_Detail"))
+                mismatch_message = "Move_Ins/Move_Outs were corrected to match Trending Occupancy."
+                if mismatch_message not in detail:
+                    monthly_row["Error_Detail"] = f"{detail}; {mismatch_message}".strip("; ")
+            else:
+                final_move_ins = source_move_ins
+                final_move_outs = source_move_outs
+
+        audit_rows.append(
+            {
+                "Report_Month": report_month,
+                "Community_ID": community_id,
+                "Source_File_Name": clean_text(trend_row.get("Source_File_Name")) if trend_row else "",
+                "Source_Move_Ins": source_move_ins if source_move_ins is not None else "",
+                "Source_Move_Outs": source_move_outs if source_move_outs is not None else "",
+                "Uploaded_Move_Ins": uploaded_move_ins if uploaded_move_ins is not None else "",
+                "Uploaded_Move_Outs": uploaded_move_outs if uploaded_move_outs is not None else "",
+                "Final_Move_Ins": final_move_ins if final_move_ins is not None else "",
+                "Final_Move_Outs": final_move_outs if final_move_outs is not None else "",
+                "Audit_Status": audit_status,
+                "Correction_Note": correction_note,
+            }
+        )
+    return audit_rows
+
+
 def write_outputs(output_dir: Path, state: RunState) -> Dict[str, int]:
     output_dir.mkdir(parents=True, exist_ok=True)
     row_counts: Dict[str, int] = {}
     append_run_consistency_warnings(state)
+    state.detail_rows["audit_move_in_out"] = build_move_in_out_audit_rows(state)
 
     monthly_rows = finalize_monthly_rows(state)
     table_rows: Dict[str, Sequence[Dict[str, Any]]] = {"monthly_upload": monthly_rows}

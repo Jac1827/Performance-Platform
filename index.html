@@ -3129,6 +3129,11 @@ function refreshBuildInfoBadge(){
   if(!badge){
     return;
   }
+  const fallbackLabel = `Static build · ${new Date(document.lastModified || Date.now()).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  })}`;
   if(window.__BUILD_INFO_BADGE_READY){
     badge.textContent = window.__BUILD_INFO_BADGE_READY;
     return;
@@ -3143,13 +3148,13 @@ function refreshBuildInfoBadge(){
       const build = payload && payload.build ? payload.build : null;
       const label = build
         ? `${build.name} ${build.compatibilityDate}`
-        : 'Build info unavailable';
+        : fallbackLabel;
       window.__BUILD_INFO_BADGE_READY = label;
       badge.textContent = label;
     })
     .catch(() => {
-      window.__BUILD_INFO_BADGE_READY = 'Build info unavailable';
-      badge.textContent = 'Build info unavailable';
+      window.__BUILD_INFO_BADGE_READY = fallbackLabel;
+      badge.textContent = fallbackLabel;
     });
 }
 
