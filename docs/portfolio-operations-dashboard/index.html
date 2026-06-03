@@ -24454,10 +24454,13 @@ function buildDlrForwardLookChart(report) {
 
 function buildDlrOccupancyPositionChart(report) {
   const budgetPct = Number.isFinite(Number(report.budgetOccPct)) ? Number(report.budgetOccPct) : null;
+  const currentPct = Math.max(0, Math.min(Number(report.occupancyPct) || 0, 100));
+  const leasedPct = Math.max(0, Math.min(Number(report.leasedPct) || 0, 100));
+  const projectedPct = Math.max(0, Math.min(Number(report.trendingOccupancyPct) || 0, 100));
+  const projectedDelta = projectedPct - currentPct;
   const metrics = [
-    { label: "Occupied", pct: Number(report.occupancyPct) || 0, color: "#1d4ed8", detail: `${formatDlrMetricValue(report.occupiedUnits)} units` },
-    { label: "Leased", pct: Number(report.leasedPct) || 0, color: "#0f766e", detail: `${formatDlrMetricValue(report.leasedUnits)} units` },
-    { label: "90-Day", pct: Number(report.trendingOccupancyPct) || 0, color: "#7c3aed", detail: "ending physical occ" },
+    { label: "Occupied", pct: currentPct, color: "#1d4ed8", detail: `${formatDlrMetricValue(report.occupiedUnits)} units` },
+    { label: "Leased", pct: leasedPct, color: "#0f766e", detail: `${formatDlrMetricValue(report.leasedUnits)} units` },
     { label: "Budget", pct: budgetPct, color: "#94a3b8", detail: budgetPct !== null ? "current target" : "budget not saved" }
   ];
   const bars = metrics.map(item => `
@@ -24471,18 +24474,36 @@ function buildDlrOccupancyPositionChart(report) {
       </div>
     </div>
   `).join("");
+  const projectionTrack = `
+    <div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;gap:12px;font-size:12px;color:#334155;margin-bottom:5px">
+        <span style="font-weight:700">90-Day</span>
+        <span>${formatDlrPercent(currentPct, 1)} → ${formatDlrPercent(projectedPct, 1)} · ${escapeHtml(projectedDelta >= 0 ? `+${projectedDelta.toFixed(1)}` : projectedDelta.toFixed(1))} pts projected</span>
+      </div>
+      <div style="position:relative;height:16px;border-radius:999px;background:#e2e8f0;overflow:hidden">
+        <div style="position:absolute;left:0;top:0;bottom:0;width:${currentPct}%;background:linear-gradient(90deg, rgba(124,58,237,0.28), rgba(124,58,237,0.08));border-radius:999px"></div>
+        <div style="position:absolute;left:${Math.max(0, Math.min(currentPct, 100))}%;top:50%;width:${Math.max(Math.abs(projectedPct - currentPct), 0.5)}%;height:4px;background:#7c3aed;border-radius:999px;transform:translateY(-50%);"></div>
+        <div style="position:absolute;left:${Math.max(0, Math.min(currentPct, 100))}%;top:50%;width:11px;height:11px;background:#1d4ed8;border:2px solid #fff;border-radius:999px;transform:translate(-50%,-50%);box-shadow:0 0 0 1px rgba(29,78,216,0.18)"></div>
+        <div style="position:absolute;left:${Math.max(0, Math.min(projectedPct, 100))}%;top:50%;width:11px;height:11px;background:#7c3aed;border:2px solid #fff;border-radius:999px;transform:translate(-50%,-50%);box-shadow:0 0 0 1px rgba(124,58,237,0.18)"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;gap:10px;font-size:10px;color:#64748b;margin-top:4px">
+        <span>Current occupancy</span>
+        <span>Projected ending occupancy</span>
+      </div>
+    </div>`;
   return `<div style="padding:16px;border:1px solid #dbe4f0;border-radius:16px;background:linear-gradient(180deg,#f8fbff 0%,#eef5ff 100%)">
     <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:12px">
       <div>
         <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b">Occupancy Position</div>
-        <div style="font-size:22px;font-weight:800;color:#0f172a;margin-top:4px">${formatDlrPercent(report.occupancyPct, 1)} occupied</div>
+        <div style="font-size:22px;font-weight:800;color:#0f172a;margin-top:4px">${formatDlrPercent(currentPct, 1)} occupied</div>
       </div>
       <div style="text-align:right;font-size:12px;color:#475569">
-        <div>${budgetPct !== null ? formatSignedDisplay((Number(report.occupancyPct) || 0) - budgetPct, 1, " pts").replace("pts", "pts vs budget") : "Budget not saved"}</div>
-        <div style="margin-top:4px">${formatDlrPercent(report.leasedPct, 1)} leased</div>
+        <div>${budgetPct !== null ? `${formatSignedDisplay(currentPct - budgetPct, 1, " pts").replace("pts", "pts vs budget")}` : "Budget not saved"}</div>
+        <div style="margin-top:4px">${formatDlrPercent(leasedPct, 1)} leased</div>
       </div>
     </div>
     ${bars}
+    ${projectionTrack}
   </div>`;
 }
 
@@ -24491,6 +24512,22 @@ function buildDlrRenewalHealthChart(report) {
   const signed = Math.max(0, Number(report.renewalSnapshot?.signed) || 0);
   const undecided = Math.max(0, Number(report.renewalSnapshot?.undecided) || 0);
   const projectedAttrition = Math.max(0, Number(report.renewalSnapshot?.projectedAttrition) || 0);
+  const hasRenewalData = expirations > 0 || signed > 0 || undecided > 0 || projectedAttrition > 0;
+  if (!hasRenewalData) {
+    return `<div style="padding:16px;border:1px solid #dbe4f0;border-radius:16px;background:linear-gradient(180deg,#f8fbff 0%,#f0f9ff 100%)">
+      <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:12px">
+        <div>
+          <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b">Renewal Health</div>
+          <div style="font-size:22px;font-weight:800;color:#0f172a;margin-top:4px">No renewal data</div>
+        </div>
+        <div style="text-align:right;font-size:12px;color:#475569">
+          <div>Lease-up or no expirations saved</div>
+          <div style="margin-top:4px">Nothing to chart yet</div>
+        </div>
+      </div>
+      <div style="font-size:12px;color:#64748b;line-height:1.6">This community does not have renewal expirations, signed renewals, or pending renewal activity saved for the selected month yet, so the chart stays hidden until there is data to report.</div>
+    </div>`;
+  }
   const segments = expirations > 0
     ? [
         { label: "Signed", value: signed, color: "#1d4ed8" },
@@ -24521,7 +24558,7 @@ function buildDlrRenewalHealthChart(report) {
         <div style="margin-top:4px">${formatDlrMetricValue(projectedAttrition)} projected attrition</div>
       </div>
     </div>
-    ${segments.length > 0 ? segmentHtml : `<div style="font-size:12px;color:#64748b">No renewal expirations are saved for this report period yet.</div>`}
+    ${segmentHtml}
   </div>`;
 }
 
@@ -25216,6 +25253,7 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   });
   const notes = resolvedNoteState.notes;
   const marketing = resolveDlrMarketingState(dlrSummary);
+  const trendingOccupancyPct = Number(nextRows[Math.min(3, Math.max(nextRows.length - 1, 0))]?.projectedOccupancy ?? occupancyPct) || occupancyPct;
   const reportDateIso = hasMatchingDailyBoxScore
     ? (dailyBoxScore.reportDateIso || dlrSummary.reportDateIso)
     : dlrSummary.reportDateIso;
@@ -25533,23 +25571,57 @@ function buildDlrInvestorOverviewDocument(report) {
 }
 
 function buildCommunityProgressTrendRows(report) {
+  const getMonthEndComparableUnits = (record, totalUnits, monthIdx, snapshotKey) => {
+    const monthEntries = Array.isArray(record?.monthlyData) && record.monthlyData.length === 12 ? record.monthlyData : defaultMonthly();
+    const entry = monthEntries[monthIdx] ?? {};
+    const corporateUnits = normalizeCorporateLeaseUnits(record?.corporateLeaseUnits, totalUnits);
+    const explicitSnapshot = Number(entry?.[snapshotKey] ?? 0);
+    if (explicitSnapshot > 0) {
+      return getComparableOccupancyUnits(explicitSnapshot, corporateUnits);
+    }
+    return estimateSnapshotUnitsForRecordMonth(record, totalUnits, monthIdx, snapshotKey);
+  };
+  const getMonthEndPct = (detail, monthIdx, snapshotKey) => {
+    if (!detail?.record) return null;
+    const prop = getPropertyByName(detail.name);
+    const totalUnits = getTotalUnitsFor(prop, detail.record.customUnits);
+    const corporateUnits = getCorporateLeaseUnitsForRecord(detail.record, totalUnits);
+    const occupancyBaseUnits = getOccupancyBaseUnits(totalUnits, corporateUnits);
+    if (occupancyBaseUnits <= 0) return null;
+    const comparableUnits = getMonthEndComparableUnits(detail.record, totalUnits, monthIdx, snapshotKey);
+    return (comparableUnits / occupancyBaseUnits) * 100;
+  };
   if (Array.isArray(report?.communityReports) && report.communityReports.length > 1) {
     const selectedMonthIdx = Number.isInteger(report.reportMonthIdx) ? clampNumber(report.reportMonthIdx, 0, 11) : getReportHubMonthIndex();
     const communityRecords = report.communityReports.map(entry => ({
       name: entry.communityName,
       record: entry.sourceRecord
     }));
-    return MONTHS.slice(0, selectedMonthIdx + 1).map((monthLabel, monthIdx) => {
+    const rows = MONTHS.slice(0, selectedMonthIdx + 1).map((monthLabel, monthIdx) => {
       const details = communityRecords.map(({ name, record }) => buildCommunityDetailForMonth(name, record, monthIdx)).filter(Boolean);
       const summaries = details.map(detail => detail.summary);
       const aggregate = aggregateCommunitySummaries(summaries);
       const budgetOccPct = aggregate.budgetOccPct > 0 ? aggregate.budgetOccPct : null;
+      const occupancyTotals = details.reduce((acc, detail) => {
+        const prop = getPropertyByName(detail.name);
+        const totalUnits = getTotalUnitsFor(prop, detail.record?.customUnits);
+        const corporateUnits = getCorporateLeaseUnitsForRecord(detail.record, totalUnits);
+        const occupancyBaseUnits = getOccupancyBaseUnits(totalUnits, corporateUnits);
+        acc.baseUnits += occupancyBaseUnits;
+        const occupiedUnits = getMonthEndComparableUnits(detail.record, totalUnits, monthIdx, "occupiedSnapshot");
+        const leasedUnits = getMonthEndComparableUnits(detail.record, totalUnits, monthIdx, "leasedSnapshot");
+        acc.occupiedUnits += occupiedUnits;
+        acc.leasedUnits += leasedUnits;
+        return acc;
+      }, { baseUnits: 0, occupiedUnits: 0, leasedUnits: 0 });
+      const marketPerformance = buildCommunityProgressMarketPerformance(details, monthIdx);
+      const renewalHasData = aggregate.renewalExpirations > 0 || aggregate.renewalsSigned > 0 || aggregate.renewalUndecided > 0 || aggregate.renewalProjectedAttrition > 0;
       return {
         monthIdx,
         monthLabel,
         shortLabel: FULL_MONTHS[monthIdx].slice(0, 3),
-        occupancyPct: getSummaryOccPct(aggregate),
-        leasedPct: getSummaryLeasedPct(aggregate),
+        occupancyPct: occupancyTotals.baseUnits > 0 ? (occupancyTotals.occupiedUnits / occupancyTotals.baseUnits) * 100 : getSummaryOccPct(aggregate),
+        leasedPct: occupancyTotals.baseUnits > 0 ? (occupancyTotals.leasedUnits / occupancyTotals.baseUnits) * 100 : getSummaryLeasedPct(aggregate),
         guestCards: aggregate.guestCards,
         tours: aggregate.tours,
         applications: aggregate.applications,
@@ -25558,9 +25630,19 @@ function buildCommunityProgressTrendRows(report) {
         moveOuts: aggregate.moveOuts,
         netAbsorption: aggregate.monthAbsorption,
         tourToLeasePct: aggregate.tours > 0 ? (aggregate.applicationsApproved / aggregate.tours) * 100 : null,
-        renewalRetention: aggregate.renewalRetentionRate,
-        budgetOccPct: budgetOccPct != null ? Number(budgetOccPct) : null
+        renewalRetention: renewalHasData ? aggregate.renewalRetentionRate : null,
+        budgetOccPct: budgetOccPct != null ? Number(budgetOccPct) : null,
+        marketLeasedPct: Number(marketPerformance.compAverageLeasedPct) || null,
+        marketExposurePct: Number(marketPerformance.compAverageExposurePct) || null
       };
+    });
+    return rows.map((row, idx, list) => {
+      const start = Math.max(0, idx - 2);
+      const recentValues = list.slice(start, idx + 1)
+        .map(item => Number(item.guestCards))
+        .filter(value => Number.isFinite(value));
+      const average = recentValues.length > 0 ? recentValues.reduce((sum, value) => sum + value, 0) / recentValues.length : 0;
+      return { ...row, guestCardsAdjusted: Math.round(average) };
     });
   }
   if (!report?.sourceRecord) return [];
@@ -25568,21 +25650,13 @@ function buildCommunityProgressTrendRows(report) {
   const monthEntries = Array.isArray(record.monthlyData) && record.monthlyData.length === 12 ? record.monthlyData : defaultMonthly();
   const communityName = report.communityName || getCommunityProgressReportCommunityName();
   const selectedMonthIdx = Number.isInteger(report.reportMonthIdx) ? clampNumber(report.reportMonthIdx, 0, 11) : getReportHubMonthIndex();
-  return MONTHS.slice(0, selectedMonthIdx + 1).map((monthLabel, monthIdx) => {
+  const rows = MONTHS.slice(0, selectedMonthIdx + 1).map((monthLabel, monthIdx) => {
     const detail = buildCommunityDetailForMonth(communityName, record, monthIdx) || {};
     const summary = detail.summary || {};
     const monthEntry = monthEntries[monthIdx] ?? {};
     const budgetOccPct = getRecordSavedBudgetOccPct(record, monthIdx);
-    const occupancyPct = Number.isFinite(Number(summary.occPct))
-      ? Number(summary.occPct)
-      : (Number.isFinite(Number(summary.occupiedRaw)) && Number.isFinite(Number(summary.totalUnits)) && Number(summary.totalUnits) > 0
-        ? (Number(summary.occupiedRaw) / Number(summary.totalUnits)) * 100
-        : null);
-    const leasedPct = Number.isFinite(Number(summary.leasedPct))
-      ? Number(summary.leasedPct)
-      : (Number.isFinite(Number(summary.leasedRaw)) && Number.isFinite(Number(summary.totalUnits)) && Number(summary.totalUnits) > 0
-        ? (Number(summary.leasedRaw) / Number(summary.totalUnits)) * 100
-        : null);
+    const occupancyPct = getMonthEndPct(detail, monthIdx, "occupiedSnapshot");
+    const leasedPct = getMonthEndPct(detail, monthIdx, "leasedSnapshot");
     const guestCards = Number.isFinite(Number(summary.guestCards))
       ? Number(summary.guestCards)
       : Math.max(0, Number(monthEntry.guestCards) || 0);
@@ -25603,7 +25677,9 @@ function buildCommunityProgressTrendRows(report) {
     const moveOuts = Number.isFinite(Number(summary.moveOuts))
       ? Number(summary.moveOuts)
       : Math.max(0, Number(getEffectiveMoveOutsForMonth(monthIdx, monthEntries).effective) || 0);
-    const renewalRetention = Number.isFinite(Number(summary.retentionRate))
+    const marketPerformance = buildCommunityProgressMarketPerformance([detail], monthIdx);
+    const renewalHasData = Number(summary.renewalExpirations) > 0 || Number(summary.renewalsSigned) > 0 || Number(summary.renewalUndecided) > 0 || Number(summary.renewalProjectedAttrition) > 0;
+    const renewalRetention = renewalHasData && Number.isFinite(Number(summary.retentionRate))
       ? Number(summary.retentionRate)
       : null;
     return {
@@ -25621,8 +25697,18 @@ function buildCommunityProgressTrendRows(report) {
       netAbsorption: moveIns - moveOuts,
       tourToLeasePct: tours > 0 ? (approvals / tours) * 100 : null,
       renewalRetention,
-      budgetOccPct: Number.isFinite(Number(budgetOccPct)) && Number(budgetOccPct) > 0 ? Number(budgetOccPct) : null
+      budgetOccPct: Number.isFinite(Number(budgetOccPct)) && Number(budgetOccPct) > 0 ? Number(budgetOccPct) : null,
+      marketLeasedPct: Number(marketPerformance.compAverageLeasedPct) || null,
+      marketExposurePct: Number(marketPerformance.compAverageExposurePct) || null
     };
+  });
+  return rows.map((row, idx, list) => {
+    const start = Math.max(0, idx - 2);
+    const recentValues = list.slice(start, idx + 1)
+      .map(item => Number(item.guestCards))
+      .filter(value => Number.isFinite(value));
+    const average = recentValues.length > 0 ? recentValues.reduce((sum, value) => sum + value, 0) / recentValues.length : 0;
+    return { ...row, guestCardsAdjusted: Math.round(average) };
   });
 }
 
@@ -25670,6 +25756,76 @@ function buildCommunityProgressTrendCard({
   </div>`;
 }
 
+function buildCommunityProgressDualLineChart(points = [], options = {}) {
+  const validPoints = Array.isArray(points)
+    ? points.filter(point => Number.isFinite(Number(point?.primary)) || Number.isFinite(Number(point?.secondary)))
+    : [];
+  if (validPoints.length === 0) {
+    return `<div style="font-size:12px;color:#64748b">No saved trend points are available for this view yet.</div>`;
+  }
+  const width = 640;
+  const height = 220;
+  const left = 42;
+  const right = 14;
+  const top = 16;
+  const bottom = 34;
+  const chartWidth = width - left - right;
+  const chartHeight = height - top - bottom;
+  const numericValues = validPoints.flatMap(point => [Number(point?.primary), Number(point?.secondary)]).filter(value => Number.isFinite(value));
+  const baseMin = options.minValue ?? Math.min(...numericValues);
+  const baseMax = options.maxValue ?? Math.max(...numericValues);
+  const rawRange = Math.max(baseMax - baseMin, 1);
+  let minValue = options.minValue ?? (baseMin - rawRange * 0.16);
+  let maxValue = options.maxValue ?? (baseMax + rawRange * 0.16);
+  if (options.minClamp !== undefined) minValue = Math.max(Number(options.minClamp), minValue);
+  if (options.maxClampMinimum !== undefined) maxValue = Math.max(Number(options.maxClampMinimum), maxValue);
+  if (maxValue <= minValue) maxValue = minValue + 1;
+  const stepX = points.length > 1 ? chartWidth / (points.length - 1) : 0;
+  const yForValue = (value) => top + chartHeight - (((Number(value) - minValue) / (maxValue - minValue)) * chartHeight);
+  const seriesPoints = key => points.map((point, idx) => {
+    const value = Number(point?.[key]);
+    if (!Number.isFinite(value)) return null;
+    return { x: left + (stepX * idx), y: yForValue(value), value, projected: Boolean(point?.projected) };
+  }).filter(Boolean);
+  const primaryPoints = seriesPoints("primary");
+  const secondaryPoints = seriesPoints("secondary");
+  const tickCount = 4;
+  const highlightMonthIdx = Number.isInteger(options.highlightMonthIdx) ? options.highlightMonthIdx : getSelectedDashboardMonthIndex();
+  const ticks = Array.from({ length: tickCount + 1 }, (_, idx) => {
+    const value = minValue + (((maxValue - minValue) / tickCount) * idx);
+    return {
+      value,
+      y: top + chartHeight - ((idx / tickCount) * chartHeight)
+    };
+  });
+  const lineFor = (series, color, dash = "") => series.length > 1
+    ? `<polyline fill="none" stroke="${color}" stroke-width="3" ${dash ? `stroke-dasharray="${dash}"` : ""} points="${series.map(point => `${point.x},${point.y}`).join(" ")}"/>`
+    : "";
+  const dotsFor = (series, color) => series.map(point => `
+      <circle cx="${point.x}" cy="${point.y}" r="${point.projected ? 3.5 : 4.5}" fill="${color}" stroke="#ffffff" stroke-width="1.5"/>
+    `).join("");
+  return `<svg viewBox="0 0 ${width} ${height}" style="width:100%;height:auto;display:block">
+    <rect x="0" y="0" width="${width}" height="${height}" rx="14" fill="transparent"/>
+    ${ticks.map(tick => `<g>
+      <line x1="${left}" y1="${tick.y}" x2="${width - right}" y2="${tick.y}" stroke="rgba(27,58,75,0.08)" stroke-width="1"/>
+      <text x="${left - 8}" y="${tick.y + 4}" text-anchor="end" font-size="10" fill="#7d8590">${escapeHtml(options.axisFormatter ? options.axisFormatter(tick.value) : formatPortfolioTrendMetricValue(tick.value, options.kind || "pct"))}</text>
+    </g>`).join("")}
+    ${lineFor(primaryPoints, options.primaryLineColor || "#1d4ed8", options.primaryDash || "")}
+    ${lineFor(secondaryPoints, options.secondaryLineColor || "#0f766e", options.secondaryDash || "")}
+    ${dotsFor(primaryPoints, options.primaryDotColor || "#1d4ed8")}
+    ${dotsFor(secondaryPoints, options.secondaryDotColor || "#0f766e")}
+    ${points.map((point, idx) => {
+      const x = left + (stepX * idx);
+      const isHighlighted = point?.projected ? false : idx === highlightMonthIdx;
+      return `<text x="${x}" y="${height - 12}" text-anchor="middle" font-size="10" fill="${isHighlighted ? "#1b3a4b" : "#7d8590"}" font-weight="${isHighlighted ? "700" : "500"}">${escapeHtml(point?.shortLabel || FULL_MONTHS[idx].slice(0, 3))}</text>`;
+    }).join("")}
+  </svg>
+  <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;font-size:11px;color:#475569">
+    <span style="display:inline-flex;align-items:center;gap:6px"><span style="width:18px;height:0;border-top:3px solid ${options.primaryLineColor || "#1d4ed8"};display:inline-block"></span>${escapeHtml(options.primaryLabel || "Primary")}</span>
+    <span style="display:inline-flex;align-items:center;gap:6px"><span style="width:18px;height:0;border-top:3px solid ${options.secondaryLineColor || "#0f766e"};display:inline-block"></span>${escapeHtml(options.secondaryLabel || "Secondary")}</span>
+  </div>`;
+}
+
 function buildCommunityProgressTrendSection(report) {
   const rows = Array.isArray(report?.trendRows) ? report.trendRows : [];
   if (rows.length === 0) {
@@ -25685,6 +25841,20 @@ function buildCommunityProgressTrendSection(report) {
       value: row[metricKey],
       projected: false
     }));
+  const currentRow = rows[rows.length - 1] || {};
+  const netAbsorptionMarketSeries = rows.map(row => ({
+    monthIdx: row.monthIdx,
+    shortLabel: row.shortLabel,
+    primary: row.marketLeasedPct,
+    secondary: row.marketExposurePct,
+    projected: false
+  }));
+  const netAbsorptionSeries = rows.map(row => ({
+    monthIdx: row.monthIdx,
+    shortLabel: row.shortLabel,
+    value: row.netAbsorption,
+    projected: false
+  }));
   return `<div class="progress-card section">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
       <div>
@@ -25716,34 +25886,50 @@ function buildCommunityProgressTrendSection(report) {
       })}
       ${buildCommunityProgressTrendCard({
         title: "Guest Cards",
-        subtitle: "Month-to-date lead volume by month",
-        points: trendSeries("guestCards"),
+        subtitle: "3-month trailing average of monthly guest cards",
+        points: trendSeries("guestCardsAdjusted"),
         formatter: value => formatDlrMetricValue(value),
         kind: "metric",
         lineColor: "#7c3aed",
         dotColor: "#7c3aed",
         axisFormatter: value => formatDlrMetricValue(value)
       })}
-      ${buildCommunityProgressTrendCard({
-        title: "Tour to Lease",
-        subtitle: "Funnel close rate across the same property",
-        points: trendSeries("tourToLeasePct"),
-        formatter: value => formatDlrPercent(value, 1),
-        kind: "pct",
-        lineColor: "#f97316",
-        dotColor: "#f97316",
-        axisFormatter: value => formatDlrPercent(value, 0)
-      })}
-      ${buildCommunityProgressTrendCard({
-        title: "Net Absorption",
-        subtitle: "Move-ins minus move-outs by month",
-        points: trendSeries("netAbsorption"),
-        formatter: value => formatDlrSignedNumber(value),
-        kind: "signed",
-        lineColor: "#2a8f83",
-        dotColor: "#2a8f83",
-        axisFormatter: value => formatDlrSignedNumber(Math.round(value))
-      })}
+      <div class="progress-card">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:10px">
+          <div>
+            <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b">Net Absorption</div>
+            <div style="font-size:22px;font-weight:800;color:#0f172a;margin-top:4px">${escapeHtml(formatDlrSignedNumber(currentRow.netAbsorption))}</div>
+          </div>
+          <div style="text-align:right;font-size:12px;color:#475569">
+            <div>${escapeHtml(formatDlrMetricValue(currentRow.marketLeasedPct))} leased vs ${escapeHtml(formatDlrMetricValue(currentRow.marketExposurePct))} exposure</div>
+            <div style="margin-top:4px">Market leased performance and recorded absorption</div>
+          </div>
+        </div>
+        <div style="margin-bottom:14px">
+          <div style="font-size:12px;font-weight:700;color:#0f172a;margin-bottom:8px">Market Aggregate Lease Performance</div>
+          ${buildCommunityProgressDualLineChart(netAbsorptionMarketSeries, {
+            kind: "pct",
+            primaryLabel: "Market Leased %",
+            secondaryLabel: "Market Exposure %",
+            primaryLineColor: "#0f766e",
+            primaryDotColor: "#0f766e",
+            secondaryLineColor: "#2563eb",
+            secondaryDotColor: "#2563eb",
+            axisFormatter: value => formatDlrPercent(value, 0),
+            highlightMonthIdx: rows.length - 1
+          })}
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:700;color:#0f172a;margin-bottom:8px">Recorded Month-over-Month Absorption</div>
+          ${buildPortfolioTrendLineChart(netAbsorptionSeries, {
+            kind: "signed",
+            lineColor: "#2a8f83",
+            dotColor: "#2a8f83",
+            axisFormatter: value => formatDlrSignedNumber(Math.round(value)),
+            highlightMonthIdx: rows[rows.length - 1]?.monthIdx ?? getReportHubMonthIndex()
+          })}
+        </div>
+      </div>
       ${buildCommunityProgressTrendCard({
         title: "Renewal Retention",
         subtitle: "Retention rate month over month",
@@ -26390,6 +26576,7 @@ function buildCommunityProgressReportData(options = {}) {
         moveInsNeeded: communityReports.reduce((sum, item) => sum + Math.max(0, Number(item.moveInsNeeded) || 0), 0)
       };
     });
+  const trendingOccupancyPct = Number(forwardLook[Math.min(3, Math.max(forwardLook.length - 1, 0))]?.projectedOccupancy ?? occupancyPct) || occupancyPct;
   const report = {
     type: "community_progress",
     title: "ATLAS RISE Portfolio Community Progress Report",
@@ -26412,6 +26599,7 @@ function buildCommunityProgressReportData(options = {}) {
     leasedUnits,
     occupancyPct,
     leasedPct,
+    trendingOccupancyPct,
     budgetOccPct,
     moveInGoalPerWeek,
     moveInsNeeded,
