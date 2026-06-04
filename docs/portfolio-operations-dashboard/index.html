@@ -26034,7 +26034,7 @@ function buildCommunityProgressBedroomRentComparisonCard(report) {
   const formatRent = value => Number.isFinite(Number(value)) && Number(value) > 0 ? formatDlrCurrency(value) : "—";
   if (rows.length === 0) {
     return `<div class="progress-card">
-      <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b">Bedroom Rent Position</div>
+      <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b">RISE Advertised Rent VS. Market Position</div>
       <div style="font-size:22px;font-weight:800;color:#0f172a;margin-top:4px">No rent comparison</div>
       <div style="font-size:12px;color:#64748b;line-height:1.6;margin-top:10px">Add bedroom counts and marketed rents to Community Setup, then upload an AptIQ market survey with bedroom-level floor-plan rates to show this comparison.</div>
     </div>`;
@@ -26072,7 +26072,7 @@ function buildCommunityProgressBedroomRentComparisonCard(report) {
   return `<div class="progress-card">
     <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:10px">
       <div>
-        <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b">Bedroom Rent Position</div>
+        <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b">RISE Advertised Rent VS. Market Position</div>
         <div style="font-size:22px;font-weight:800;color:#0f172a;margin-top:4px">${avgGap !== null ? compCalcFormatSignedCurrency(avgGap) : "Rent stack"}</div>
       </div>
       <div style="text-align:right;font-size:12px;color:#475569">
