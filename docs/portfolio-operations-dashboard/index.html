@@ -25054,16 +25054,38 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   const prop = getPropertyByName(communityName);
   const totalUnits = getTotalUnitsFor(prop, record.customUnits);
   const corporateUnits = getCorporateLeaseUnitsForRecord(record, totalUnits);
+  const readMatchingDailyBoxScoreMetric = (...values) => {
+    if (!hasMatchingDailyBoxScore) return null;
+    for (const value of values) {
+      const numeric = Number(value);
+      if (Number.isFinite(numeric) && numeric > 0) return numeric;
+    }
+    return null;
+  };
+  const hasDlrSummaryMetric = value => value !== null && value !== undefined && Number.isFinite(Number(value));
+  const dailyBoxScoreBaseUnits = readMatchingDailyBoxScoreMetric(dailyBoxScore.rentableUnits, dailyBoxScore.totalUnits);
+  const dlrOccupancyBaseUnits = dailyBoxScoreBaseUnits || totalUnits;
+  const dailyBoxScoreOccupiedUnits = readMatchingDailyBoxScoreMetric(dailyBoxScore.occupiedUnits);
+  const dailyBoxScoreLeasedUnits = readMatchingDailyBoxScoreMetric(dailyBoxScore.leasedUnits);
+  const dailyBoxScoreTrendUnits = readMatchingDailyBoxScoreMetric(dailyBoxScore.trendUnits, dailyBoxScore.notExposedLeasedUnits);
+  const dailyBoxScoreRenewalsSigned = readMatchingDailyBoxScoreMetric(dailyBoxScore.renewals);
+  const dailyBoxScorePctFromUnits = units => {
+    const unitCount = Number(units);
+    if (!Number.isFinite(unitCount) || unitCount < 0 || dlrOccupancyBaseUnits <= 0) return null;
+    return getOccupancyPctFromUnits(unitCount, dlrOccupancyBaseUnits, corporateUnits);
+  };
   const scopeMonthlyData = Array.isArray(record.monthlyData) && record.monthlyData.length === 12 ? record.monthlyData : defaultMonthly();
   const scopeSeasonal = Array.isArray(record.seasonal) && record.seasonal.length === 12 ? record.seasonal : [...DEFAULT_SEASONAL];
   const scopeCurrentMonth = Number.isInteger(record.currentMonth) ? record.currentMonth : DEFAULT_CURRENT_MONTH;
   const reportMetricMonthIdx = normalizedMonthIdx;
-  const reportAnchorOccupiedUnits = reportMetricMonthIdx === scopeCurrentMonth
+  const savedReportAnchorOccupiedUnits = reportMetricMonthIdx === scopeCurrentMonth
     ? Math.max(0, Number(record.currentOccupied) || 0)
     : estimateSnapshotUnitsForRecordMonth(record, totalUnits, reportMetricMonthIdx, "occupiedSnapshot");
-  const reportAnchorLeasedUnits = reportMetricMonthIdx === scopeCurrentMonth
+  const savedReportAnchorLeasedUnits = reportMetricMonthIdx === scopeCurrentMonth
     ? Math.max(0, Number(record.currentLeased) || 0)
     : estimateSnapshotUnitsForRecordMonth(record, totalUnits, reportMetricMonthIdx, "leasedSnapshot");
+  const reportAnchorOccupiedUnits = dailyBoxScoreOccupiedUnits ?? savedReportAnchorOccupiedUnits;
+  const reportAnchorLeasedUnits = dailyBoxScoreLeasedUnits ?? savedReportAnchorLeasedUnits;
   const schedule = computeScheduleFromContext({
     totalUnits,
     corporateLeaseUnits: corporateUnits,
@@ -25118,28 +25140,32 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
       }))
     : [];
   const nextRows = summaryNextRows.length > 0 ? summaryNextRows : scheduledNextRows;
-  const occupiedUnits = hasMatchingDlrSummary
-    ? (resolveDlrSummaryUnits(dlrSummary, totalUnits, "occupied") ?? reportAnchorOccupiedUnits)
-    : reportAnchorOccupiedUnits;
-  const leasedUnits = hasMatchingDlrSummary
-    ? (resolveDlrSummaryUnits(dlrSummary, totalUnits, "leased") ?? reportAnchorLeasedUnits)
-    : reportAnchorLeasedUnits;
-  const occupancyPct = hasMatchingDlrSummary && Number.isFinite(Number(dlrSummary.occupancyPct))
-    ? Number(dlrSummary.occupancyPct)
-    : getOccupancyPctFromUnits(occupiedUnits, totalUnits, corporateUnits);
-  const leasedPct = hasMatchingDlrSummary && Number.isFinite(Number(dlrSummary.leasedPct))
-    ? Number(dlrSummary.leasedPct)
-    : getOccupancyPctFromUnits(leasedUnits, totalUnits, corporateUnits);
+  const occupiedUnits = dailyBoxScoreOccupiedUnits
+    ?? (hasMatchingDlrSummary ? resolveDlrSummaryUnits(dlrSummary, totalUnits, "occupied") : null)
+    ?? reportAnchorOccupiedUnits;
+  const leasedUnits = dailyBoxScoreLeasedUnits
+    ?? (hasMatchingDlrSummary ? resolveDlrSummaryUnits(dlrSummary, totalUnits, "leased") : null)
+    ?? reportAnchorLeasedUnits;
+  const dailyBoxScoreOccupancyPct = dailyBoxScoreOccupiedUnits !== null ? dailyBoxScorePctFromUnits(dailyBoxScoreOccupiedUnits) : null;
+  const dailyBoxScoreLeasedPct = dailyBoxScoreLeasedUnits !== null ? dailyBoxScorePctFromUnits(dailyBoxScoreLeasedUnits) : null;
+  const dailyBoxScoreTrendingOccupancyPct = dailyBoxScoreTrendUnits !== null ? dailyBoxScorePctFromUnits(dailyBoxScoreTrendUnits) : null;
+  const summaryOccupancyPct = hasMatchingDlrSummary && hasDlrSummaryMetric(dlrSummary.occupancyPct) ? Number(dlrSummary.occupancyPct) : null;
+  const summaryLeasedPct = hasMatchingDlrSummary && hasDlrSummaryMetric(dlrSummary.leasedPct) ? Number(dlrSummary.leasedPct) : null;
+  const occupancyPct = dailyBoxScoreOccupancyPct ?? summaryOccupancyPct ?? getOccupancyPctFromUnits(occupiedUnits, totalUnits, corporateUnits);
+  const leasedPct = dailyBoxScoreLeasedPct ?? summaryLeasedPct ?? getOccupancyPctFromUnits(leasedUnits, totalUnits, corporateUnits);
   const projectedTrendRow = nextRows[Math.min(3, Math.max(nextRows.length - 1, 0))] || nextRows[nextRows.length - 1] || null;
   const projectedEndingOccupancy = computeProjectedEndingPhysicalOccupancy(record, totalUnits, reportMetricMonthIdx, 3);
-  const trendingOccupancyPct = hasMatchingDlrSummary && Number.isFinite(Number(dlrSummary.trendingOccupancyPct))
-    ? Number(dlrSummary.trendingOccupancyPct)
-    : (Number(projectedTrendRow?.projectedOccupancy ?? projectedEndingOccupancy.pct ?? occupancyPct) || occupancyPct);
+  const summaryTrendingOccupancyPct = hasMatchingDlrSummary && hasDlrSummaryMetric(dlrSummary.trendingOccupancyPct) ? Number(dlrSummary.trendingOccupancyPct) : null;
+  const trendingOccupancyPct = dailyBoxScoreTrendingOccupancyPct
+    ?? summaryTrendingOccupancyPct
+    ?? (Number(projectedTrendRow?.projectedOccupancy ?? projectedEndingOccupancy.pct ?? occupancyPct) || occupancyPct);
   const budgetOccPct = getRecordSavedBudgetOccPct(record, reportMetricMonthIdx);
   const moveInsNeeded = Number(scheduleRow.netOccLeases) || 0;
-  const moveInGoalPerWeek = hasMatchingDlrSummary && Number.isFinite(Number(dlrSummary.moveInGoalPerWeek))
-    ? Number(dlrSummary.moveInGoalPerWeek)
-    : (moveInsNeeded > 0 ? Math.max(1, Math.ceil(moveInsNeeded / 4)) : 0);
+  const scheduledMoveInGoalPerWeek = moveInsNeeded > 0 ? Math.max(1, Math.ceil(moveInsNeeded / 4)) : 0;
+  const summaryMoveInGoalPerWeek = hasMatchingDlrSummary && hasDlrSummaryMetric(dlrSummary.moveInGoalPerWeek) ? Number(dlrSummary.moveInGoalPerWeek) : null;
+  const moveInGoalPerWeek = scheduledMoveInGoalPerWeek > 0
+    ? scheduledMoveInGoalPerWeek
+    : (summaryMoveInGoalPerWeek ?? scheduledMoveInGoalPerWeek);
   const mtdTraffic = buildDlrTrafficMetricsFromSummary(hasMatchingDlrSummary ? dlrSummary : {}, monthEntry, {}, {
     preferDailyBoxScore: false
   });
@@ -25244,6 +25270,10 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   const floorPlanRentMetrics = getCommunityFloorPlanRentMetrics(record, surveyData);
   const resolvedAvgInPlaceRent = Number(monthEntry.marketRent) || floorPlanRentMetrics.marketRent || Number(dlrSummary.pricing?.avgInPlaceRent) || 0;
   const resolvedAvgBudgetRent = Number(monthEntry.proformaRent) || floorPlanRentMetrics.budgetRent || Number(dlrSummary.pricing?.avgBudgetRent) || 0;
+  const resolvedRenewalsSigned = dailyBoxScoreRenewalsSigned ?? renewalSummary.signed;
+  const resolvedRetentionRate = renewalSummary.expirations > 0
+    ? (resolvedRenewalsSigned / renewalSummary.expirations) * 100
+    : renewalSummary.retentionRate;
   const status = occupancyPct + 0.5 >= budgetOccPct
     ? "On Track"
     : occupancyPct + 2 >= budgetOccPct
@@ -25263,8 +25293,8 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
     budgetOccPct,
     avgInPlaceRent: resolvedAvgInPlaceRent,
     avgBudgetRent: resolvedAvgBudgetRent,
-    retentionRate: renewalSummary.retentionRate,
-    renewalsSigned: renewalSummary.signed,
+    retentionRate: resolvedRetentionRate,
+    renewalsSigned: resolvedRenewalsSigned,
     expirations: renewalSummary.expirations
   });
   const floorPlanVarianceData = buildCommunityFloorPlanVarianceRows(record.communityFloorPlans, surveyData);
@@ -25320,10 +25350,10 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
     forwardLook: nextRows,
     renewalSnapshot: {
       expirations: renewalSummary.expirations,
-      signed: renewalSummary.signed,
+      signed: resolvedRenewalsSigned,
       undecided: renewalSummary.undecided,
       projectedAttrition: renewalSummary.projectedAttrition,
-      retentionRate: renewalSummary.retentionRate,
+      retentionRate: resolvedRetentionRate,
       previousRetentionRate: prevRenewalSummary.retentionRate
     },
     dailyBoxScoreSourceFile: dailyBoxScore.sourceFileName || "",
