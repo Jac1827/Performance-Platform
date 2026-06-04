@@ -23260,7 +23260,7 @@ function finalizePopupReportWindow(win, html, printImmediately = false, printDel
 }
 
 function buildAutoPrintReportDocument(html, title = "ATLAS RISE Report") {
-  const printScript = `<script>
+  const printScript = `<scr` + `ipt>
     window.addEventListener('load', () => {
       const printHint = document.createElement('div');
       printHint.style.position = 'fixed';
@@ -23280,7 +23280,7 @@ function buildAutoPrintReportDocument(html, title = "ATLAS RISE Report") {
         try { window.print(); } catch (_error) {}
       }, 220);
     });
-  </script>`;
+  </scr` + `ipt>`;
   if (/<\/body>/i.test(html)) return html.replace(/<\/body>/i, `${printScript}</body>`);
   return `${html}${printScript}`;
 }
