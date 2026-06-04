@@ -26326,6 +26326,13 @@ function buildCommunityProgressYoyApplicationsSummary(report) {
     delta: Math.max(0, Number(currentValue) || 0) - Math.max(0, Number(previousValue) || 0),
     pctChange: Number(previousValue) > 0 ? (((Number(currentValue) || 0) - Number(previousValue)) / Number(previousValue)) * 100 : null
   });
+  const summarizeCompCoverage = survey => {
+    const comps = (Array.isArray(survey?.surveyComps) ? survey.surveyComps : []).filter(comp => !comp?.isSubject && String(comp?.name || "").trim());
+    return {
+      compCount: comps.length,
+      averageAppsPerComp: comps.length > 0 ? (Math.max(0, Number(survey?.applicationsLast30) || 0) / comps.length) : null
+    };
+  };
   const priorSelfRows = detailRecords.map(item => {
     const priorEntry = getRecordHistoryEntry(item.record, monthIdx, priorYear);
     const hasValue = Boolean(priorEntry && Object.prototype.hasOwnProperty.call(priorEntry, "applications"));
@@ -26336,10 +26343,13 @@ function buildCommunityProgressYoyApplicationsSummary(report) {
   });
   const currentMarketRows = detailRecords.map(item => {
     const survey = getMarketSurveySnapshotForPeriod(item.record, monthIdx, year, { allowCurrentFallback: true });
+    const compCoverage = summarizeCompCoverage(survey);
     return {
       hasValue: hasMarketSurveyData(survey),
       value: Math.max(0, Number(survey?.applicationsLast30) || 0),
-      fallbackUsed: !hasMarketSurveyData(getMarketSurveySnapshotForPeriod(item.record, monthIdx, year, { allowCurrentFallback: false })) && hasMarketSurveyData(survey)
+      fallbackUsed: !hasMarketSurveyData(getMarketSurveySnapshotForPeriod(item.record, monthIdx, year, { allowCurrentFallback: false })) && hasMarketSurveyData(survey),
+      compCount: compCoverage.compCount,
+      averageAppsPerComp: compCoverage.averageAppsPerComp
     };
   });
   const priorMarketRows = detailRecords.map(item => {
@@ -26349,7 +26359,7 @@ function buildCommunityProgressYoyApplicationsSummary(report) {
       value: Math.max(0, Number(survey?.applicationsLast30) || 0)
     };
   });
-  return {
+  const result = {
     currentPeriodLabel: formatDlrMonthYear(monthIdx, year),
     previousPeriodLabel: formatDlrMonthYear(monthIdx, priorYear),
     self: {
@@ -26365,9 +26375,12 @@ function buildCommunityProgressYoyApplicationsSummary(report) {
       currentCoverageCount: currentMarketRows.filter(item => item.hasValue).length,
       previousCoverageCount: priorMarketRows.filter(item => item.hasValue).length,
       expectedCount: detailRecords.length,
-      currentFallbackUsed: currentMarketRows.some(item => item.fallbackUsed)
+      currentFallbackUsed: currentMarketRows.some(item => item.fallbackUsed),
+      compCount: currentMarketRows.reduce((sum, item) => sum + Math.max(0, Number(item.compCount) || 0), 0)
     }
   };
+  result.market.averageAppsPerComp = result.market.compCount > 0 ? result.market.currentValue / result.market.compCount : null;
+  return result;
 }
 
 function buildCommunityProgressYoyApplicationsCard(report) {
@@ -26404,6 +26417,7 @@ function buildCommunityProgressYoyApplicationsCard(report) {
         <div class="progress-snapshot-widget-value" style="color:#0f766e">${escapeHtml(formatDlrMetricValue(yoy.market.currentValue))}</div>
         <div class="progress-snapshot-widget-sub">${escapeHtml(formatDlrMetricValue(yoy.market.previousValue))} in ${escapeHtml(yoy.previousPeriodLabel)}</div>
         <div class="progress-snapshot-widget-detail">${escapeHtml(formatDelta(yoy.market))}</div>
+        <div class="progress-snapshot-widget-detail">${escapeHtml(Number.isFinite(Number(yoy.market.averageAppsPerComp)) ? `${Number(yoy.market.averageAppsPerComp).toFixed(1)} avg apps per comp across ${formatDlrMetricValue(yoy.market.compCount)} comps` : "No comp-level application average is available yet")}</div>
         <div class="progress-snapshot-widget-detail">${escapeHtml(coverageLine(yoy.market.previousCoverageCount, yoy.market.expectedCount, yoy.market.currentFallbackUsed))}</div>
       </div>
     </div>
@@ -26466,8 +26480,9 @@ function buildCommunityProgressOccupancyTrendCard(rows = []) {
   const budgetValues = validRows
     .map(row => Number(row.budgetOccPct))
     .filter(value => Number.isFinite(value) && value > 0);
+  const currentBudget = Number(currentRow.budgetOccPct);
   const budgetNote = budgetValues.length > 0
-    ? `${formatDlrPercent(Number(currentRow.budgetOccPct), 1)} saved budget target`
+    ? `${formatDlrPercent(currentBudget, 1)} saved budget target`
     : "No saved budget target for this month";
   const marketNote = avgMarket !== null
     ? `${formatDlrPercent(avgMarket, 1)} average market benchmark across saved months`
@@ -26475,11 +26490,12 @@ function buildCommunityProgressOccupancyTrendCard(rows = []) {
   return `<div class="progress-card">
     <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:10px">
       <div>
-        <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b">Occupancy, Leased, and Market Benchmark</div>
+        <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b">Occupancy, Leased, Budget, and Market Benchmark</div>
         <div style="font-size:22px;font-weight:800;color:#0f172a;margin-top:4px">${formatDlrPercent(currentRow.occupancyPct, 1)} occupied</div>
       </div>
       <div style="text-align:right;font-size:12px;color:#475569">
         <div>${formatDlrPercent(currentRow.leasedPct, 1)} leased</div>
+        <div style="margin-top:4px">${escapeHtml(Number.isFinite(currentBudget) && currentBudget > 0 ? `${formatDlrPercent(currentBudget, 1)} budget target` : marketNote)}</div>
         <div style="margin-top:4px">${escapeHtml(marketNote)}</div>
       </div>
     </div>
@@ -26489,6 +26505,7 @@ function buildCommunityProgressOccupancyTrendCard(rows = []) {
       shortLabel: row.shortLabel,
       occupied: row.occupancyPct,
       leased: row.leasedPct,
+      budget: row.budgetOccPct,
       market: row.marketLeasedPct
     })), {
       kind: "pct",
@@ -26500,6 +26517,7 @@ function buildCommunityProgressOccupancyTrendCard(rows = []) {
       series: [
         { key: "occupied", label: "Physical Occupancy", lineColor: "#1d4ed8", dotColor: "#1d4ed8" },
         { key: "leased", label: "Leased Occupancy", lineColor: "#0f766e", dotColor: "#0f766e" },
+        { key: "budget", label: "Budgeted Occupancy", lineColor: "#7c3aed", dotColor: "#7c3aed", dash: "8 4" },
         { key: "market", label: "Market Average Occupancy Benchmark", lineColor: "#d97706", dotColor: "#d97706", dash: "4 4" }
       ]
     })}
@@ -26847,13 +26865,13 @@ function buildCommunityProgressTrendSection(report) {
       ${buildCommunityProgressOccupancyTrendCard(rows)}
       ${buildCommunityProgressTrendCard({
         title: "Guest Cards",
-        subtitle: "3-month trailing average of monthly guest cards",
-        points: trendSeries("guestCardsAdjusted"),
+        subtitle: "Recorded guest cards by month",
+        points: trendSeries("guestCards"),
         formatter: value => formatDlrMetricValue(value),
         kind: "metric",
         lineColor: "#7c3aed",
         dotColor: "#7c3aed",
-        axisFormatter: value => formatDlrMetricValue(value)
+        axisFormatter: value => formatDlrMetricValue(Math.round(value))
       })}
       <div class="progress-card">
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:10px">
@@ -28125,6 +28143,7 @@ async function openCommunityProgressReport(printImmediately = false) {
   if (!report) return;
   try {
     if (printImmediately) {
+      await hydrateCommunityProgressReportAssets(report);
       const documentHtml = buildCommunityProgressReportDocument(report);
       openReportDocumentInCurrentTab(documentHtml, { title: "ATLAS RISE Community Progress Report", printImmediately: true });
       return;
@@ -28146,6 +28165,7 @@ async function openCommunityProgressIndividualReports(printImmediately = false) 
   for (const child of report.communityReports) {
     try {
       if (printImmediately) {
+        await hydrateCommunityProgressReportAssets(child);
         const documentHtml = buildCommunityProgressReportDocument(child);
         openReportDocumentInCurrentTab(documentHtml, { title: `ATLAS RISE Community Progress Report - ${child.communityName || "Community"}`, printImmediately: true });
         continue;
@@ -28172,6 +28192,7 @@ async function openSingleCommunityProgressReport(communityName, printImmediately
   if (!finalReport) return;
   try {
     if (printImmediately) {
+      await hydrateCommunityProgressReportAssets(finalReport);
       const documentHtml = buildCommunityProgressReportDocument(finalReport);
       openReportDocumentInCurrentTab(documentHtml, { title: `ATLAS RISE Community Progress Report - ${finalReport.communityName || communityName}`, printImmediately: true });
       return;
