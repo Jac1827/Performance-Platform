@@ -3019,8 +3019,8 @@ async function parseRonaldoDailyDlrWorkbook(file) {
       vacantUnits: row?.Vacant_Units,
       occupancyPct: normalizeWorkbookPercentToReportPct(row?.["Physical_Occupancy_%"] ?? summaryRow?.["Physical_Occupancy_%"]),
       leasedPct: normalizeWorkbookPercentToReportPct(row?.["Leased_%"] ?? summaryRow?.["Leased_%"]),
-      avgBudgetRent: row?.Avg_Market_Rent,
-      avgInPlaceRent: row?.Avg_Market_Rent,
+      avgBudgetRent: row?.Avg_Market_Rent ?? row?.Avg_Market_Rent_Budgeted,
+      avgInPlaceRent: row?.Actual_Rent ?? row?.Avg_Scheduled_Rent_Used ?? row?.Avg_Scheduled_Rent,
       avgNetEffectiveRent: row?.Actual_Rent,
       traffic: summaryRow?.Traffic ?? row?.Traffic,
       leads: summaryRow?.Leads ?? row?.Leads,
@@ -11167,7 +11167,7 @@ function renderOverviewTab() {
   const gcWeeklyNeeded = paceContext.isLivePaceMonth && gcNeeded > 0 && weeksLeft > 0 ? Math.ceil((gcNeeded - gcSoFar) / weeksLeft) : 0;
 
   // Velocity: projected month-end leases based on current pace
-  const projectedMonthEndLeases = paceContext.isLivePaceMonth ? (parseFloat(weeklyPace) * 4) : leasedSoFar;
+  const projectedMonthEndLeases = paceContext.isLivePaceMonth ? (parseFloat(weeklyPace) * paceContext.totalWeeksInMonth) : leasedSoFar;
   const velocityStatus = projectedMonthEndLeases >= leasesNeeded ? "on-pace" : projectedMonthEndLeases >= leasesNeeded * 0.75 ? "warn" : "behind";
 
   let alertBanners = "";
@@ -11658,7 +11658,7 @@ function renderTrafficTab() {
   const approvalsGoal = leasesGoal;
 
   const weeklyLeasePace  = (leasedActual / weeksElapsed).toFixed(1);
-  const projectedLeases  = paceContext.isLivePaceMonth ? (parseFloat(weeklyLeasePace) * 4) : leasedActual;
+  const projectedLeases  = paceContext.isLivePaceMonth ? (parseFloat(weeklyLeasePace) * paceContext.totalWeeksInMonth) : leasedActual;
   const projVsGoal       = leasesGoal > 0 ? projectedLeases - leasesGoal : 0;
   const weeklyGCPace     = (gcActual / weeksElapsed).toFixed(1);
   const neededPerWeekGC  = paceContext.isLivePaceMonth && gcGoal > 0 && weeksLeft > 0 ? Math.max(Math.ceil((gcGoal - gcActual) / weeksLeft), 0) : 0;
@@ -11674,13 +11674,13 @@ function renderTrafficTab() {
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:12px">
       <div>
         <h2 style="font-size:0.9rem;font-weight:600">📈 ${MONTHS[currentMonth]} Leasing Velocity</h2>
-        <p style="font-size:0.72rem;color:var(--muted);margin-top:2px">${paceContext.isLivePaceMonth ? `Week ${weeksElapsed} of 4 · ${weeksLeft} week(s) remaining` : `Reporting month closed · ${weeksElapsed} weeks complete`}</p>
+        <p style="font-size:0.72rem;color:var(--muted);margin-top:2px">${paceContext.isLivePaceMonth ? `Week ${weeksElapsed} of ${paceContext.totalWeeksInMonth} · ${weeksLeft} week(s) remaining` : `Reporting month closed · ${weeksElapsed} weeks complete`}</p>
       </div>
       <div style="text-align:right">
         <div style="font-size:0.68rem;color:var(--muted)">${paceContext.isLivePaceMonth ? "Pace-Based Projection" : "Closed Month Projection"} <span style="color:var(--border)">·</span> ${paceContext.isLivePaceMonth ? "extrapolates current signing rate" : "uses completed month totals"}</div>
         <div style="font-size:1.4rem;font-weight:700;font-family:'JetBrains Mono',monospace;color:${projVsGoal>=0?"#3fb950":"#f85149"}">${projectedLeases.toFixed(0)} leases</div>
         <div style="font-size:0.68rem;color:${projVsGoal>=0?"#3fb950":"#f85149"}">${projVsGoal>=0?"▲":"▼"} ${Math.abs(projVsGoal).toFixed(0)} vs goal of ${leasesGoal}</div>
-        <div style="font-size:0.63rem;color:var(--muted);margin-top:2px">${paceContext.isLivePaceMonth ? `${leasedActual} ${applicationMetrics.approvals > 0 ? "approved / gross leases" : "signed leases"} ÷ ${weeksElapsed} wk × 4 wks` : `${leasedActual} ${applicationMetrics.approvals > 0 ? "approved / gross leases" : "signed leases"} in the selected month`}</div>
+        <div style="font-size:0.63rem;color:var(--muted);margin-top:2px">${paceContext.isLivePaceMonth ? `${leasedActual} ${applicationMetrics.approvals > 0 ? "approved / gross leases" : "signed leases"} ÷ ${weeksElapsed} wk × ${paceContext.totalWeeksInMonth} wks` : `${leasedActual} ${applicationMetrics.approvals > 0 ? "approved / gross leases" : "signed leases"} in the selected month`}</div>
       </div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
@@ -15982,14 +15982,16 @@ function getCurrentCalendarDayContext(selectedMonth = getSelectedDashboardMonthI
 
 function getMonthlyPaceContext(selectedMonth = getSelectedDashboardMonthIndex(), year = new Date().getFullYear()) {
   const calendarContext = getCurrentCalendarDayContext(selectedMonth, year);
+  const totalWeeksInMonth = Math.max(1, Math.ceil(calendarContext.daysInMonth / 7));
   const weeksElapsed = calendarContext.isCurrentCalendarMonth
-    ? Math.max(1, Math.min(4, Math.ceil(calendarContext.dayOfMonth / 7)))
-    : 4;
+    ? Math.max(1, Math.min(totalWeeksInMonth, Math.ceil(calendarContext.dayOfMonth / 7)))
+    : totalWeeksInMonth;
   const weeksLeft = calendarContext.isCurrentCalendarMonth
-    ? Math.max(1, 4 - weeksElapsed + 1)
+    ? Math.max(0, totalWeeksInMonth - weeksElapsed)
     : 0;
   return {
     ...calendarContext,
+    totalWeeksInMonth,
     weeksElapsed,
     weeksLeft,
     isLivePaceMonth: calendarContext.isCurrentCalendarMonth
@@ -29337,8 +29339,8 @@ function parseRonaldoAvailabilityRows(rows = [], target = {}) {
   const occupiedNoNotice = sumRonaldoColumn(rows, occupiedNoNoticeIdx);
   const noticeRented = sumRonaldoColumn(rows, noticeRentedIdx);
   const vacantRented = sumRonaldoColumn(rows, vacantRentedIdx);
-  const marketRent = weightedAverageRonaldoColumn(rows, avgBudgetRentIdx, rentableUnitsIdx) ?? weightedAverageRonaldoColumn(rows, avgBudgetRentIdx, totalUnitsIdx);
-  const budgetRent = weightedAverageRonaldoColumn(rows, avgScheduledRentIdx, rentableUnitsIdx) ?? weightedAverageRonaldoColumn(rows, avgScheduledRentIdx, totalUnitsIdx);
+  const budgetRent = weightedAverageRonaldoColumn(rows, avgBudgetRentIdx, rentableUnitsIdx) ?? weightedAverageRonaldoColumn(rows, avgBudgetRentIdx, totalUnitsIdx);
+  const marketRent = weightedAverageRonaldoColumn(rows, avgScheduledRentIdx, rentableUnitsIdx) ?? weightedAverageRonaldoColumn(rows, avgScheduledRentIdx, totalUnitsIdx);
   const ner = weightedAverageRonaldoColumn(rows, avgNetEffRentIdx, rentableUnitsIdx) ?? weightedAverageRonaldoColumn(rows, avgNetEffRentIdx, totalUnitsIdx);
   const occupiedPct = Number.isFinite(occupied) && Number.isFinite(rentableUnits) && rentableUnits > 0 ? (occupied / rentableUnits) * 100 : null;
   const leased = [occupied, noticeRented, vacantRented].every(value => Number.isFinite(value)) ? occupied + noticeRented + vacantRented : null;

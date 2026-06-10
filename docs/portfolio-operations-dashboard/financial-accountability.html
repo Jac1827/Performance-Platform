@@ -1077,7 +1077,7 @@ function buildRegionalCorrespondenceHtml(context,results){
     body.push('<td style="padding:6px;font-weight:700;color:'+D+'">'+row.section+'</td>');
     body.push('<td style="padding:6px;text-align:right">'+f$(row.actual)+'</td>');
     body.push('<td style="padding:6px;text-align:right">'+f$(row.budget)+'</td>');
-    body.push('<td style="padding:6px;text-align:right;color:'+(row.variance>=0?R:G)+';font-weight:700">'+f$(Math.abs(row.variance))+'</td>');
+    body.push('<td style="padding:6px;text-align:right;color:'+(row.bad?R:G)+';font-weight:700">'+f$(Math.abs(row.variance))+'</td>');
     body.push('<td style="padding:6px;text-align:right">'+row.favorableCount+' favorable / '+row.unfavorableCount+' unfavorable</td>');
     body.push('</tr>');
   });
