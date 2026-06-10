@@ -1207,8 +1207,16 @@ const DASHBOARD_STORAGE_MIGRATION_KEYS = [
 ];
 const DASHBOARD_SHARED_SYNC_SCOPE = "atlas_dashboard_v1";
 function getDashboardSharedSyncBaseUrl() {
-  const explicitOverride = String(window.ATLAS_SHARED_SYNC_BASE_URL || "").trim();
-  if (/^https?:\/\//i.test(explicitOverride)) return explicitOverride.replace(/\/+$/, "");
+  const origin = String(window.location?.origin || "");
+  if (/^https?:\/\//i.test(origin)) {
+    try {
+      const host = new URL(origin).hostname.toLowerCase();
+      const isLocalDevHost = host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host.endsWith(".local");
+      if (!isLocalDevHost && host !== "github.io" && !host.endsWith(".github.io")) {
+        return origin.replace(/\/+$/, "");
+      }
+    } catch {}
+  }
   return "https://api.appdeploy.ai/app/582d88ce519f411cab";
 }
 const DASHBOARD_SHARED_SYNC_BASE_URL = getDashboardSharedSyncBaseUrl();
@@ -3881,8 +3889,9 @@ function deriveSavedBudgetTargetsFromMonthlyData(monthEntries, existingTargets) 
     normalizeBudgetOccupancyPct(Array.isArray(existingTargets) ? existingTargets[idx] : 0)
   );
   return Array.from({ length: 12 }, (_, idx) => {
+    if (normalizedExisting[idx] > 0) return normalizedExisting[idx];
     const monthlyValue = normalizeBudgetOccupancyPct(Array.isArray(monthEntries) ? monthEntries[idx]?.budgetOcc : 0);
-    return monthlyValue > 0 ? monthlyValue : normalizedExisting[idx];
+    return monthlyValue > 0 ? monthlyValue : 0;
   });
 }
 
@@ -9163,9 +9172,10 @@ function mergeDashboardCommunityRecord(baseRecord, incomingRecord, name) {
   const nextSavedBudgetTargets = Array.from({ length: 12 }, (_, idx) => {
     const incomingPct = getSavedBudgetOccPct(incoming.savedBudgetTargets, idx);
     if (incomingPct > 0) return incomingPct;
+    const basePct = getSavedBudgetOccPct(base.savedBudgetTargets, idx);
+    if (basePct > 0) return basePct;
     const mergedPct = normalizeBudgetOccupancyPct(mergedMonthlyData[idx]?.budgetOcc);
-    if (mergedPct > 0) return mergedPct;
-    return getSavedBudgetOccPct(base.savedBudgetTargets, idx);
+    return mergedPct > 0 ? mergedPct : 0;
   });
   const nextMonthlyData = repairMonthlyBudgetTargets(mergedMonthlyData, nextSavedBudgetTargets);
   const nextSeasonal = Array.isArray(incoming.seasonal) && incoming.seasonal.some(value => Number(value) !== 0)
@@ -25473,6 +25483,34 @@ function resolveDlrSummaryUnits(summary, totalUnits, metric = "occupied") {
   return null;
 }
 
+function hasMeaningfulDlrSummary(summary) {
+  const normalized = normalizeDlrSummary(summary);
+  const hasNumericMetric = [
+    normalized.occupancyPct,
+    normalized.leasedPct,
+    normalized.trendingOccupancyPct,
+    normalized.moveInGoalPerWeek,
+    normalized.pricing?.totalUnits,
+    normalized.pricing?.leasedUnits,
+    normalized.pricing?.occupiedUnits,
+    normalized.pricing?.avgBudgetRent,
+    normalized.pricing?.avgInPlaceRent,
+    normalized.pricing?.avgNetEffectiveRent,
+    normalized.dailyBoxScore?.applications,
+    normalized.dailyBoxScore?.approvals,
+    normalized.dailyBoxScore?.moveIns,
+    normalized.dailyBoxScore?.moveOuts,
+    normalized.dailyBoxScore?.renewals,
+    normalized.dailyBoxScore?.firstVisitsTours
+  ].some(value => Number.isFinite(Number(value)) && Number(value) > 0);
+  if (hasNumericMetric) return true;
+  const hasActivityRows = Object.values(normalized.activity || {}).some(row => (
+    row && typeof row === "object" && ["daily", "wtd", "mtd"].some(field => Number.isFinite(Number(row?.[field])) && Number(row[field]) > 0)
+  ));
+  if (hasActivityRows) return true;
+  return false;
+}
+
 function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommunityName(), monthIdx = getHistoricalImportMonthIndex(), year = getHistoricalImportYear()) {
   const communityName = matchPropertyName(propName, { fallbackToCurrent: false }) || getProp().name;
   const normalizedMonthIdx = clampNumber(monthIdx, 0, 11);
@@ -25496,8 +25534,9 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
   const previousReportSummary = previousReportDetail?.summary || {};
   const surveyData = normalizeMarketSurveyData(record.marketSurveyData);
   const dlrSummary = normalizeDlrSummary(record.latestDlrSummary);
-  const dailyBoxScore = normalizeDlrBoxScoreSnapshot(dlrSummary.dailyBoxScore);
-  const hasMatchingDlrSummary = isDlrSummaryForRequestedPeriod(dlrSummary, normalizedMonthIdx, year);
+  const hasMatchingDlrSummary = isDlrSummaryForRequestedPeriod(dlrSummary, normalizedMonthIdx, year) && hasMeaningfulDlrSummary(dlrSummary);
+  const effectiveDlrSummary = hasMatchingDlrSummary ? dlrSummary : defaultDlrSummary();
+  const dailyBoxScore = normalizeDlrBoxScoreSnapshot(effectiveDlrSummary.dailyBoxScore);
   const hasDailyBoxScore = hasDlrBoxScoreSnapshot(dailyBoxScore);
   const dailyBoxScoreDate = parseDlrSpecificDate(dailyBoxScore.reportDateIso);
   const hasMatchingDailyBoxScore = hasDailyBoxScore && (!dailyBoxScoreDate || (dailyBoxScoreDate.getMonth() === clampNumber(monthIdx, 0, 11) && dailyBoxScoreDate.getFullYear() === Number(year)));
@@ -25575,7 +25614,7 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
         moveInsNeeded: Number(row.netOccLeases) || 0
       };
     });
-  const summaryForwardLook = hasMatchingDlrSummary ? dlrSummary.forwardLook : defaultDlrSummary().forwardLook;
+  const summaryForwardLook = effectiveDlrSummary.forwardLook;
   const summaryNextRows = Array.isArray(summaryForwardLook.months) && summaryForwardLook.months.length > 0
     ? summaryForwardLook.months.slice(0, 4).map((label, idx) => ({
         monthIdx: parseMonthIndexValue(label) ?? Math.min(11, reportMetricMonthIdx + idx),
@@ -25591,32 +25630,50 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
     : [];
   const nextRows = summaryNextRows.length > 0 ? summaryNextRows : scheduledNextRows;
   const occupiedUnits = dailyBoxScoreOccupiedUnits
-    ?? (hasMatchingDlrSummary ? resolveDlrSummaryUnits(dlrSummary, totalUnits, "occupied") : null)
+    ?? (hasMatchingDlrSummary ? resolveDlrSummaryUnits(effectiveDlrSummary, totalUnits, "occupied") : null)
     ?? reportAnchorOccupiedUnits;
   const leasedUnits = dailyBoxScoreLeasedUnits
-    ?? (hasMatchingDlrSummary ? resolveDlrSummaryUnits(dlrSummary, totalUnits, "leased") : null)
+    ?? (hasMatchingDlrSummary ? resolveDlrSummaryUnits(effectiveDlrSummary, totalUnits, "leased") : null)
     ?? reportAnchorLeasedUnits;
   const dailyBoxScoreOccupancyPct = dailyBoxScoreOccupiedUnits !== null ? dailyBoxScorePctFromUnits(dailyBoxScoreOccupiedUnits) : null;
   const dailyBoxScoreLeasedPct = dailyBoxScoreLeasedUnits !== null ? dailyBoxScorePctFromUnits(dailyBoxScoreLeasedUnits) : null;
   const dailyBoxScoreTrendingOccupancyPct = dailyBoxScoreTrendUnits !== null ? dailyBoxScorePctFromUnits(dailyBoxScoreTrendUnits) : null;
-  const summaryOccupancyPct = hasMatchingDlrSummary && hasDlrSummaryMetric(dlrSummary.occupancyPct) ? Number(dlrSummary.occupancyPct) : null;
-  const summaryLeasedPct = hasMatchingDlrSummary && hasDlrSummaryMetric(dlrSummary.leasedPct) ? Number(dlrSummary.leasedPct) : null;
+  const summaryOccupancyPct = hasMatchingDlrSummary && hasDlrSummaryMetric(effectiveDlrSummary.occupancyPct) ? Number(effectiveDlrSummary.occupancyPct) : null;
+  const summaryLeasedPct = hasMatchingDlrSummary && hasDlrSummaryMetric(effectiveDlrSummary.leasedPct) ? Number(effectiveDlrSummary.leasedPct) : null;
   const occupancyPct = dailyBoxScoreOccupancyPct ?? summaryOccupancyPct ?? getOccupancyPctFromUnits(occupiedUnits, totalUnits, corporateUnits);
   const leasedPct = dailyBoxScoreLeasedPct ?? summaryLeasedPct ?? getOccupancyPctFromUnits(leasedUnits, totalUnits, corporateUnits);
   const projectedTrendRow = nextRows[Math.min(3, Math.max(nextRows.length - 1, 0))] || nextRows[nextRows.length - 1] || null;
   const projectedEndingOccupancy = computeProjectedEndingPhysicalOccupancy(scopedRecord, totalUnits, reportMetricMonthIdx, 3);
-  const summaryTrendingOccupancyPct = hasMatchingDlrSummary && hasDlrSummaryMetric(dlrSummary.trendingOccupancyPct) ? Number(dlrSummary.trendingOccupancyPct) : null;
+  const summaryTrendingOccupancyPct = hasMatchingDlrSummary && hasDlrSummaryMetric(effectiveDlrSummary.trendingOccupancyPct) ? Number(effectiveDlrSummary.trendingOccupancyPct) : null;
   const trendingOccupancyPct = dailyBoxScoreTrendingOccupancyPct
     ?? summaryTrendingOccupancyPct
     ?? (Number(projectedTrendRow?.projectedOccupancy ?? projectedEndingOccupancy.pct ?? occupancyPct) || occupancyPct);
   const budgetOccPct = getRecordSavedBudgetOccPct(record, reportMetricMonthIdx, year);
   const moveInsNeeded = Number(scheduleRow.netOccLeases) || 0;
   const scheduledMoveInGoalPerWeek = moveInsNeeded > 0 ? Math.max(1, Math.ceil(moveInsNeeded / 4)) : 0;
-  const summaryMoveInGoalPerWeek = hasMatchingDlrSummary && hasDlrSummaryMetric(dlrSummary.moveInGoalPerWeek) ? Number(dlrSummary.moveInGoalPerWeek) : null;
+  const summaryMoveInGoalPerWeek = hasMatchingDlrSummary && hasDlrSummaryMetric(effectiveDlrSummary.moveInGoalPerWeek) ? Number(effectiveDlrSummary.moveInGoalPerWeek) : null;
   const moveInGoalPerWeek = scheduledMoveInGoalPerWeek > 0
     ? scheduledMoveInGoalPerWeek
     : (summaryMoveInGoalPerWeek ?? scheduledMoveInGoalPerWeek);
-  const mtdTraffic = buildDlrTrafficMetricsFromSummary(hasMatchingDlrSummary ? dlrSummary : {}, monthEntry, {}, {
+  const occupiedUnits = resolveDlrSummaryUnits(effectiveDlrSummary, totalUnits, "occupied") ?? reportAnchorOccupiedUnits;
+  const leasedUnits = resolveDlrSummaryUnits(effectiveDlrSummary, totalUnits, "leased") ?? reportAnchorLeasedUnits;
+  const occupancyPct = Number.isFinite(Number(effectiveDlrSummary.occupancyPct))
+    ? Number(effectiveDlrSummary.occupancyPct)
+    : getOccupancyPctFromUnits(occupiedUnits, totalUnits, corporateUnits);
+  const leasedPct = Number.isFinite(Number(effectiveDlrSummary.leasedPct))
+    ? Number(effectiveDlrSummary.leasedPct)
+    : getOccupancyPctFromUnits(leasedUnits, totalUnits, corporateUnits);
+  const projectedTrendRow = nextRows[Math.min(3, Math.max(nextRows.length - 1, 0))] || nextRows[nextRows.length - 1] || null;
+  const projectedEndingOccupancy = computeProjectedEndingPhysicalOccupancy(scopedRecord, totalUnits, reportMetricMonthIdx, 3);
+  const trendingOccupancyPct = Number.isFinite(Number(effectiveDlrSummary.trendingOccupancyPct))
+    ? Number(effectiveDlrSummary.trendingOccupancyPct)
+    : (Number(projectedTrendRow?.projectedOccupancy ?? projectedEndingOccupancy.pct ?? occupancyPct) || occupancyPct);
+  const budgetOccPct = getRecordSavedBudgetOccPct(record, reportMetricMonthIdx, year);
+  const moveInsNeeded = Number(scheduleRow.netOccLeases) || 0;
+  const moveInGoalPerWeek = Number.isFinite(Number(effectiveDlrSummary.moveInGoalPerWeek))
+    ? Number(effectiveDlrSummary.moveInGoalPerWeek)
+    : (moveInsNeeded > 0 ? Math.max(1, Math.ceil(moveInsNeeded / 4)) : 0);
+  const mtdTraffic = buildDlrTrafficMetricsFromSummary(effectiveDlrSummary, monthEntry, {}, {
     preferDailyBoxScore: false
   });
   mtdTraffic.guestCards = Math.max(0, Number(reportSummary.guestCards ?? mtdTraffic.guestCards) || 0);
@@ -25718,8 +25775,8 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
       ? Number(reportSummary.currentNer ?? currentNer) * occupiedUnits
       : 0);
   const floorPlanRentMetrics = getCommunityFloorPlanRentMetrics(record, surveyData);
-  const resolvedAvgInPlaceRent = Number(monthEntry.marketRent) || floorPlanRentMetrics.marketRent || Number(dlrSummary.pricing?.avgInPlaceRent) || 0;
-  const resolvedAvgBudgetRent = Number(monthEntry.proformaRent) || floorPlanRentMetrics.budgetRent || Number(dlrSummary.pricing?.avgBudgetRent) || 0;
+  const resolvedAvgInPlaceRent = Number(monthEntry.marketRent) || floorPlanRentMetrics.marketRent || Number(effectiveDlrSummary.pricing?.avgInPlaceRent) || 0;
+  const resolvedAvgBudgetRent = Number(monthEntry.proformaRent) || floorPlanRentMetrics.budgetRent || Number(effectiveDlrSummary.pricing?.avgBudgetRent) || 0;
   const resolvedRenewalsSigned = dailyBoxScoreRenewalsSigned ?? renewalSummary.signed;
   const resolvedRetentionRate = renewalSummary.expirations > 0
     ? (resolvedRenewalsSigned / renewalSummary.expirations) * 100
@@ -25730,7 +25787,7 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
       ? "Watch"
       : "Needs Attention";
   const generatedNotes = buildDlrInvestorNotes({
-    reportDateLabel: hasDailyBoxScore ? (dailyBoxScore.reportDateLabel || dlrSummary.reportDateLabel) : dlrSummary.reportDateLabel,
+    reportDateLabel: hasDailyBoxScore ? (dailyBoxScore.reportDateLabel || effectiveDlrSummary.reportDateLabel) : effectiveDlrSummary.reportDateLabel,
     monthLabel: formatDlrMonthYear(reportMetricMonthIdx, year),
     leadSources: mtdTraffic,
     dailyTraffic,
@@ -25748,18 +25805,18 @@ function buildDashboardDlrInvestorOverview(propName = getHistoricalImportCommuni
     expirations: renewalSummary.expirations
   });
   const floorPlanVarianceData = buildCommunityFloorPlanVarianceRows(record.communityFloorPlans, surveyData);
-  const resolvedNoteState = resolveDlrEditableNotes(dlrSummary, generatedNotes, {
+  const resolvedNoteState = resolveDlrEditableNotes(effectiveDlrSummary, generatedNotes, {
     periodKey: buildPeriodKey(reportMetricMonthIdx, year)
   });
   const notes = resolvedNoteState.notes;
-  const marketing = resolveDlrMarketingState(dlrSummary);
+  const marketing = resolveDlrMarketingState(effectiveDlrSummary);
   const reportDateIso = hasMatchingDailyBoxScore
-    ? (dailyBoxScore.reportDateIso || dlrSummary.reportDateIso)
-    : dlrSummary.reportDateIso;
+    ? (dailyBoxScore.reportDateIso || effectiveDlrSummary.reportDateIso)
+    : effectiveDlrSummary.reportDateIso;
   const reportDateLabel = hasMatchingDailyBoxScore
-    ? (dailyBoxScore.reportDateLabel || dlrSummary.reportDateLabel)
-    : dlrSummary.reportDateLabel;
-  const reportPeriodLabel = reportDateLabel || dlrSummary.reportPeriodLabel || `${formatDlrMonthYear(reportMetricMonthIdx, year)} operating snapshot`;
+    ? (dailyBoxScore.reportDateLabel || effectiveDlrSummary.reportDateLabel)
+    : effectiveDlrSummary.reportDateLabel;
+  const reportPeriodLabel = reportDateLabel || effectiveDlrSummary.reportPeriodLabel || `${formatDlrMonthYear(reportMetricMonthIdx, year)} operating snapshot`;
   const baseReport = {
     communityName,
     communityId: String(workbookOverlay?.communityId || "").trim(),
@@ -28554,7 +28611,7 @@ function buildMarketComparisonSingleReportData(options = {}) {
     updatedOn: aggregate.marketSurveyUpdatedOn,
     sourceLabel: aggregate.marketSurveySourceLabel
   };
-  const mixedPhotoPool = collectInterleavedMonthlyPresentationPhotos(communityReports, 4);
+  const mixedPhotoPool = collectMonthlyPresentationPhotos([detail], 4);
   const report = {
     type: "market_comparison",
     title: "ATLAS RISE Market Comparison Report",
@@ -28582,9 +28639,9 @@ function buildMarketComparisonSingleReportData(options = {}) {
     marketCoveragePct: aggregate.marketCoveragePct,
     marketSurveyUpdatedOn: aggregate.marketSurveyUpdatedOn,
     marketSurveySourceLabel: aggregate.marketSurveySourceLabel,
-    communityPhotoAsset: collectMonthlyPresentationPhotos([detail], 4)[0] || null,
-    communityPhotoPreviewSrc: String(collectMonthlyPresentationPhotos([detail], 4)[0]?.previewSrc || collectMonthlyPresentationPhotos([detail], 4)[0]?.src || ""),
-    photoPool: collectMonthlyPresentationPhotos([detail], 4),
+    communityPhotoAsset: mixedPhotoPool[0] || null,
+    communityPhotoPreviewSrc: String(mixedPhotoPool[0]?.previewSrc || mixedPhotoPool[0]?.src || ""),
+    photoPool: mixedPhotoPool,
     communityReports: [],
     sourceSummary: `${communityName} · ${formatDlrMonthYear(monthIdx, year)} market vs subject comparison`,
     dataAlerts: [],
@@ -30213,7 +30270,7 @@ function parseRonaldoAvailabilityRows(rows = [], target = {}) {
   return makeRonaldoBackfillRow(target, {
     occupied: occupied ?? "",
     leased: leased ?? "",
-    budget_occ: occupiedPct !== null ? Math.round(occupiedPct * 100) / 100 : "",
+    budget_occ: "",
     market_rent: marketRent ?? "",
     budget_rent: budgetRent ?? "",
     budget_ner: budgetNer ?? "",
