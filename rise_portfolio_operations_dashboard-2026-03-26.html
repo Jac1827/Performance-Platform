@@ -452,6 +452,7 @@ const WINDOWSHADE_DEFAULTS = {
   renewals_import: false,
   renewals_metrics: false,
   renewals_monthly_table: false,
+  renewals_detail: false,
   renewals_future_months: true,
   reputation_scores: false,
   reputation_rollup: false,
@@ -695,6 +696,7 @@ let extractedDashboardRows = [];
 let extractedSourceLabel = "";
 let renewalImportLog = [];
 let renewalImportSourceLabel = "";
+let renewalDetailRowsByMonth = defaultRenewalDetailRowsByMonth();
 let marketSurveyImportLog = [];
 let marketSurveyImportSourceLabel = "";
 let budgetComparisonReports = {};
@@ -1845,6 +1847,177 @@ function defaultMonthly() {
   }));
 }
 
+function defaultRenewalDetailRowsByMonth() {
+  return Array.from({ length: 12 }, () => []);
+}
+
+function parseRenewalWorkbookNumericValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const parsed = Number(String(value).replace(/[$,%(),]/g, "").trim());
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseRenewalWorkbookPercentValue(value) {
+  const numeric = parseRenewalWorkbookNumericValue(value);
+  if (numeric === null) return null;
+  return numeric <= 1 && numeric >= -1 ? numeric * 100 : numeric;
+}
+
+function normalizeRenewalWorkbookDateValue(value) {
+  if (value === null || value === undefined || value === "" || value === 0) return "";
+  return formatWorkbookDateLabel(value);
+}
+
+function getRenewalDetailStatusKey(row = {}) {
+  if (String(row.renewalSigned ?? "").trim()) return "signed";
+  if (String(row.transfer ?? "").trim()) return "transfer";
+  if (String(row.ntv ?? "").trim()) return "ntv";
+  if (/early\s*termination|early\s*term|termination/i.test(String(row.notes ?? ""))) return "earlyTermination";
+  return "pending";
+}
+
+function normalizeRenewalDetailRow(row = {}) {
+  const source = Array.isArray(row)
+    ? {
+        residentName: row[0],
+        unit: row[1],
+        unitType: row[2],
+        expirationDate: row[3],
+        notice90: row[4],
+        notice60: row[5],
+        notice30: row[6],
+        depositHeld: row[7],
+        currentRate: row[8],
+        recommendedOffer: row[9],
+        investorOverrideIncrease: row[10],
+        investorOverrideOffer: row[11],
+        offer1: row[12],
+        offer2: row[13],
+        offer3: row[14],
+        signedOffer: row[15],
+        renewalSigned: row[16],
+        transfer: row[17],
+        ntv: row[18],
+        phone: row[19],
+        notes: row[20],
+        marketRate: row[21],
+        budget: row[22],
+        occupancy: row[23],
+        rentGrowthOffer1: row[24],
+        rentGrowthOffer2: row[25],
+        rentGrowthOffer3: row[26],
+        signedRentGrowth: row[27]
+      }
+    : (row ?? {});
+  const normalized = {
+    residentName: String(source.residentName ?? source.name ?? source.resident ?? "").trim(),
+    unit: String(source.unit ?? "").trim(),
+    unitType: String(source.unitType ?? source.type ?? "").trim(),
+    expirationDate: normalizeRenewalWorkbookDateValue(source.expirationDate ?? source.expiration),
+    notice90: normalizeRenewalWorkbookDateValue(source.notice90 ?? source.notice_90),
+    notice60: normalizeRenewalWorkbookDateValue(source.notice60 ?? source.notice_60),
+    notice30: normalizeRenewalWorkbookDateValue(source.notice30 ?? source.notice_30),
+    depositHeld: parseRenewalWorkbookNumericValue(source.depositHeld),
+    currentRate: parseRenewalWorkbookNumericValue(source.currentRate),
+    recommendedOffer: String(source.recommendedOffer ?? "").trim(),
+    investorOverrideIncrease: parseRenewalWorkbookPercentValue(source.investorOverrideIncrease),
+    investorOverrideOffer: parseRenewalWorkbookNumericValue(source.investorOverrideOffer),
+    offer1: parseRenewalWorkbookNumericValue(source.offer1),
+    offer2: parseRenewalWorkbookNumericValue(source.offer2),
+    offer3: parseRenewalWorkbookNumericValue(source.offer3),
+    signedOffer: String(source.signedOffer ?? "").trim(),
+    renewalSigned: normalizeRenewalWorkbookDateValue(source.renewalSigned),
+    transfer: normalizeRenewalWorkbookDateValue(source.transfer),
+    ntv: normalizeRenewalWorkbookDateValue(source.ntv),
+    phone: String(source.phone ?? "").trim(),
+    notes: String(source.notes ?? "").trim(),
+    marketRate: parseRenewalWorkbookNumericValue(source.marketRate),
+    budget: parseRenewalWorkbookNumericValue(source.budget),
+    occupancy: String(source.occupancy ?? "").trim(),
+    rentGrowthOffer1: parseRenewalWorkbookPercentValue(source.rentGrowthOffer1),
+    rentGrowthOffer2: parseRenewalWorkbookPercentValue(source.rentGrowthOffer2),
+    rentGrowthOffer3: parseRenewalWorkbookPercentValue(source.rentGrowthOffer3),
+    signedRentGrowth: parseRenewalWorkbookPercentValue(source.signedRentGrowth)
+  };
+  normalized.status = getRenewalDetailStatusKey(normalized);
+  return normalized;
+}
+
+function normalizeRenewalDetailRowsByMonth(input) {
+  const defaults = defaultRenewalDetailRowsByMonth();
+  if (!Array.isArray(input) || input.length !== 12) return defaults;
+  return defaults.map((_, idx) =>
+    Array.isArray(input[idx])
+      ? input[idx].map(row => normalizeRenewalDetailRow(row)).filter(Boolean)
+      : []
+  );
+}
+
+function summarizeRenewalDetailRows(rows = []) {
+  const summary = {
+    expirations: 0,
+    renewalsSigned: 0,
+    ntv: 0,
+    transfers: 0,
+    undecided: 0,
+    earlyTermination: 0,
+    retentionRate: 0,
+    decidedRetentionRate: 0
+  };
+  (Array.isArray(rows) ? rows : []).forEach(row => {
+    if (!row) return;
+    summary.expirations += 1;
+    switch (String(row.status ?? "pending")) {
+      case "signed":
+        summary.renewalsSigned += 1;
+        break;
+      case "ntv":
+        summary.ntv += 1;
+        break;
+      case "transfer":
+        summary.transfers += 1;
+        break;
+      case "earlyTermination":
+        summary.earlyTermination += 1;
+        break;
+      default:
+        summary.undecided += 1;
+        break;
+    }
+  });
+  summary.undecided = Math.max(summary.expirations - summary.renewalsSigned - summary.ntv - summary.transfers - summary.earlyTermination, 0);
+  summary.retentionRate = summary.expirations > 0 ? (summary.renewalsSigned / summary.expirations) * 100 : 0;
+  const decidedBase = summary.renewalsSigned + summary.ntv + summary.transfers;
+  summary.decidedRetentionRate = decidedBase > 0 ? (summary.renewalsSigned / decidedBase) * 100 : 0;
+  return summary;
+}
+
+function extractRenewalDetailRows(rows) {
+  const normalizedRows = Array.isArray(rows) ? rows : [];
+  const headerRowIdx = normalizedRows.findIndex(row => {
+    const cells = Array.isArray(row) ? row : [];
+    const first = String(cells[0] ?? "").trim().toLowerCase();
+    const second = String(cells[1] ?? "").trim().toLowerCase();
+    const third = String(cells[2] ?? "").trim().toLowerCase();
+    const fourth = String(cells[3] ?? "").trim().toLowerCase();
+    return /name/.test(first) && /unit/.test(second) && /type/.test(third) && /expiration/.test(fourth);
+  });
+  if (headerRowIdx === -1) return [];
+  const detailRows = [];
+  for (let idx = headerRowIdx + 1; idx < normalizedRows.length; idx++) {
+    const row = Array.isArray(normalizedRows[idx]) ? normalizedRows[idx] : [];
+    const firstCell = String(row[0] ?? "").trim().toLowerCase();
+    if (!firstCell) continue;
+    if (/^(retention analysis|metric|total lease expirations|renewals signed|ntv'?s received|transfers|pending|retention rate|legend)/i.test(firstCell)) break;
+    if (/enter|select|auto/.test(firstCell)) continue;
+    const detailRow = normalizeRenewalDetailRow(row);
+    if (!detailRow.residentName && !detailRow.unit && !detailRow.expirationDate) continue;
+    detailRows.push(detailRow);
+  }
+  return detailRows;
+}
+
 function getHistoricalPerformanceEntry(monthIdx, source = historicalPerformanceData) {
   const normalized = normalizeHistoricalPerformanceData(source);
   return normalized.monthlyData?.[monthIdx] ?? defaultHistoricalPerformanceEntry();
@@ -2083,6 +2256,7 @@ function defaultSavedCommunityRecord(propName = getProp().name) {
     currentMonth: DEFAULT_CURRENT_MONTH,
     conversionRate: 65,
     monthlyData: defaultMonthly(),
+    renewalDetailRowsByMonth: defaultRenewalDetailRowsByMonth(),
     savedBudgetTargets: Array(12).fill(0),
     seasonal: [...DEFAULT_SEASONAL],
     importMonthOverride: DEFAULT_CURRENT_MONTH,
@@ -2131,6 +2305,7 @@ function normalizeSavedCommunityRecord(propName, data) {
     monthlyData: Array.isArray(input.monthlyData) && input.monthlyData.length === 12
       ? input.monthlyData.map((entry, idx) => ({ ...defaults.monthlyData[idx], ...(entry ?? {}) }))
       : defaults.monthlyData,
+    renewalDetailRowsByMonth: normalizeRenewalDetailRowsByMonth(input.renewalDetailRowsByMonth),
     savedBudgetTargets: Array.isArray(input.savedBudgetTargets) && input.savedBudgetTargets.length === 12 ? input.savedBudgetTargets : defaults.savedBudgetTargets,
     seasonal: Array.isArray(input.seasonal) && input.seasonal.length === 12 ? input.seasonal : defaults.seasonal,
     importMonthOverride: Number.isInteger(input.importMonthOverride) ? input.importMonthOverride : Number(input.importMonthOverride ?? defaults.importMonthOverride),
@@ -2168,6 +2343,7 @@ function getCurrentCommunityRecord() {
     currentMonth,
     conversionRate,
     monthlyData,
+    renewalDetailRowsByMonth,
     savedBudgetTargets,
     seasonal,
     importMonthOverride,
@@ -2309,11 +2485,11 @@ function getRenewalSummaryForMonth(monthEntry = {}) {
   const ntv = Math.max(0, Number(monthEntry.renewalNTV) || 0);
   const transfers = Math.max(0, Number(monthEntry.renewalTransfers) || 0);
   const earlyTermination = Math.max(0, Number(monthEntry.renewalEarlyTermination) || 0);
-  const undecided = Math.max(expirations - signed - ntv - transfers, 0);
+  const undecided = Math.max(expirations - signed - ntv - transfers - earlyTermination, 0);
   const retentionRate = expirations > 0 ? (signed / expirations) * 100 : 0;
   const decidedBase = signed + ntv;
   const decidedRetentionRate = decidedBase > 0 ? (signed / decidedBase) * 100 : 0;
-  const projectedUndecidedPool = Math.max(expirations - signed - ntv - transfers, 0);
+  const projectedUndecidedPool = Math.max(expirations - signed - ntv - transfers - earlyTermination, 0);
   const projectedUndecidedLosses = projectedUndecidedPool > 0
     ? Math.round(projectedUndecidedPool * ((100 - (decidedBase > 0 ? decidedRetentionRate : 50)) / 100))
     : 0;
@@ -2678,6 +2854,7 @@ function loadPropertyData(propName) {
   currentMonth = Number.isInteger(workspaceMonthOverride) ? workspaceMonthOverride : DEFAULT_CURRENT_MONTH;
   conversionRate = d.conversionRate;
   monthlyData = d.monthlyData;
+  renewalDetailRowsByMonth = d.renewalDetailRowsByMonth;
   savedBudgetTargets = d.savedBudgetTargets;
   seasonal = d.seasonal;
   importMonthOverride = d.importMonthOverride;
@@ -6384,13 +6561,59 @@ function findWorksheetRowValue(rows, patterns) {
   return null;
 }
 
+function extractRenewalDetailWorkbookSummary(rows) {
+  const summary = {
+    expirations: 0,
+    renewalsSigned: 0,
+    ntv: 0,
+    transfers: 0,
+    undecided: 0,
+    earlyTermination: 0,
+    retentionRate: 0,
+    decidedRetentionRate: 0
+  };
+  const normalizedRows = Array.isArray(rows) ? rows : [];
+  for (let idx = 3; idx < normalizedRows.length; idx++) {
+    const row = Array.isArray(normalizedRows[idx]) ? normalizedRows[idx] : [];
+    const firstCell = String(row[0] ?? "").trim().toLowerCase();
+    if (/^(retention analysis|retention rate|legend|metric|count)\b/.test(firstCell)) break;
+
+    const residentName = String(row[0] ?? "").trim();
+    const unit = String(row[1] ?? "").trim();
+    const expiration = String(row[3] ?? "").trim();
+    if (!residentName && !unit && !expiration) continue;
+    if (!residentName || !unit || !expiration) continue;
+
+    summary.expirations += 1;
+    if (String(row[16] ?? "").trim()) summary.renewalsSigned += 1;
+    if (String(row[17] ?? "").trim()) summary.transfers += 1;
+    if (String(row[18] ?? "").trim()) summary.ntv += 1;
+
+    const notes = String(row[20] ?? "").trim().toLowerCase();
+    if (/early\s*termination|early\s*term|termination/.test(notes)) {
+      summary.earlyTermination += 1;
+    }
+  }
+
+  summary.undecided = Math.max(summary.expirations - summary.renewalsSigned - summary.ntv - summary.transfers - summary.earlyTermination, 0);
+  summary.retentionRate = summary.expirations > 0 ? (summary.renewalsSigned / summary.expirations) * 100 : 0;
+  const decidedPool = summary.renewalsSigned + summary.ntv + summary.transfers;
+  summary.decidedRetentionRate = decidedPool > 0 ? (summary.renewalsSigned / decidedPool) * 100 : 0;
+  return summary;
+}
+
 function extractRenewalSheetSummary(rows) {
+  const detailSummary = extractRenewalDetailWorkbookSummary(rows);
+  if (detailSummary.expirations > 0) {
+    return detailSummary;
+  }
+
   const expirations = normalizeWorkbookNumber(findWorksheetRowValue(rows, /total lease expirations/i));
   const renewalsSigned = normalizeWorkbookNumber(findWorksheetRowValue(rows, /renewals signed/i));
   const ntv = normalizeWorkbookNumber(findWorksheetRowValue(rows, /ntv'?s received/i));
   const transfers = normalizeWorkbookNumber(findWorksheetRowValue(rows, /^transfers$/i));
   const earlyTermination = normalizeWorkbookNumber(findWorksheetRowValue(rows, /early termination/i));
-  const undecided = normalizeWorkbookNumber(findWorksheetRowValue(rows, /pending|undecided|m2m|month[\s-]*to[\s-]*month/i));
+  const undecided = normalizeWorkbookNumber(findWorksheetRowValue(rows, /pending|undecided|m2m|month[\s-]*to[\s-]*month|not yet decided/i));
   const retentionRate = normalizeWorkbookPercent(findWorksheetRowValue(rows, /retention rate.*total expirations/i));
   const decidedRetentionRate = normalizeWorkbookPercent(findWorksheetRowValue(rows, /retention rate.*renewals.*ntv/i));
   return { expirations, renewalsSigned, ntv, transfers, undecided, earlyTermination, retentionRate, decidedRetentionRate };
@@ -6420,10 +6643,13 @@ async function handleRenewalWorkbook(file) {
     const monthIdx = parseMonthIndexValue(sheetName);
     if (monthIdx === null || monthIdx < 0 || monthIdx > 11) return;
     const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "" });
+    const detailRows = extractRenewalDetailRows(rows);
     const summary = extractRenewalSheetSummary(rows);
-    if ([summary.expirations, summary.renewalsSigned, summary.ntv, summary.transfers, summary.undecided, summary.earlyTermination].every(v => v === 0)) return;
-    applyRenewalSummaryToMonth(monthIdx, summary);
-    renewalImportLog.push(`✅ ${file.name} → ${MONTHS[monthIdx]} renewals mapped (${summary.expirations} expirations, ${summary.renewalsSigned} signed, ${summary.undecided} undecided / M2M, ${summary.earlyTermination} early termination).`);
+    const effectiveSummary = summary.expirations > 0 ? summary : summarizeRenewalDetailRows(detailRows);
+    if (detailRows.length === 0 && [effectiveSummary.expirations, effectiveSummary.renewalsSigned, effectiveSummary.ntv, effectiveSummary.transfers, effectiveSummary.undecided, effectiveSummary.earlyTermination].every(v => v === 0)) return;
+    applyRenewalSummaryToMonth(monthIdx, effectiveSummary);
+    renewalDetailRowsByMonth[monthIdx] = detailRows;
+    renewalImportLog.push(`✅ ${file.name} → ${MONTHS[monthIdx]} renewals mapped (${detailRows.length} resident row${detailRows.length === 1 ? "" : "s"} · ${effectiveSummary.expirations} expirations, ${effectiveSummary.renewalsSigned} signed, ${effectiveSummary.ntv} NTV, ${effectiveSummary.transfers} transfers, ${effectiveSummary.undecided} undecided / M2M${effectiveSummary.earlyTermination > 0 ? `, ${effectiveSummary.earlyTermination} early terminations` : ""}).`);
     appliedMonths++;
   });
   if (appliedMonths === 0) {
@@ -6523,8 +6749,28 @@ function findWorksheetRow(rows, patterns) {
 }
 
 function formatWorkbookDateLabel(value) {
-  const raw = String(value ?? "").trim();
+  if (value === null || value === undefined || value === "") return "";
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return "";
+    return value.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+  }
+  if (typeof value === "number" && typeof XLSX !== "undefined" && XLSX.SSF?.parse_date_code) {
+    const parsedSerial = XLSX.SSF.parse_date_code(value);
+    if (parsedSerial?.y && parsedSerial?.m && parsedSerial?.d) {
+      return new Date(parsedSerial.y, parsedSerial.m - 1, parsedSerial.d, 12, 0, 0, 0)
+        .toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+    }
+  }
+  const raw = String(value).trim();
   if (!raw) return "";
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric) && raw === String(numeric) && typeof XLSX !== "undefined" && XLSX.SSF?.parse_date_code) {
+    const parsedSerial = XLSX.SSF.parse_date_code(numeric);
+    if (parsedSerial?.y && parsedSerial?.m && parsedSerial?.d) {
+      return new Date(parsedSerial.y, parsedSerial.m - 1, parsedSerial.d, 12, 0, 0, 0)
+        .toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+    }
+  }
   const match = raw.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})/);
   const parsed = new Date(match ? match[1] : raw);
   if (Number.isNaN(parsed.getTime())) return raw.replace(/^.*?:\s*/, "");
@@ -6867,13 +7113,22 @@ async function handleTypedImportWorkbook(file) {
       mergeExtractedDashboardRows(parsed.rows, sourceLabel);
       appliedResult = applyDashboardRowsToRecords(parsed.rows);
     }
+    const detailRowsByMonth = normalizeRenewalDetailRowsByMonth(parsed.detailRowsByMonth);
+    const detailRowCount = detailRowsByMonth.reduce((sum, monthRows) => sum + (monthRows?.length || 0), 0);
+    if (detailRowCount > 0) {
+      const targetRecord = getPropertyRecordForApply(parsed.communityName);
+      targetRecord.renewalDetailRowsByMonth = detailRowsByMonth;
+      savedData[parsed.communityName] = normalizeSavedCommunityRecord(parsed.communityName, touchRecordUpdateState(targetRecord, ["imports", "renewals"]));
+      appliedResult.touchedProps.add(parsed.communityName);
+    }
     return {
       stagedRows: parsed.rows.length,
       touchedCommunities: appliedResult.touchedProps,
       focusMonth: null,
       logs: [
         ...parsed.log,
-        ...(appliedResult.applied > 0 ? [`↪ Applied ${appliedResult.applied} renewal value(s) across ${appliedResult.touchedMonthIdxs.length} month(s).`] : [])
+        ...(appliedResult.applied > 0 ? [`↪ Applied ${appliedResult.applied} renewal value(s) across ${appliedResult.touchedMonthIdxs.length} month(s).`] : []),
+        ...(detailRowCount > 0 ? [`↪ Imported ${detailRowCount} resident renewal row${detailRowCount === 1 ? "" : "s"} across ${detailRowsByMonth.filter(monthRows => (monthRows?.length || 0) > 0).length} month(s).`] : [])
       ]
     };
   }
@@ -7089,27 +7344,33 @@ function extractRenewalWorkbookRows(workbook, fileName = "") {
   const detectedCommunity = String(setupPropRow?.[1] ?? "").trim();
   const communityName = getWorkbookReportCommunity(fileName, detectedCommunity);
   const extractedRows = [];
+  const detailRowsByMonth = defaultRenewalDetailRowsByMonth();
   workbook.SheetNames.forEach(sheetName => {
     const monthIdx = parseMonthIndexValue(sheetName);
     if (monthIdx === null || monthIdx < 0 || monthIdx > 11) return;
     const rows = getSheetRows(workbook, sheetName);
+    const detailRows = extractRenewalDetailRows(rows);
     const summary = extractRenewalSheetSummary(rows);
-    const computedUndecided = Math.max(summary.expirations - summary.renewalsSigned - summary.ntv - summary.transfers, 0);
-    if ([summary.expirations, summary.renewalsSigned, summary.ntv, summary.transfers, summary.earlyTermination, computedUndecided].every(value => !value)) return;
+    const effectiveSummary = summary.expirations > 0 ? summary : summarizeRenewalDetailRows(detailRows);
+    const computedUndecided = Math.max(effectiveSummary.expirations - effectiveSummary.renewalsSigned - effectiveSummary.ntv - effectiveSummary.transfers - effectiveSummary.earlyTermination, 0);
+    if (detailRows.length === 0 && [effectiveSummary.expirations, effectiveSummary.renewalsSigned, effectiveSummary.ntv, effectiveSummary.transfers, effectiveSummary.earlyTermination, computedUndecided].every(value => !value)) return;
+    detailRowsByMonth[monthIdx] = detailRows;
     extractedRows.push(makeExtractRow(communityName, monthIdx, {
-      renewal_expirations: summary.expirations || "",
-      renewals_signed: summary.renewalsSigned || "",
-      renewal_ntvs: summary.ntv || "",
-      renewal_transfers: summary.transfers || "",
+      renewal_expirations: effectiveSummary.expirations || "",
+      renewals_signed: effectiveSummary.renewalsSigned || "",
+      renewal_ntvs: effectiveSummary.ntv || "",
+      renewal_transfers: effectiveSummary.transfers || "",
       renewal_undecided: computedUndecided || "",
-      renewal_early_termination: summary.earlyTermination || ""
+      renewal_early_termination: effectiveSummary.earlyTermination || ""
     }));
   });
+  const totalDetailRows = detailRowsByMonth.reduce((sum, monthRows) => sum + (monthRows?.length || 0), 0);
   return {
     communityName,
     rows: extractedRows,
+    detailRowsByMonth,
     log: extractedRows.length > 0
-      ? [`✅ ${fileName} → ${communityName} renewal workbook staged for ${extractedRows.length} month(s).`]
+      ? [`✅ ${fileName} → ${communityName} renewal workbook staged for ${extractedRows.length} month(s) · ${totalDetailRows} resident row${totalDetailRows === 1 ? "" : "s"}.`]
       : [`⚠️ ${fileName} did not contain any recognizable month summaries.`]
   };
 }
@@ -7257,9 +7518,109 @@ function setBudgetCompareField(field, value) {
   renderTab();
 }
 
+function getRenewalDetailStatusMeta(status = "") {
+  switch (String(status ?? "pending")) {
+    case "signed":
+      return { label: "Signed", fg: "#166534", bg: "rgba(63,185,80,0.14)", border: "rgba(63,185,80,0.24)" };
+    case "transfer":
+      return { label: "Transfer", fg: "#1d4ed8", bg: "rgba(68,147,248,0.14)", border: "rgba(68,147,248,0.24)" };
+    case "ntv":
+      return { label: "NTV", fg: "#a16207", bg: "rgba(210,153,34,0.14)", border: "rgba(210,153,34,0.24)" };
+    case "earlyTermination":
+      return { label: "Early Termination", fg: "#b91c1c", bg: "rgba(248,81,73,0.14)", border: "rgba(248,81,73,0.24)" };
+    default:
+      return { label: "Pending / M2M", fg: "var(--muted)", bg: "rgba(125,133,144,0.12)", border: "rgba(125,133,144,0.24)" };
+  }
+}
+
+function renderRenewalDetailRowsTable(detailRows = [], monthLabel = "") {
+  const rows = Array.isArray(detailRows) ? detailRows : [];
+  const summary = summarizeRenewalDetailRows(rows);
+  if (rows.length === 0) {
+    return `<div style="padding:14px 16px;background:var(--bg3);border:1px dashed var(--border);border-radius:10px;color:var(--muted);font-size:0.74rem;line-height:1.5">No resident-level renewal rows are stored for ${escapeHtml(monthLabel || "this month")} yet. Upload the Renewal Management Tool workbook above to populate this drill-down table.</div>`;
+  }
+
+  const chips = [
+    ["Resident rows", summary.expirations, "#4493f8"],
+    ["Signed", summary.renewalsSigned, "#3fb950"],
+    ["NTV", summary.ntv, "#d29922"],
+    ["Transfers", summary.transfers, "#1f6feb"],
+    ["Early terms", summary.earlyTermination, "#f97316"],
+    ["Pending", summary.undecided, "var(--muted)"],
+    ["Retention", summary.expirations > 0 ? `${summary.retentionRate.toFixed(1)}%` : "—", "#3fb950"]
+  ];
+  const columns = [
+    { key: "residentName", label: "Resident", kind: "text", align: "left", minWidth: "180px", bold: true },
+    { key: "unit", label: "Unit", kind: "text", align: "left", minWidth: "78px" },
+    { key: "unitType", label: "Type", kind: "text", align: "left", minWidth: "70px" },
+    { key: "expirationDate", label: "Expiration", kind: "date", minWidth: "118px" },
+    { key: "currentRate", label: "Current Rate", kind: "currency", minWidth: "100px" },
+    { key: "recommendedOffer", label: "Rec. Offer", kind: "text", minWidth: "100px" },
+    { key: "signedOffer", label: "Signed Offer", kind: "text", minWidth: "110px" },
+    { key: "renewalSigned", label: "Renewal Signed", kind: "date", minWidth: "125px" },
+    { key: "transfer", label: "Transfer", kind: "date", minWidth: "112px" },
+    { key: "ntv", label: "NTV", kind: "date", minWidth: "112px" },
+    { key: "phone", label: "Phone", kind: "text", minWidth: "120px" },
+    { key: "notes", label: "Notes", kind: "text", align: "left", minWidth: "320px" },
+    { key: "status", label: "Status", kind: "status", minWidth: "132px" }
+  ];
+  const headerHtml = columns.map(column => `<th class="${column.align === "left" ? "l" : "c"}"${column.minWidth ? ` style="min-width:${column.minWidth}"` : ""}>${escapeHtml(column.label)}</th>`).join("");
+  const rowHtml = rows.map(row => {
+    const statusMeta = getRenewalDetailStatusMeta(row.status);
+    const rowTone = row.status === "signed"
+      ? "rgba(63,185,80,0.03)"
+      : row.status === "transfer"
+        ? "rgba(68,147,248,0.03)"
+        : row.status === "ntv"
+          ? "rgba(210,153,34,0.03)"
+          : row.status === "earlyTermination"
+            ? "rgba(248,81,73,0.03)"
+            : "";
+    return `<tr${rowTone ? ` style="background:${rowTone}"` : ""}>${columns.map(column => {
+      const value = row[column.key];
+      let cellHtml = "—";
+      if (column.kind === "status") {
+        cellHtml = `<span style="display:inline-flex;align-items:center;justify-content:center;padding:2px 9px;border-radius:999px;border:1px solid ${statusMeta.border};background:${statusMeta.bg};color:${statusMeta.fg};font-size:0.64rem;font-weight:700;line-height:1.4">${escapeHtml(statusMeta.label)}</span>`;
+      } else if (column.kind === "date") {
+        cellHtml = escapeHtml(formatWorkbookDateLabel(value) || "—");
+      } else if (column.kind === "currency") {
+        cellHtml = escapeHtml(formatPortfolioReportValue(value, "currency"));
+      } else if (column.kind === "pct") {
+        cellHtml = value === null || value === undefined || value === ""
+          ? "—"
+          : escapeHtml(formatPortfolioReportValue(typeof value === "number" ? value : parseRenewalWorkbookPercentValue(value), "pct"));
+      } else {
+        const text = String(value ?? "").trim();
+        cellHtml = escapeHtml(text || "—");
+      }
+      const tdStyle = [];
+      if (column.minWidth) tdStyle.push(`min-width:${column.minWidth}`);
+      if (column.align === "left") tdStyle.push("text-align:left");
+      if (column.key === "notes") tdStyle.push("white-space:normal", "line-height:1.45", "overflow-wrap:anywhere");
+      if (column.key === "residentName") tdStyle.push("font-weight:700");
+      if (column.key === "status") tdStyle.push("text-align:center");
+      return `<td${column.align === "left" ? ' class="l"' : ""}${tdStyle.length > 0 ? ` style="${tdStyle.join(";")}"` : ""}>${cellHtml}</td>`;
+    }).join("")}</tr>`;
+  }).join("");
+  return `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">${chips.map(([label, value, tone]) => `<div style="padding:7px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:10px;min-width:100px"><div style="font-size:0.62rem;letter-spacing:0.05em;text-transform:uppercase;color:var(--muted);font-weight:700">${escapeHtml(label)}</div><div style="font-size:0.88rem;font-weight:700;color:${tone};margin-top:2px">${escapeHtml(value)}</div></div>`).join("")}</div><div style="font-size:0.7rem;color:var(--muted);margin-bottom:10px;line-height:1.5">This compact view shows the renewal fields most likely to catch a mapping problem: resident, unit, expiration, pricing, decision dates, notes, and status.</div><div class="tbl-wrap"><table style="min-width:1320px;table-layout:fixed"><thead><tr>${headerHtml}</tr></thead><tbody>${rowHtml}</tbody></table></div>`;
+}
+
 function renderRenewalsTab() {
   const currentEntry = monthlyData[currentMonth] ?? {};
   const currentSummary = getRenewalSummaryForMonth(currentEntry);
+  const currentDetailRows = renewalDetailRowsByMonth[currentMonth] ?? [];
+  const currentDetailSummary = summarizeRenewalDetailRows(currentDetailRows);
+  const currentDetailMatch = currentDetailSummary.expirations === currentSummary.expirations
+    && currentDetailSummary.renewalsSigned === currentSummary.signed
+    && currentDetailSummary.ntv === currentSummary.ntv
+    && currentDetailSummary.transfers === currentSummary.transfers
+    && currentDetailSummary.earlyTermination === currentSummary.earlyTermination;
+  const currentDetailReconcileTone = currentDetailRows.length === 0 ? "var(--muted)" : currentDetailMatch ? "#3fb950" : "#d29922";
+  const currentDetailReconcileText = currentDetailRows.length === 0
+    ? `No resident detail rows are stored yet for ${FULL_MONTHS[currentMonth]}. Upload the workbook above to populate the drill-down table.`
+    : currentDetailMatch
+      ? `Detail rows reconcile with the ${FULL_MONTHS[currentMonth]} monthly summary.`
+      : `Detail rows and the monthly summary do not match yet for ${FULL_MONTHS[currentMonth]}.`;
   const currentSchedule = computeSchedule()[currentMonth] ?? {};
   const closedRetentionAverage = getClosedOutRetentionAverageForMonths(monthlyData, MONTHS.map((_, idx) => idx), currentMonth);
   const trackedEarlyTermination = MONTHS.map((_, idx) => idx)
@@ -7365,6 +7726,16 @@ function renderRenewalsTab() {
       countLabel: `${12 - Math.min(currentMonth + 1, 12)} future month${12 - Math.min(currentMonth + 1, 12) === 1 ? "" : "s"}`,
       bodyHtml: renewalsTableSection,
       collapsedPreview: `${retentionFooterLabel} · ${closedRetentionAverage.closedMonthCount > 0 ? closedRetentionAverage.avgRetentionRate.toFixed(1) + "% average retention" : "no closed-month retention yet"}`
+    }),
+    renderWindowshadeCard({
+      key: "renewals_detail",
+      title: "Renewal Detail Drill-Down",
+      subtitle: `Resident-level rows for ${FULL_MONTHS[currentMonth]} imported from the renewal workbook.`,
+      countLabel: `${currentDetailRows.length} resident row${currentDetailRows.length === 1 ? "" : "s"}`,
+      bodyHtml: `<div style="font-size:0.72rem;color:${currentDetailReconcileTone};font-weight:600;margin-bottom:10px;line-height:1.45">${escapeHtml(currentDetailReconcileText)}</div>${renderRenewalDetailRowsTable(currentDetailRows, FULL_MONTHS[currentMonth])}`,
+      collapsedPreview: currentDetailRows.length > 0
+        ? `${currentDetailSummary.expirations} rows · ${currentDetailSummary.renewalsSigned} signed · ${currentDetailSummary.ntv} NTV`
+        : `No resident-level rows stored for ${FULL_MONTHS[currentMonth]}`
     })
   ].join("");
 }

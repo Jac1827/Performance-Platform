@@ -1436,6 +1436,7 @@ let extractedDashboardRows = [];
 let extractedSourceLabel = "";
 let renewalImportLog = [];
 let renewalImportSourceLabel = "";
+let renewalDetailRowsByMonth = defaultRenewalDetailRowsByMonth();
 let marketSurveyImportLog = [];
 let marketSurveyImportSourceLabel = "";
 let historicalImportTarget = defaultHistoricalImportTarget();
@@ -4173,6 +4174,20 @@ function isCommunityStatusActive(recordOrStatus) {
   return normalizeCommunityStatus(recordOrStatus) === "active";
 }
 
+function defaultRenewalDetailRowsByMonth() {
+  return Array.from({ length: 12 }, () => []);
+}
+
+function normalizeRenewalDetailRowsByMonth(input) {
+  const defaults = defaultRenewalDetailRowsByMonth();
+  if (!Array.isArray(input) || input.length !== 12) return defaults;
+  return defaults.map((_, idx) =>
+    Array.isArray(input[idx])
+      ? input[idx].map(row => (row && typeof row === "object" ? { ...row } : row)).filter(Boolean)
+      : []
+  );
+}
+
 function defaultSavedCommunityRecord(propName = getProp().name) {
   const prop = getPropertyByName(propName);
   return {
@@ -4183,6 +4198,7 @@ function defaultSavedCommunityRecord(propName = getProp().name) {
     currentMonth: DEFAULT_CURRENT_MONTH,
     conversionRate: 65,
     monthlyData: defaultMonthly(),
+    renewalDetailRowsByMonth: defaultRenewalDetailRowsByMonth(),
     savedBudgetTargets: Array(12).fill(0),
     seasonal: [...DEFAULT_SEASONAL],
     importMonthOverride: DEFAULT_CURRENT_MONTH,
@@ -4248,6 +4264,7 @@ function normalizeSavedCommunityRecord(propName, data) {
     currentMonth: Number(input.currentMonth ?? defaults.currentMonth),
     conversionRate: Number(input.conversionRate ?? defaults.conversionRate),
     monthlyData: repairedMonthlyData,
+    renewalDetailRowsByMonth: normalizeRenewalDetailRowsByMonth(input.renewalDetailRowsByMonth),
     savedBudgetTargets: normalizedSavedBudgetTargets,
     seasonal: Array.isArray(input.seasonal) && input.seasonal.length === 12 ? input.seasonal : defaults.seasonal,
     importMonthOverride: Number.isInteger(input.importMonthOverride) ? input.importMonthOverride : Number(input.importMonthOverride ?? defaults.importMonthOverride),
@@ -4301,6 +4318,7 @@ function getCurrentCommunityRecord() {
     currentMonth,
     conversionRate,
     monthlyData,
+    renewalDetailRowsByMonth,
     savedBudgetTargets,
     seasonal,
     importMonthOverride,
@@ -4980,11 +4998,11 @@ function getRenewalSummaryForMonth(monthEntry = {}) {
   const ntv = Math.max(0, Number(monthEntry.renewalNTV) || 0);
   const transfers = Math.max(0, Number(monthEntry.renewalTransfers) || 0);
   const earlyTermination = Math.max(0, Number(monthEntry.renewalEarlyTermination) || 0);
-  const undecided = Math.max(expirations - signed - ntv - transfers, 0);
+  const undecided = Math.max(expirations - signed - ntv - transfers - earlyTermination, 0);
   const retentionRate = expirations > 0 ? (signed / expirations) * 100 : 0;
   const decidedBase = signed + ntv;
   const decidedRetentionRate = decidedBase > 0 ? (signed / decidedBase) * 100 : 0;
-  const projectedUndecidedPool = Math.max(expirations - signed - ntv - transfers, 0);
+  const projectedUndecidedPool = Math.max(expirations - signed - ntv - transfers - earlyTermination, 0);
   const projectedUndecidedLosses = projectedUndecidedPool > 0
     ? Math.round(projectedUndecidedPool * ((100 - (decidedBase > 0 ? decidedRetentionRate : 50)) / 100))
     : 0;
@@ -5355,6 +5373,7 @@ function loadPropertyData(propName) {
   syncMonthlyTemplateImportTarget();
   conversionRate = d.conversionRate;
   monthlyData = d.monthlyData;
+  renewalDetailRowsByMonth = d.renewalDetailRowsByMonth;
   savedBudgetTargets = d.savedBudgetTargets;
   seasonal = d.seasonal;
   importMonthOverride = d.importMonthOverride;
@@ -18510,7 +18529,9 @@ function renderPortfolioHomeTab() {
           applicationsLast30: marketComparisonAggregate.marketApplicationsLast30,
           leasesLast30: marketComparisonAggregate.marketLeasesLast30
         };
-        const comparisonRows = buildMarketComparisonMetricRows(subject, market);
+        const comparisonRows = buildMarketComparisonMetricRows(subject, market, {
+          occupancyExcludedCount: marketComparisonAggregate.occupancyExcludedCount
+        });
         const rentGap = Number(subject.rent ?? 0) - Number(market.rent ?? 0);
         const nerGap = Number(subject.ner ?? 0) - Number(market.ner ?? 0);
         const occupancyGap = Number(subject.occupancyPct ?? 0) - Number(market.leasedPct ?? 0);
@@ -28367,12 +28388,25 @@ function getMarketComparisonReportScopeLabel() {
 
 function buildMarketComparisonAggregateForDetails(details = [], monthIdx = getReportHubMonthIndex()) {
   const normalizedDetails = Array.isArray(details) ? details.filter(Boolean) : [];
-  const snapshots = normalizedDetails.map(detail => ({
-    detail,
-    summary: detail?.summary ?? {},
-    market: buildRegionalPricingWorksheetSnapshot(detail, null, monthIdx)
-  }));
+  const isLeaseUpStatus = value => /\blease\s*up\b/.test(String(value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " "));
+  const snapshots = normalizedDetails.map(detail => {
+    const detailRecord = detail?.record ?? {};
+    const dlrSummary = normalizeDlrSummary(detailRecord.latestDlrSummary);
+    const detailYear = Number.isInteger(detailRecord.reportYear) ? detailRecord.reportYear : new Date().getFullYear();
+    return {
+      detail,
+      summary: detail?.summary ?? {},
+      market: buildRegionalPricingWorksheetSnapshot(detail, null, monthIdx, detailYear),
+      survey: getCompCalculatorSurveySnapshot(detail, monthIdx, detailYear),
+      isLeaseUp: isLeaseUpStatus(dlrSummary.propertyStatus)
+    };
+  });
   const marketSnapshots = snapshots.filter(item => hasMarketSurveyData(item.market));
+  const occupancySnapshots = normalizedDetails.length > 1
+    ? snapshots.filter(item => !item.isLeaseUp)
+    : snapshots;
+  const occupancyBasisSnapshots = occupancySnapshots.length > 0 ? occupancySnapshots : snapshots;
+  const occupancyMarketSnapshots = occupancyBasisSnapshots.filter(item => hasMarketSurveyData(item.market));
   const averageFrom = (items, selector) => {
     const values = (Array.isArray(items) ? items : [])
       .map(selector)
@@ -28382,6 +28416,8 @@ function buildMarketComparisonAggregateForDetails(details = [], monthIdx = getRe
   };
   const sumFrom = (items, selector) => (Array.isArray(items) ? items : []).reduce((sum, item) => sum + Math.max(0, Number(selector(item)) || 0), 0);
   const subjectSummary = aggregateCommunitySummaries(normalizedDetails.map(detail => detail.summary));
+  const occupancySubjectSummary = aggregateCommunitySummaries(occupancyBasisSnapshots.map(item => item.summary));
+  const occupancyExcludedCount = Math.max(0, snapshots.length - occupancyBasisSnapshots.length);
   return {
     details: normalizedDetails,
     snapshots,
@@ -28390,8 +28426,10 @@ function buildMarketComparisonAggregateForDetails(details = [], monthIdx = getRe
     marketCoverageCount: marketSnapshots.length,
     marketCoveragePct: normalizedDetails.length > 0 ? (marketSnapshots.length / normalizedDetails.length) * 100 : 0,
     subjectSummary,
-    subjectOccupancyPct: getSummaryOccPct(subjectSummary),
-    subjectLeasedPct: getSummaryLeasedPct(subjectSummary),
+    occupancyExcludedCount,
+    occupancyComparableCommunityCount: occupancyBasisSnapshots.length,
+    subjectOccupancyPct: getSummaryOccPct(occupancySubjectSummary),
+    subjectLeasedPct: getSummaryLeasedPct(occupancySubjectSummary),
     subjectAverageRent: averageFrom(snapshots, item => Number(item.market.subjectAskingRent ?? item.summary.marketRent ?? item.summary.proformaRent ?? 0)),
     subjectAverageNer: averageFrom(snapshots, item => Number(item.market.subjectNetEffectiveRent ?? item.summary.nerActual ?? item.summary.proformaNER ?? 0)),
     subjectApplications: Number(subjectSummary.applications ?? 0) || 0,
@@ -28402,20 +28440,24 @@ function buildMarketComparisonAggregateForDetails(details = [], monthIdx = getRe
     subjectMoveOuts: Number(subjectSummary.moveOuts ?? 0) || 0,
     subjectGuestCards: Number(subjectSummary.guestCards ?? 0) || 0,
     subjectRetentionRate: Number(subjectSummary.renewalRetentionRate ?? 0) || 0,
-    subjectOccupiedUnits: Number(subjectSummary.occupied ?? 0) || 0,
-    subjectLeasedUnits: Number(subjectSummary.leased ?? 0) || 0,
+    subjectOccupiedUnits: Number(occupancySubjectSummary.occupied ?? 0) || 0,
+    subjectLeasedUnits: Number(occupancySubjectSummary.leased ?? 0) || 0,
     marketAverageRent: averageFrom(marketSnapshots, item => Number(item.market.compAverageRent ?? 0)),
     marketAverageNer: averageFrom(marketSnapshots, item => Number(item.market.compAverageNer ?? 0)),
-    marketLeasedPct: averageFrom(marketSnapshots, item => Number(item.market.compAverageLeasedPct ?? 0)),
+    marketLeasedPct: averageFrom(occupancyMarketSnapshots, item => Number(item.market.compAverageLeasedPct ?? 0)),
     marketExposurePct: averageFrom(marketSnapshots, item => Number(item.market.compAverageExposurePct ?? 0)),
-    marketApplicationsLast30: sumFrom(marketSnapshots, item => Number(item.market.applicationsLast30 ?? 0)),
-    marketLeasesLast30: sumFrom(marketSnapshots, item => Number(item.market.leasesLast30 ?? 0)),
+    marketApplicationsLast30: sumFrom(marketSnapshots, item => Number(item.survey?.applicationsLast30 ?? item.market.applicationsLast30 ?? 0)),
+    marketLeasesLast30: sumFrom(marketSnapshots, item => Number(item.survey?.leasesLast30 ?? item.market.leasesLast30 ?? 0)),
     marketSurveyUpdatedOn: marketSnapshots.map(item => item.market.updatedOn).filter(Boolean).sort().pop() || null,
     marketSurveySourceLabel: marketSnapshots.map(item => item.market.sourceFileName || item.market.primaryCompSet || "").filter(Boolean).sort().pop() || ""
   };
 }
 
-function buildMarketComparisonMetricRows(subject = {}, market = {}) {
+function buildMarketComparisonMetricRows(subject = {}, market = {}, options = {}) {
+  const config = (options && typeof options === "object" && !Array.isArray(options)) ? options : {};
+  const occupancyExclusionNote = config.occupancyExcludedCount > 0
+    ? ` excluding ${config.occupancyExcludedCount} lease-up ${config.occupancyExcludedCount === 1 ? "community" : "communities"}`
+    : "";
   return [
     {
       label: "Physical Occupancy",
@@ -28424,8 +28466,8 @@ function buildMarketComparisonMetricRows(subject = {}, market = {}) {
       marketValue: market.leasedPct,
       subjectLabel: "Subject",
       marketLabel: "Market",
-      subjectNote: subject.occupiedUnits > 0 ? `${formatDlrMetricValue(subject.occupiedUnits)} occupied units` : "Subject occupancy",
-      marketNote: market.leasedPct > 0 ? "Weekly AptIQ leased occupancy" : "Weekly AptIQ leased occupancy benchmark"
+      subjectNote: subject.occupiedUnits > 0 ? `${formatDlrMetricValue(subject.occupiedUnits)} occupied units${occupancyExclusionNote}` : `Subject occupancy${occupancyExclusionNote}`,
+      marketNote: market.leasedPct > 0 ? `Weekly AptIQ leased occupancy${occupancyExclusionNote}` : `Weekly AptIQ leased occupancy benchmark${occupancyExclusionNote}`
     },
     {
       label: "Market Rent",
@@ -28454,7 +28496,7 @@ function buildMarketComparisonMetricRows(subject = {}, market = {}) {
       marketValue: market.applicationsLast30,
       subjectLabel: "Subject",
       marketLabel: "Market",
-      subjectNote: "Month-to-date applications",
+      subjectNote: "Saved ATLAS applications",
       marketNote: "APTIQ applications last 30 days"
     },
     {
@@ -28464,7 +28506,7 @@ function buildMarketComparisonMetricRows(subject = {}, market = {}) {
       marketValue: market.leasesLast30,
       subjectLabel: "Subject",
       marketLabel: "Market",
-      subjectNote: "Subject signed leases",
+      subjectNote: "Saved ATLAS signed leases",
       marketNote: "APTIQ leases last 30 days"
     }
   ];
@@ -28477,8 +28519,8 @@ function buildMarketComparisonSubjectCards(report) {
     { label: "Leased Occupancy", value: formatDlrPercent(subject.leasedPct), sub: `${formatDlrMetricValue(subject.leasedUnits)} leased units` },
     { label: "Current Rent", value: formatDlrCurrency(subject.rent), sub: "Subject-side average rent" },
     { label: "Net Effective Rent", value: formatDlrCurrency(subject.ner), sub: "Subject-side average NER" },
-    { label: "Applications", value: formatDlrMetricValue(subject.applications), sub: "Month-to-date subject applications" },
-    { label: "Leases", value: formatDlrMetricValue(subject.leases), sub: "Subject signed leases" }
+    { label: "Applications", value: formatDlrMetricValue(subject.applications), sub: "Saved ATLAS subject applications" },
+    { label: "Leases", value: formatDlrMetricValue(subject.leases), sub: "Saved ATLAS signed leases" }
   ];
 }
 
@@ -28515,8 +28557,11 @@ function buildMarketComparisonNarrative(report) {
   const appDelta = (Number(subject.applications) || 0) - (Number(market.applicationsLast30) || 0);
   const leaseDelta = (Number(subject.leases) || 0) - (Number(market.leasesLast30) || 0);
   const scopeLabel = report?.communityCount > 1 ? `${report.scopeLabel || report.communityName} (${report.communityCount} communities)` : report?.communityName || "Selected community";
+  const occupancyExclusionLine = Number(report?.occupancyExcludedCount ?? 0) > 0
+    ? ` Lease-up communities were excluded from the aggregated occupancy benchmark for this view.`
+    : "";
   return [
-    `${scopeLabel} is operating at ${formatDlrPercent(subject.occupancyPct, 1)} physical occupancy against a ${formatDlrPercent(market.leasedPct, 1)} market leased benchmark, a ${formatSignedDisplay(occupancyDelta, 1, " pts")} gap.`,
+    `${scopeLabel} is operating at ${formatDlrPercent(subject.occupancyPct, 1)} physical occupancy against a ${formatDlrPercent(market.leasedPct, 1)} market leased benchmark, a ${formatSignedDisplay(occupancyDelta, 1, " pts")} gap.${occupancyExclusionLine}`,
     `Subject rent averages ${formatDlrCurrency(subject.rent)} versus ${formatDlrCurrency(market.rent)} in the weekly AptIQ comp set, while subject NER averages ${formatDlrCurrency(subject.ner)} versus ${formatDlrCurrency(market.ner)}. Applications are ${formatSignedDisplay(appDelta, 0, " units")} versus the market's last-30-day pace and signed leases are ${formatSignedDisplay(leaseDelta, 0, " units")} versus the market benchmark.`,
     `Weekly AptIQ survey coverage is ${formatDlrMetricValue(report.marketCoverageCount)} of ${formatDlrMetricValue(report.communityCount)} selected communities${report.marketCoveragePct > 0 ? ` (${report.marketCoveragePct.toFixed(0)}%)` : ""}. Subject-only operating metrics such as tours, approvals, move-ins, move-outs, and retention remain visible below, but they are not forced into a market comparison because the survey does not publish a like-for-like counterpart.`
   ];
@@ -28631,12 +28676,15 @@ function buildMarketComparisonSingleReportData(options = {}) {
     generatedAt: new Date(),
     subject,
     market,
-    comparisonRows: buildMarketComparisonMetricRows(subject, market, communityName),
+    comparisonRows: buildMarketComparisonMetricRows(subject, market, {
+      occupancyExcludedCount: aggregate.occupancyExcludedCount
+    }),
     subjectCards: buildMarketComparisonSubjectCards({ subject, market, marketCoverageCount: aggregate.marketCoverageCount }),
     marketCards: buildMarketComparisonMarketCards({ market, marketCoverageCount: aggregate.marketCoverageCount }),
     subjectOnlyCards: buildMarketComparisonSubjectOnlyCards({ subject }),
     marketCoverageCount: aggregate.marketCoverageCount,
     marketCoveragePct: aggregate.marketCoveragePct,
+    occupancyExcludedCount: aggregate.occupancyExcludedCount,
     marketSurveyUpdatedOn: aggregate.marketSurveyUpdatedOn,
     marketSurveySourceLabel: aggregate.marketSurveySourceLabel,
     communityPhotoAsset: mixedPhotoPool[0] || null,
@@ -28716,12 +28764,15 @@ function buildMarketComparisonReportData(options = {}) {
     generatedAt: new Date(),
     subject,
     market,
-    comparisonRows: buildMarketComparisonMetricRows(subject, market, getMarketComparisonReportScopeLabel()),
+    comparisonRows: buildMarketComparisonMetricRows(subject, market, {
+      occupancyExcludedCount: aggregate.occupancyExcludedCount
+    }),
     subjectCards: buildMarketComparisonSubjectCards({ subject, market, marketCoverageCount: aggregate.marketCoverageCount }),
     marketCards: buildMarketComparisonMarketCards({ market, marketCoverageCount: aggregate.marketCoverageCount }),
     subjectOnlyCards: buildMarketComparisonSubjectOnlyCards({ subject }),
     marketCoverageCount: aggregate.marketCoverageCount,
     marketCoveragePct: aggregate.marketCoveragePct,
+    occupancyExcludedCount: aggregate.occupancyExcludedCount,
     marketSurveyUpdatedOn: aggregate.marketSurveyUpdatedOn,
     marketSurveySourceLabel: aggregate.marketSurveySourceLabel,
     communityPhotoAsset: mixedPhotoPool[0] || null,
