@@ -8947,6 +8947,14 @@ function getDashboardSharedSyncStatusLine() {
   return `${lastActivity}${errorLine}`;
 }
 
+function isDashboardLoadedFromFileProtocol() {
+  try {
+    return window.location?.protocol === "file:";
+  } catch {
+    return false;
+  }
+}
+
 async function pullDashboardSharedState({ silent = false, applyRemoteIfNewer = true } = {}) {
   try {
     const response = await fetch(`${DASHBOARD_SHARED_SYNC_ENDPOINT}?scope=${encodeURIComponent(DASHBOARD_SHARED_SYNC_SCOPE)}`, { method: "GET" });
@@ -32144,9 +32152,11 @@ async function initializeAtlasDashboard() {
     if (savedData && Object.keys(savedData).length > 0) {
       queueDailyBackupSnapshotWrite("startup_retain");
     }
-    setTimeout(() => {
-      pullDashboardSharedState({ silent: true, applyRemoteIfNewer: true });
-    }, 320);
+    if (!isDashboardLoadedFromFileProtocol()) {
+      setTimeout(() => {
+        pullDashboardSharedState({ silent: true, applyRemoteIfNewer: true });
+      }, 320);
+    }
   })();
 }
 
