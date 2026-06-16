@@ -61,7 +61,7 @@ It also writes one CSV per target table:
 - `market_unit_snapshot.csv` - comp unit-level listing detail.
 - `rent_roll_unit_monthly.csv` - rent-roll unit-level detail.
 - `renewal_tracker_monthly.csv` - multi-month renewal tracker resident/offer detail.
-- `trending_occupancy_monthly.csv` - multi-month occupancy trend rows by community.
+- `trending_occupancy_monthly.csv` - multi-month occupancy trend rows by community from CSV or workbook trend exports.
 - `source_file_log.csv` - what was detected and parsed from each file.
 - `exceptions.csv` - items to review before production load.
 - `manifest.csv` - row counts by output table.
@@ -114,9 +114,9 @@ Load the `monthly_upload` tab into the current ATLAS monthly upload flow.
 
 The other CSVs are detail tables. They should be loaded only if ATLAS or Power BI has matching tables/tabs for those grains.
 
-Trending Occupancy files that do not include leased units populate occupancy, move-ins,
-and move-outs, then mark the monthly row `REVIEW` until a source with leased units is
-also present.
+Trending Occupancy files populate occupancy, move-ins, and move-outs. The workbook
+export is parsed sheet by sheet, and it can backfill past months when you re-import
+an updated trend file.
 
 Always check `exceptions.csv` before production upload. A row marked `REVIEW` usually means one of three things:
 

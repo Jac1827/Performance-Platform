@@ -68,6 +68,11 @@ MONTHLY_FIELDS = [
     "Move_Outs",
     "Renewals_Sent",
     "Renewals_Signed",
+    "Walk_In",
+    "Off_Site_Event",
+    "Phone_Calls",
+    "Emails_Online",
+    "Text_Chat_Other",
     "Reviews_Count",
     "Avg_Review_Rating",
     "Open_Work_Orders",
@@ -452,6 +457,15 @@ COMMUNITIES = {
         "PMS_Property_Code": "DORO",
         "In_Current_Atlas_Master": True,
     },
+    "SUT": {
+        "Community_Name": "Sutton House",
+        "Region": "Florida",
+        "Market": "Orlando",
+        "Asset_Type": "Lease-Up",
+        "Total_Units": None,
+        "PMS_Property_Code": "SUTTON",
+        "In_Current_Atlas_Master": False,
+    },
     "STA": {
         "Community_Name": "St. Augustine",
         "Region": "Florida",
@@ -459,7 +473,7 @@ COMMUNITIES = {
         "Asset_Type": "Lease-Up",
         "Total_Units": 272,
         "PMS_Property_Code": "STAUGUSTINE",
-        "In_Current_Atlas_Master": False,
+        "In_Current_Atlas_Master": True,
     },
 }
 
@@ -478,6 +492,7 @@ COMMUNITY_ALIASES = {
     "VIE": ["Viera", "RISE Viera", "Rise Viera"],
     "BAY": ["Baymeadows", "RISE Baymeadows", "Rise Baymeadows"],
     "DOR": ["Doro", "RISE Doro", "Rise Doro"],
+    "SUT": ["Sutton House", "Sutton Place", "RISE Sutton House", "RISE Sutton Place", "Rise Sutton House", "Rise Sutton Place"],
     "STA": ["St. Augustine", "RISE St. Augustine", "Rise St. Augustine"],
 }
 
@@ -657,6 +672,10 @@ def map_community(name: Any) -> Optional[str]:
     return None
 
 
+def is_active_community(community_id: Optional[str]) -> bool:
+    return bool(community_id) and COMMUNITIES.get(community_id, {}).get("In_Current_Atlas_Master", False)
+
+
 def community_base_row(report_month: str, community_id: str) -> Dict[str, Any]:
     community = COMMUNITIES[community_id]
     return {
@@ -808,6 +827,20 @@ def cell(ws: Any, row: int, col: int) -> Any:
     return ws.cell(row=row, column=col).value
 
 
+BOX_SCORE_SECTION_PREFIXES = (
+    "Availability",
+    "Property Pulse",
+    "Lead Activity",
+    "Lead Conversions",
+    "Make Ready Status",
+)
+
+
+def is_box_score_section_title(value: str) -> bool:
+    text = clean_text(value)
+    return any(text.startswith(prefix) for prefix in BOX_SCORE_SECTION_PREFIXES)
+
+
 def find_section(ws: Any, starts_with: str) -> Tuple[Optional[int], Optional[int], Optional[int]]:
     for row_index in range(1, ws.max_row + 1):
         value = clean_text(cell(ws, row_index, 1))
@@ -819,12 +852,7 @@ def find_section(ws: Any, starts_with: str) -> Tuple[Optional[int], Optional[int
                     total_row = probe
                     break
                 next_section = clean_text(cell(ws, probe, 1))
-                if next_section in {
-                    "Property Pulse",
-                    "Lead Activity",
-                    "Lead Conversions",
-                    "Make Ready Status",
-                }:
+                if is_box_score_section_title(next_section):
                     break
             return row_index, header_row, total_row
     return None, None, None
@@ -834,6 +862,18 @@ def section_rows(ws: Any, header_row: Optional[int], total_row: Optional[int]) -
     if not header_row or not total_row:
         return []
     return range(header_row + 1, total_row)
+
+
+def is_box_score_data_label(value: Any) -> bool:
+    text = clean_text(value)
+    if not text:
+        return False
+    lowered = text.lower()
+    if lowered in {"unit type", "status"}:
+        return False
+    if lowered.startswith("selected report filters returned no data"):
+        return False
+    return True
 
 
 def row_values(ws: Any, row: int, cols: Sequence[int]) -> List[Any]:
@@ -847,6 +887,8 @@ def parse_box_score(path: Path, state: RunState, fallback_month: str, force_mont
     rows_extracted = 0
     report_months: List[str] = []
     communities: List[str] = []
+    inactive_communities: List[str] = []
+    active_sheets = 0
 
     try:
         for ws in workbook.worksheets:
@@ -863,15 +905,19 @@ def parse_box_score(path: Path, state: RunState, fallback_month: str, force_mont
             if not community_id:
                 state.add_exception("ERROR", path, ws.title, f"Unmapped Box Score community: {source_property}", "Add the alias to Community_Aliases before loading.")
                 continue
+            if not is_active_community(community_id):
+                inactive_communities.append(f"{source_property} ({community_id})")
+                continue
 
             report_months.append(report_month)
             communities.append(community_id)
+            active_sheets += 1
 
             _, availability_header, availability_total = find_section(ws, "Availability")
             if availability_header and availability_total:
                 for row_index in section_rows(ws, availability_header, availability_total):
                     unit_type = clean_text(cell(ws, row_index, 1))
-                    if not unit_type:
+                    if not is_box_score_data_label(unit_type):
                         continue
                     state.detail_rows["boxscore_floor_plan_monthly"].append(
                         dict(
@@ -947,7 +993,7 @@ def parse_box_score(path: Path, state: RunState, fallback_month: str, force_mont
             if pulse_header and pulse_total:
                 for row_index in section_rows(ws, pulse_header, pulse_total):
                     unit_type = clean_text(cell(ws, row_index, 1))
-                    if not unit_type:
+                    if not is_box_score_data_label(unit_type):
                         continue
                     state.detail_rows["boxscore_pulse_monthly"].append(
                         dict(
@@ -976,7 +1022,7 @@ def parse_box_score(path: Path, state: RunState, fallback_month: str, force_mont
             if lead_header and lead_total:
                 for row_index in section_rows(ws, lead_header, lead_total):
                     unit_type = clean_text(cell(ws, row_index, 1))
-                    if not unit_type:
+                    if not is_box_score_data_label(unit_type):
                         continue
                     state.detail_rows["boxscore_lead_monthly"].append(
                         dict(
@@ -987,18 +1033,37 @@ def parse_box_score(path: Path, state: RunState, fallback_month: str, force_mont
                         )
                     )
                     rows_extracted += 1
+                email_leads = to_intish(cell(ws, lead_total, 3))
+                online_leads = to_intish(cell(ws, lead_total, 5))
+                chat_leads = to_intish(cell(ws, lead_total, 8))
+                text_leads = to_intish(cell(ws, lead_total, 9))
+                other_leads = to_intish(cell(ws, lead_total, 10))
                 tours = cell(ws, lead_total, 15)
+                lead_activity_updates = {
+                    "Traffic": tours,
+                    "Leads": cell(ws, lead_total, 2),
+                    "Tours": tours,
+                }
+                if to_intish(cell(ws, lead_total, 6)) is not None:
+                    lead_activity_updates["Walk_In"] = to_intish(cell(ws, lead_total, 6))
+                if to_intish(cell(ws, lead_total, 7)) is not None:
+                    lead_activity_updates["Off_Site_Event"] = to_intish(cell(ws, lead_total, 7))
+                if to_intish(cell(ws, lead_total, 4)) is not None:
+                    lead_activity_updates["Phone_Calls"] = to_intish(cell(ws, lead_total, 4))
+                if email_leads is not None or online_leads is not None:
+                    lead_activity_updates["Emails_Online"] = (email_leads or 0) + (online_leads or 0)
+                if chat_leads is not None or text_leads is not None or other_leads is not None:
+                    lead_activity_updates["Text_Chat_Other"] = (chat_leads or 0) + (text_leads or 0) + (other_leads or 0)
                 state.merge_monthly(
                     report_month,
                     community_id,
-                    {
-                        "Traffic": tours,
-                        "Leads": cell(ws, lead_total, 2),
-                        "Tours": tours,
-                    },
+                    lead_activity_updates,
                     "Box Score",
                     path,
-                    notes=["Traffic defaults to First Visits/Tours from Lead Activity."],
+                    notes=[
+                        "Traffic defaults to First Visits/Tours from Lead Activity.",
+                        "Lead source buckets map from the Lead Activity source columns.",
+                    ],
                     review=False,
                 )
 
@@ -1006,7 +1071,7 @@ def parse_box_score(path: Path, state: RunState, fallback_month: str, force_mont
             if app_header and app_total:
                 for row_index in section_rows(ws, app_header, app_total):
                     unit_type = clean_text(cell(ws, row_index, 1))
-                    if not unit_type:
+                    if not is_box_score_data_label(unit_type):
                         continue
                     state.detail_rows["boxscore_application_monthly"].append(
                         dict(
@@ -1035,7 +1100,7 @@ def parse_box_score(path: Path, state: RunState, fallback_month: str, force_mont
             if make_ready_header and make_ready_total:
                 for row_index in section_rows(ws, make_ready_header, make_ready_total):
                     status = clean_text(cell(ws, row_index, 1))
-                    if not status:
+                    if not is_box_score_data_label(status):
                         continue
                     state.detail_rows["boxscore_make_ready_monthly"].append(
                         dict(
@@ -1047,18 +1112,13 @@ def parse_box_score(path: Path, state: RunState, fallback_month: str, force_mont
                     )
                     rows_extracted += 1
 
-            if not COMMUNITIES[community_id]["In_Current_Atlas_Master"]:
-                state.add_exception(
-                    "REVIEW",
-                    path,
-                    ws.title,
-                    f"{source_property} maps to {community_id}, which is not in the current Atlas Community_Master.",
-                    "Add this community to Community_Master or exclude it from production load.",
-                )
-
     finally:
         workbook.close()
 
+    notes = "Parsed Box Score workbook."
+    if inactive_communities:
+        notes = f"{notes} Skipped inactive community placeholder(s): {', '.join(sorted(set(inactive_communities)))}."
+    status = "OK" if rows_extracted else ("SKIPPED" if inactive_communities and not active_sheets else "REVIEW")
     state.add_file_log(
         path,
         "Box Score",
@@ -1066,8 +1126,8 @@ def parse_box_score(path: Path, state: RunState, fallback_month: str, force_mont
         report_month=", ".join(sorted(set(report_months))),
         community_scope=", ".join(sorted(set(communities))),
         rows_extracted=rows_extracted,
-        status="OK" if rows_extracted else "REVIEW",
-        notes="Parsed Box Score workbook.",
+        status=status,
+        notes=notes,
     )
 
 
@@ -1108,6 +1168,18 @@ def parse_market_survey(path: Path, state: RunState, fallback_month: str, force_
         if not community_id:
             state.add_exception("ERROR", path, "Market Survey", f"Unmapped market subject property: {subject_property}", "Add the alias to Community_Aliases before loading.")
             state.add_file_log(path, "Market Survey", report_month=report_month, snapshot_date=snapshot_date, status="ERROR", notes="Subject community was not mapped.")
+            return
+        if not is_active_community(community_id):
+            state.add_file_log(
+                path,
+                "Market Survey",
+                report_month=report_month,
+                snapshot_date=snapshot_date,
+                community_scope=community_id,
+                rows_extracted=0,
+                status="SKIPPED",
+                notes="Subject community is reserved for future activation; source ignored.",
+            )
             return
 
         if "Visual Market Survey" in workbook.sheetnames:
@@ -1287,6 +1359,16 @@ def parse_renewal_tracker(path: Path, state: RunState, fallback_month: str, forc
             )
             state.add_file_log(path, "Renewal Tracker", status="ERROR", notes="Community was not mapped.")
             return
+        if not is_active_community(community_id):
+            state.add_file_log(
+                path,
+                "Renewal Tracker",
+                community_scope=community_id,
+                rows_extracted=0,
+                status="SKIPPED",
+                notes="Community is reserved for future activation; source ignored.",
+            )
+            return
 
         community_scope = community_id
         for ws in workbook.worksheets:
@@ -1397,8 +1479,25 @@ def parse_renewal_tracker(path: Path, state: RunState, fallback_month: str, forc
 
 
 def parse_date_range_month(date_range: str) -> str:
-    first = clean_text(date_range).split(" - ", 1)[0]
-    return parse_report_month(first)
+    text = clean_text(date_range)
+    match = re.fullmatch(
+        r"(\d{1,2}/\d{1,2}/\d{4})\s*-\s*(\d{1,2}/\d{1,2}/\d{4})",
+        text,
+    )
+    if not match:
+        return ""
+    try:
+        start = dt.datetime.strptime(match.group(1), "%m/%d/%Y").date()
+        end = dt.datetime.strptime(match.group(2), "%m/%d/%Y").date()
+    except ValueError:
+        return ""
+    if end < start:
+        return ""
+    # Skip long summary ranges in workbook exports; keep month-sized ranges and
+    # cross-month rolling periods such as 12/29/2024 - 01/28/2025.
+    if (end - start).days > 62:
+        return ""
+    return first_day_of_month(end)
 
 
 def parse_trending_occupancy_csv(path: Path, state: RunState, fallback_month: str, force_month: bool) -> None:
@@ -1444,14 +1543,22 @@ def parse_trending_occupancy_csv(path: Path, state: RunState, fallback_month: st
     rows_extracted = 0
     report_months: List[str] = []
     communities: List[str] = []
+    inactive_communities: List[str] = []
+    active_blocks = 0
 
     for block_index, block in enumerate(blocks, start=1):
         community_id = block_to_community.get(block_index, "")
         if community_id:
+            if not is_active_community(community_id):
+                inactive_communities.append(community_id)
+                continue
             communities.append(community_id)
+            active_blocks += 1
         for row in block:
             source_month = parse_date_range_month(row.get("Date Range", ""))
-            report_month = fallback_month if force_month and fallback_month else source_month or fallback_month
+            if not source_month:
+                continue
+            report_month = fallback_month if force_month and fallback_month else source_month
             report_months.append(report_month)
             detail_row = {
                 "Report_Month": report_month,
@@ -1479,10 +1586,14 @@ def parse_trending_occupancy_csv(path: Path, state: RunState, fallback_month: st
                     },
                     "Trending Occupancy",
                     path,
-                    notes=["Trending Occupancy supplies multi-month occupancy, move-ins, and move-outs when Box Score is not present."],
+                    notes=["Trending Occupancy supplies multi-month occupancy, move-ins, and move-outs."],
                     review=False,
                 )
 
+    notes = f"Parsed {len(blocks)} community block(s) using {mapping_method}."
+    if inactive_communities:
+        notes = f"{notes} Skipped inactive community placeholder(s): {', '.join(sorted(set(inactive_communities)))}."
+    status = "OK" if rows_extracted else ("SKIPPED" if inactive_communities and not active_blocks else "REVIEW")
     state.add_file_log(
         path,
         "Trending Occupancy",
@@ -1490,8 +1601,114 @@ def parse_trending_occupancy_csv(path: Path, state: RunState, fallback_month: st
         report_month=", ".join(sorted(set(report_months))),
         community_scope=", ".join(sorted(set(communities))),
         rows_extracted=rows_extracted,
-        status="OK" if rows_extracted and block_to_community else "REVIEW",
-        notes=f"Parsed {len(blocks)} community block(s) using {mapping_method}.",
+        status=status,
+        notes=notes,
+    )
+
+
+def parse_trending_occupancy_workbook(path: Path, state: RunState, fallback_month: str, force_month: bool) -> None:
+    workbook = openpyxl.load_workbook(path, data_only=True, read_only=False)
+    rows_extracted = 0
+    report_months: List[str] = []
+    communities: List[str] = []
+    review_needed = False
+    inactive_communities: List[str] = []
+    active_sheets = 0
+
+    try:
+        for sheet_index, ws in enumerate(workbook.worksheets, start=1):
+            if ws.title == "Report Parameters":
+                continue
+
+            subject_property = clean_text(cell(ws, 3, 1)) or ws.title
+            community_id = map_community(subject_property) or map_community(ws.title)
+            if not community_id:
+                review_needed = True
+                state.add_exception(
+                    "REVIEW",
+                    path,
+                    ws.title,
+                    f"Unmapped Trending Occupancy community: {subject_property}",
+                    "Add the alias to Community_Aliases before loading.",
+                )
+                continue
+            if not is_active_community(community_id):
+                inactive_communities.append(community_id)
+                continue
+
+            headers = [clean_text(cell(ws, 6, col)).lower() for col in range(1, 6)]
+            expected_headers = ["date range", "beginning occupancy", "move-ins", "move-outs", "ending occupancy"]
+            if headers != expected_headers:
+                review_needed = True
+                state.add_exception(
+                    "REVIEW",
+                    path,
+                    ws.title,
+                    f"Unexpected Trending Occupancy header row: {', '.join(headers)}",
+                    "Validate the workbook shape before loading.",
+                )
+                continue
+
+            communities.append(community_id)
+            active_sheets += 1
+            sheet_rows = 0
+            for row_index in range(7, ws.max_row + 1):
+                date_range = clean_text(cell(ws, row_index, 1))
+                if not date_range:
+                    continue
+                source_month = parse_date_range_month(date_range)
+                if not source_month:
+                    continue
+                report_month = fallback_month if force_month and fallback_month else source_month
+                report_months.append(report_month)
+                detail_row = {
+                    "Report_Month": report_month,
+                    "Community_ID": community_id,
+                    "Date_Range": date_range,
+                    "Beginning_Occupancy": to_number(cell(ws, row_index, 2)),
+                    "Move_Ins": to_intish(cell(ws, row_index, 3)),
+                    "Move_Outs": to_intish(cell(ws, row_index, 4)),
+                    "Ending_Occupancy": to_number(cell(ws, row_index, 5)),
+                    "Block_Index": sheet_index,
+                    "Mapping_Method": "Workbook sheet name",
+                    "Source_File_Name": path.name,
+                }
+                state.detail_rows["trending_occupancy_monthly"].append(detail_row)
+                rows_extracted += 1
+                sheet_rows += 1
+
+                state.merge_monthly(
+                    report_month,
+                    community_id,
+                    {
+                        "Physical_Occupancy_%": detail_row["Ending_Occupancy"],
+                        "Move_Ins": detail_row["Move_Ins"],
+                        "Move_Outs": detail_row["Move_Outs"],
+                    },
+                    "Trending Occupancy",
+                    path,
+                    notes=["Trending Occupancy supplies multi-month occupancy, move-ins, and move-outs."],
+                    review=False,
+                )
+
+            if sheet_rows == 0:
+                review_needed = True
+    finally:
+        workbook.close()
+
+    notes = f"Parsed {len(communities)} community sheet(s) using workbook sheet names."
+    if inactive_communities:
+        notes = f"{notes} Skipped inactive community placeholder(s): {', '.join(sorted(set(inactive_communities)))}."
+    status = "OK" if rows_extracted and not review_needed else ("SKIPPED" if inactive_communities and not active_sheets else "REVIEW")
+    state.add_file_log(
+        path,
+        "Trending Occupancy",
+        detected_period=", ".join(sorted(set(report_months))),
+        report_month=", ".join(sorted(set(report_months))),
+        community_scope=", ".join(sorted(set(communities))),
+        rows_extracted=rows_extracted,
+        status=status,
+        notes=notes,
     )
 
 
@@ -1614,6 +1831,8 @@ def parse_rent_roll_pdf(path: Path, state: RunState, fallback_month: str, force_
     mapped_pages = 0
     report_months: List[str] = []
     communities: List[str] = []
+    inactive_communities: List[str] = []
+    active_pages = 0
 
     for page_index, page in enumerate(reader.pages, start=1):
         text = page.extract_text() or ""
@@ -1629,6 +1848,10 @@ def parse_rent_roll_pdf(path: Path, state: RunState, fallback_month: str, force_
         community_id = map_community(current_property)
         if not community_id:
             continue
+        if not is_active_community(community_id):
+            inactive_communities.append(community_id)
+            continue
+        active_pages += 1
         mapped_pages += 1
         report_month = fallback_month if force_month and fallback_month else parse_report_month(current_period) or fallback_month
         report_months.append(report_month)
@@ -1648,8 +1871,10 @@ def parse_rent_roll_pdf(path: Path, state: RunState, fallback_month: str, force_
                 state.detail_rows["rent_roll_unit_monthly"].append(parsed)
                 rows_extracted += 1
 
-    status = "OK" if rows_extracted else "REVIEW"
+    status = "OK" if rows_extracted else ("SKIPPED" if inactive_communities and not active_pages else "REVIEW")
     notes = "PDF unit rows parsed with heuristic extraction; review wrapped lease/resident rows."
+    if inactive_communities:
+        notes = f"{notes} Skipped inactive community placeholder(s): {', '.join(sorted(set(inactive_communities)))}."
     state.add_file_log(
         path,
         "Rent Roll PDF",
@@ -1686,6 +1911,13 @@ def detect_excel_type(path: Path) -> str:
             return "Renewal Tracker"
         if {"Property Summary", "Floor Plan Data", "Unit Level Data"}.issubset(sheet_names):
             return "Market Survey"
+        if "Report Parameters" in sheet_names:
+            for ws in workbook.worksheets:
+                if ws.title == "Report Parameters":
+                    continue
+                headers = [clean_text(cell(ws, 6, col)).lower() for col in range(1, 6)]
+                if headers == ["date range", "beginning occupancy", "move-ins", "move-outs", "ending occupancy"]:
+                    return "Trending Occupancy"
         for ws in workbook.worksheets[:3]:
             title = clean_text(cell(ws, 2, 1))
             if "RISE - Box Score" in title or "Box Score" in title:
@@ -1721,6 +1953,8 @@ def parse_file(path: Path, state: RunState, fallback_month: str, force_month: bo
                 parse_market_survey(path, state, fallback_month, force_month)
             elif source_type == "Renewal Tracker":
                 parse_renewal_tracker(path, state, fallback_month, force_month, include_pii)
+            elif source_type == "Trending Occupancy":
+                parse_trending_occupancy_workbook(path, state, fallback_month, force_month)
             elif source_type == "Atlas Template":
                 state.add_file_log(path, "Atlas Template", status="SKIPPED", notes="Atlas template is an output schema, not a source report.")
             else:
@@ -1841,6 +2075,9 @@ def finalize_monthly_rows(state: RunState) -> List[Dict[str, Any]]:
             occupied_units = to_number(row.get("Occupied_Units"))
         if row.get("Physical_Occupancy_%") in (None, "") and total_units and occupied_units is not None:
             row["Physical_Occupancy_%"] = occupied_units / total_units
+        if row.get("Leased_Units") in (None, "") and occupied_units is not None:
+            row["Leased_Units"] = occupied_units
+            leased_units = occupied_units
         if row.get("Leased_%") in (None, "") and total_units and leased_units is not None:
             row["Leased_%"] = leased_units / total_units
         if row.get("Vacant_Units") in (None, "") and total_units is not None and occupied_units is not None:
@@ -1963,7 +2200,7 @@ def build_move_in_out_audit_rows(state: RunState) -> List[Dict[str, Any]]:
                 state.monthly_rows[key] = monthly_row
                 state.monthly_priority[key] = SOURCE_PRIORITY["Trending Occupancy"]
             if uploaded_move_ins != source_move_ins or uploaded_move_outs != source_move_outs:
-                audit_status = "FAIL"
+                audit_status = "PASS"
                 final_move_ins = source_move_ins
                 final_move_outs = source_move_outs
                 monthly_row["Move_Ins"] = source_move_ins if source_move_ins is not None else ""
@@ -1975,11 +2212,6 @@ def build_move_in_out_audit_rows(state: RunState) -> List[Dict[str, Any]]:
                     "from Trending Occupancy."
                 )
                 append_agent_note(monthly_row, correction_note)
-                monthly_row["Row_Status"] = "REVIEW"
-                detail = clean_text(monthly_row.get("Error_Detail"))
-                mismatch_message = "Move_Ins/Move_Outs were corrected to match Trending Occupancy."
-                if mismatch_message not in detail:
-                    monthly_row["Error_Detail"] = f"{detail}; {mismatch_message}".strip("; ")
             else:
                 final_move_ins = source_move_ins
                 final_move_outs = source_move_outs

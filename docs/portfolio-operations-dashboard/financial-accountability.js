@@ -3743,6 +3743,18 @@
     return buildCrosswalkRowsFromLines(financial.lines, operations, leasing);
   }
 
+  function getAvailableViewPeriods() {
+    const periods = new Set();
+    for (const dataset of Object.values(state.datasets || {})) {
+      for (const record of dataset?.records || []) {
+        if (record?.period) {
+          periods.add(record.period);
+        }
+      }
+    }
+    return Array.from(periods).sort(comparePeriod);
+  }
+
   function buildPropertySummary(property, asOf) {
     const financial = summarizeFinancial(property, asOf);
     const operations = summarizeOperations(property, asOf);
@@ -3799,6 +3811,7 @@
     const financialSummaries = propertySummaries.map((summary) => summary.financial).filter(Boolean);
     const leasingSummaries = propertySummaries.map((summary) => summary.leasing).filter(Boolean);
     const operationsSummaries = propertySummaries.map((summary) => summary.operations).filter(Boolean);
+    const hasFinancialData = financialSummaries.length > 0;
     const totalOperationsUnits = operationsSummaries.reduce((sum, entry) => sum + Math.max(0, Number(entry.units) || 0), 0);
     const totalTurns = operationsSummaries.reduce((sum, entry) => sum + Math.max(0, Number(entry.turns) || 0), 0);
     const remainingMonths =
@@ -3845,6 +3858,12 @@
           weight: Math.max(0, Number(entry.units) || 0),
         })),
       ),
+      leasedPct: weightedAverage(
+        leasingSummaries.map((entry) => ({
+          value: entry.leasedPct,
+          weight: Math.max(0, Number(entry.units) || 0),
+        })),
+      ),
       delinquencyPct: weightedAverage(
         leasingSummaries.map((entry) => ({
           value: entry.delinquencyPct,
@@ -3859,38 +3878,69 @@
       asOf,
     };
 
-    portfolio.noiActual = portfolio.revenueActual - portfolio.expenseActual;
-    portfolio.noiBudget = portfolio.revenueBudget - portfolio.expenseBudget;
-    portfolio.noiVariance = portfolio.noiActual - portfolio.noiBudget;
-    portfolio.projectedGap = portfolio.projectedNoi - portfolio.annualBudgetNoi;
-    portfolio.currentMonthVariance = portfolio.currentMonthNoi - portfolio.currentMonthBudgetNoi;
-    portfolio.currentMonthPacePct = portfolio.currentMonthBudgetNoi
-      ? (portfolio.currentMonthNoi / portfolio.currentMonthBudgetNoi) * 100
-      : null;
-    portfolio.momNoiChange =
-      portfolio.priorMonthNoi != null ? portfolio.currentMonthNoi - portfolio.priorMonthNoi : null;
-    portfolio.yoyNoiChange =
-      portfolio.priorYearNoi != null ? portfolio.currentMonthNoi - portfolio.priorYearNoi : null;
-    portfolio.yoyBudgetNoiChange =
-      portfolio.priorYearBudgetNoi != null ? portfolio.currentMonthNoi - portfolio.priorYearBudgetNoi : null;
-    portfolio.noiYoYImprovement =
-      portfolio.noiYtdCurrent != null && portfolio.noiYtdPrior != null
-        ? portfolio.noiYtdCurrent - portfolio.noiYtdPrior
+    if (hasFinancialData) {
+      portfolio.noiActual = portfolio.revenueActual - portfolio.expenseActual;
+      portfolio.noiBudget = portfolio.revenueBudget - portfolio.expenseBudget;
+      portfolio.noiVariance = portfolio.noiActual - portfolio.noiBudget;
+      portfolio.projectedGap = portfolio.projectedNoi - portfolio.annualBudgetNoi;
+      portfolio.currentMonthVariance = portfolio.currentMonthNoi - portfolio.currentMonthBudgetNoi;
+      portfolio.currentMonthPacePct = portfolio.currentMonthBudgetNoi
+        ? (portfolio.currentMonthNoi / portfolio.currentMonthBudgetNoi) * 100
         : null;
-    portfolio.noiTwoYearImprovement =
-      portfolio.noiYtdCurrent != null && portfolio.noiYtdTwoBack != null
-        ? portfolio.noiYtdCurrent - portfolio.noiYtdTwoBack
-        : null;
+      portfolio.momNoiChange =
+        portfolio.priorMonthNoi != null ? portfolio.currentMonthNoi - portfolio.priorMonthNoi : null;
+      portfolio.yoyNoiChange =
+        portfolio.priorYearNoi != null ? portfolio.currentMonthNoi - portfolio.priorYearNoi : null;
+      portfolio.yoyBudgetNoiChange =
+        portfolio.priorYearBudgetNoi != null ? portfolio.currentMonthNoi - portfolio.priorYearBudgetNoi : null;
+      portfolio.noiYoYImprovement =
+        portfolio.noiYtdCurrent != null && portfolio.noiYtdPrior != null
+          ? portfolio.noiYtdCurrent - portfolio.noiYtdPrior
+          : null;
+      portfolio.noiTwoYearImprovement =
+        portfolio.noiYtdCurrent != null && portfolio.noiYtdTwoBack != null
+          ? portfolio.noiYtdCurrent - portfolio.noiYtdTwoBack
+          : null;
+    } else {
+      portfolio.revenueActual = null;
+      portfolio.revenueBudget = null;
+      portfolio.expenseActual = null;
+      portfolio.expenseBudget = null;
+      portfolio.currentMonthNoi = null;
+      portfolio.currentMonthBudgetNoi = null;
+      portfolio.priorMonthNoi = null;
+      portfolio.priorYearNoi = null;
+      portfolio.priorYearBudgetNoi = null;
+      portfolio.projectedNoi = null;
+      portfolio.annualBudgetNoi = null;
+      portfolio.requiredMonthlyLift = null;
+      portfolio.currentMonthVariance = null;
+      portfolio.currentMonthPacePct = null;
+      portfolio.noiActual = null;
+      portfolio.noiBudget = null;
+      portfolio.noiVariance = null;
+      portfolio.projectedGap = null;
+      portfolio.momNoiChange = null;
+      portfolio.yoyNoiChange = null;
+      portfolio.yoyBudgetNoiChange = null;
+      portfolio.noiYtdCurrent = null;
+      portfolio.noiYtdPrior = null;
+      portfolio.noiYtdTwoBack = null;
+      portfolio.noiYoYImprovement = null;
+      portfolio.noiTwoYearImprovement = null;
+      portfolio.currentMonthBudgetMatches = 0;
+      portfolio.currentMonthBudgetTotalLines = 0;
+      portfolio.topLines = [];
+    }
 
     return portfolio;
   }
 
   function computeViewModel() {
-    const availablePeriods = Array.from(
-      new Set((state.datasets.financial?.records || []).map((record) => record.period).filter(Boolean)),
-    ).sort(comparePeriod);
+    const availablePeriods = getAvailableViewPeriods();
+    const hasAnyDataset = Object.values(state.datasets).some((dataset) => dataset?.records?.length);
 
-    if (!availablePeriods.length || !state.datasets.financial?.records.length) {
+    if (!availablePeriods.length || !hasAnyDataset) {
       return null;
     }
 
@@ -3925,6 +3975,7 @@
 
     return {
       availablePeriods,
+      hasFinancialData: propertySummaries.some((summary) => Boolean(summary.financial)),
       allProperties,
       scopedProperties,
       visibleEntities,
@@ -4720,30 +4771,14 @@
     }
 
     const score = summary.score ?? 0;
-    const driverText = summary.crosswalkRows[0]?.reason || "No crosswalk narrative available yet.";
-
-    dom.selectedPropertyShell.innerHTML = `
-      <div class="property-hero">
-        <div class="score-ring" style="--score:${score}">
-          <div class="score-ring-inner">
-            <div>
-              <strong>${formatNumber(score, 0)}</strong>
-              <span>Score</span>
-            </div>
-          </div>
-        </div>
-        <div>
-          <h2>${escapeHtml(summary.property)}</h2>
-          <p>${escapeHtml(driverText)}</p>
-          <div class="hero-meta">
-            <span class="chip ${scoreClass(summary.financial?.score)}">Financial ${formatNumber(summary.financial?.score, 0)}</span>
-            <span class="chip ${scoreClass(summary.operations?.score)}">Operations ${formatNumber(summary.operations?.score, 0)}</span>
-            <span class="chip ${scoreClass(summary.leasing?.score)}">Leasing ${formatNumber(summary.leasing?.score, 0)}</span>
-            <span class="chip ${score < 55 ? "bad" : score < 75 ? "warn" : "good"}">${escapeHtml(summary.risk)}</span>
-          </div>
-        </div>
-      </div>
-
+    const hasFinancialData = Boolean(view.hasFinancialData);
+    const driverText =
+      summary.crosswalkRows[0]?.reason ||
+      (hasFinancialData
+        ? "No crosswalk narrative available yet."
+        : "Operations and leasing data are loaded for this community.");
+    const detailSection = hasFinancialData
+      ? `
       <div class="metric-triad">
         <div class="metric-block">
           <div class="kicker">YTD NOI</div>
@@ -4777,6 +4812,56 @@
           }</div>
         </div>
       </div>
+      `
+      : `
+      <div class="metric-triad">
+        <div class="metric-block">
+          <div class="kicker">Occupancy</div>
+          <div class="headline">${formatPercent(summary.leasing?.occupancyPct)}</div>
+          <div class="note">Leased ${formatPercent(summary.leasing?.leasedPct)} · Delinquency ${formatPercent(summary.leasing?.delinquencyPct)}</div>
+        </div>
+        <div class="metric-block">
+          <div class="kicker">Leasing Pace</div>
+          <div class="headline">${formatPercent(summary.leasing?.trafficToLeasePct)}</div>
+          <div class="note">Traffic-to-lease conversion · Applications ${formatNumber(summary.leasing?.applications, 0)} · Leases ${formatNumber(
+            summary.leasing?.leases,
+            0,
+          )}</div>
+        </div>
+        <div class="metric-block">
+          <div class="kicker">Operations</div>
+          <div class="headline">${formatNumber(summary.operations?.turnsPer100, 1)}</div>
+          <div class="note">
+            Turns / 100 units · Open WOs / 100 ${formatNumber(summary.operations?.openWorkOrdersPer100, 1)} · MSOE ${formatPercent(
+              summary.operations?.msoeCompletionPct,
+            )}
+          </div>
+        </div>
+      </div>
+      `;
+
+    dom.selectedPropertyShell.innerHTML = `
+      <div class="property-hero">
+        <div class="score-ring" style="--score:${score}">
+          <div class="score-ring-inner">
+            <div>
+              <strong>${formatNumber(score, 0)}</strong>
+              <span>Score</span>
+            </div>
+          </div>
+        </div>
+        <div>
+          <h2>${escapeHtml(summary.property)}</h2>
+          <p>${escapeHtml(driverText)}</p>
+          <div class="hero-meta">
+            <span class="chip ${scoreClass(summary.financial?.score)}">Financial ${formatNumber(summary.financial?.score, 0)}</span>
+            <span class="chip ${scoreClass(summary.operations?.score)}">Operations ${formatNumber(summary.operations?.score, 0)}</span>
+            <span class="chip ${scoreClass(summary.leasing?.score)}">Leasing ${formatNumber(summary.leasing?.score, 0)}</span>
+            <span class="chip ${score < 55 ? "bad" : score < 75 ? "warn" : "good"}">${escapeHtml(summary.risk)}</span>
+          </div>
+        </div>
+      </div>
+      ${detailSection}
     `;
   }
 
@@ -5063,80 +5148,114 @@
   function buildBoardSummaryBullets(view) {
     const portfolio = view.portfolio;
     const selected = view.selectedSummary;
+    const hasFinancialData = Boolean(view.hasFinancialData);
     const topProps = portfolio.topProperties
-      .map(
-        (summary) =>
-          `${summary.property} (${formatNumber(summary.score, 0)}) is ${summary.risk.toLowerCase()} with NOI variance ${formatCurrency(summary.financial?.noiVariance)} and primary pressure in ${summary.primaryDriver}.`,
+      .map((summary) =>
+        hasFinancialData
+          ? `${summary.property} (${formatNumber(summary.score, 0)}) is ${summary.risk.toLowerCase()} with NOI variance ${formatCurrency(summary.financial?.noiVariance)} and primary pressure in ${summary.primaryDriver}.`
+          : `${summary.property} (${formatNumber(summary.score, 0)}) is ${summary.risk.toLowerCase()} with ${formatPercent(summary.leasing?.occupancyPct)} occupancy, ${formatPercent(summary.leasing?.leasedPct)} leased, and primary pressure in ${summary.primaryDriver}.`,
       )
       .slice(0, 3);
 
-    const portfolioLines = portfolio.topLines
-      .filter((line) => line.unfavorableAmount > 0)
-      .map(
-        (line) =>
-          `${line.lineItem} is carrying ${formatCurrency(line.unfavorableAmount)} of unfavorable variance across the portfolio.`,
-      )
-      .slice(0, 3);
+    const portfolioLines = hasFinancialData
+      ? portfolio.topLines
+          .filter((line) => line.unfavorableAmount > 0)
+          .map(
+            (line) =>
+              `${line.lineItem} is carrying ${formatCurrency(line.unfavorableAmount)} of unfavorable variance across the portfolio.`,
+          )
+          .slice(0, 3)
+      : [];
 
-    const selectedBullets = [
-      `${selected.property} is tracking ${formatCurrency(selected.financial?.noiVariance)} to budget with projected year-end NOI of ${formatCurrency(selected.financial?.projectedNoi)}.`,
-      `${selected.property} posted ${formatCurrency(selected.financial?.currentMonthNoi)} in ${view.portfolio.asOf}, a ${formatCurrency(
-        selected.financial?.momNoiChange,
-      )} MoM move and ${formatCurrency(selected.financial?.yoyNoiChange)} YoY change.`,
-      selected.financial?.priorYearBudgetNoi != null
-        ? `${selected.property} is ${formatCurrency(selected.financial?.yoyBudgetNoiChange)} versus prior-year budget baseline (${formatCurrency(
-            selected.financial?.priorYearBudgetNoi,
-          )}).`
-        : `Load prior-year approved budget rows for ${selected.property} to activate YoY budget baseline comparisons.`,
-      selected.financial?.projectedGap < 0 && selected.financial?.remainingMonths > 0
-        ? `To recover the current projected gap, ${selected.property} needs roughly ${formatCurrency(
-            selected.financial?.requiredMonthlyLift,
-          )} of additional NOI per remaining month.`
-        : `${selected.property} is currently pacing at or above its projected annual NOI plan.`,
-      selected.crosswalkRows[0]?.reason || "Upload operations and leasing data to complete the driver narrative.",
-      selected.operations
-        ? `Operationally, turns are ${formatNumber(selected.operations.turnsPer100, 1)} per 100 units with ${formatNumber(
-            selected.operations.openWorkOrdersPer100,
-            1,
-          )} open work orders per 100 units.`
-        : "Operational data is not loaded for the selected property.",
-      selected.leasing
-        ? `Leasing is at ${formatPercent(selected.leasing.occupancyPct)} occupancy, ${formatPercent(
-            selected.leasing.leasedPct,
-          )} leased, with delinquency at ${formatPercent(selected.leasing.delinquencyPct)}.`
-        : "Leasing data is not loaded for the selected property.",
-    ];
+    const selectedBullets = hasFinancialData
+      ? [
+          `${selected.property} is tracking ${formatCurrency(selected.financial?.noiVariance)} to budget with projected year-end NOI of ${formatCurrency(selected.financial?.projectedNoi)}.`,
+          `${selected.property} posted ${formatCurrency(selected.financial?.currentMonthNoi)} in ${view.portfolio.asOf}, a ${formatCurrency(
+            selected.financial?.momNoiChange,
+          )} MoM move and ${formatCurrency(selected.financial?.yoyNoiChange)} YoY change.`,
+          selected.financial?.priorYearBudgetNoi != null
+            ? `${selected.property} is ${formatCurrency(selected.financial?.yoyBudgetNoiChange)} versus prior-year budget baseline (${formatCurrency(
+                selected.financial?.priorYearBudgetNoi,
+              )}).`
+            : `Load prior-year approved budget rows for ${selected.property} to activate YoY budget baseline comparisons.`,
+          selected.financial?.projectedGap < 0 && selected.financial?.remainingMonths > 0
+            ? `To recover the current projected gap, ${selected.property} needs roughly ${formatCurrency(
+                selected.financial?.requiredMonthlyLift,
+              )} of additional NOI per remaining month.`
+            : `${selected.property} is currently pacing at or above its projected annual NOI plan.`,
+          selected.crosswalkRows[0]?.reason || "Upload operations and leasing data to complete the driver narrative.",
+          selected.operations
+            ? `Operationally, turns are ${formatNumber(selected.operations.turnsPer100, 1)} per 100 units with ${formatNumber(
+                selected.operations.openWorkOrdersPer100,
+                1,
+              )} open work orders per 100 units.`
+            : "Operational data is not loaded for the selected property.",
+          selected.leasing
+            ? `Leasing is at ${formatPercent(selected.leasing.occupancyPct)} occupancy, ${formatPercent(
+                selected.leasing.leasedPct,
+              )} leased, with delinquency at ${formatPercent(selected.leasing.delinquencyPct)}.`
+            : "Leasing data is not loaded for the selected property.",
+        ]
+      : [
+          `${selected.property} is at ${formatPercent(selected.leasing?.occupancyPct)} occupancy and ${formatPercent(selected.leasing?.leasedPct)} leased through ${view.portfolio.asOf}.`,
+          selected.leasing?.trafficToLeasePct != null
+            ? `${selected.property} is converting ${formatPercent(selected.leasing.trafficToLeasePct)} of traffic to leases with delinquency at ${formatPercent(selected.leasing?.delinquencyPct)}.`
+            : `${selected.property} delinquency is ${formatPercent(selected.leasing?.delinquencyPct)}.`,
+          selected.operations
+            ? `${selected.property} is seeing ${formatNumber(selected.operations.turnsPer100, 1)} turns / 100 units and ${formatNumber(
+                selected.operations.openWorkOrdersPer100,
+                1,
+              )} open work orders / 100 units.`
+            : `Operational data is not loaded for ${selected.property}.`,
+          selected.operations?.msoeCompletionPct != null
+            ? `${selected.property} MSOE completion is ${formatPercent(selected.operations.msoeCompletionPct)}.`
+            : `MSOE completion is not loaded for ${selected.property}.`,
+          selected.crosswalkRows[0]?.reason || `Leasing and operations data are loaded for ${selected.property}, but no financial crosswalk is available yet.`,
+        ];
 
-    const portfolioBullets = [
-      `Portfolio NOI is ${formatCurrency(portfolio.noiActual)} against ${formatCurrency(
-        portfolio.noiBudget,
-      )} budget through ${portfolio.asOf}, a variance of ${formatCurrency(portfolio.noiVariance)}.`,
-      `${portfolio.asOf} NOI is ${formatCurrency(portfolio.currentMonthNoi)} versus ${formatCurrency(
-        portfolio.currentMonthBudgetNoi,
-      )} budget, with ${formatCurrency(portfolio.momNoiChange)} MoM movement and ${formatCurrency(
-        portfolio.yoyNoiChange,
-      )} YoY change.`,
-      portfolio.priorYearBudgetNoi != null
-        ? `${portfolio.asOf} NOI is ${formatCurrency(portfolio.yoyBudgetNoiChange)} versus prior-year budget baseline ${formatCurrency(
-            portfolio.priorYearBudgetNoi,
-          )}.`
-        : "Prior-year approved budget baseline has not been loaded for YoY budget comparisons.",
-      portfolio.noiYoYImprovement != null
-        ? `NOI YTD improvement is ${formatCurrency(portfolio.noiYoYImprovement)} versus last year and ${formatCurrency(
-            portfolio.noiTwoYearImprovement,
-          )} versus two years ago.`
-        : "NOI YTD trend will populate after prior-year benchmark rows are loaded.",
-      `Projected full-year NOI is ${formatCurrency(portfolio.projectedNoi)} versus annual plan of ${formatCurrency(
-        portfolio.annualBudgetNoi,
-      )}, creating a projected gap of ${formatCurrency(portfolio.projectedGap)}.`,
-      portfolio.projectedGap < 0 && portfolio.remainingMonths > 0
-        ? `Closing the current projected gap requires about ${formatCurrency(
-            portfolio.requiredMonthlyLift,
-          )} of NOI improvement per remaining month across the loaded portfolio.`
-        : "The current projected run-rate is pacing at or above annual plan.",
-      ...topProps,
-      ...portfolioLines,
-    ];
+    const portfolioBullets = hasFinancialData
+      ? [
+          `Portfolio NOI is ${formatCurrency(portfolio.noiActual)} against ${formatCurrency(
+            portfolio.noiBudget,
+          )} budget through ${portfolio.asOf}, a variance of ${formatCurrency(portfolio.noiVariance)}.`,
+          `${portfolio.asOf} NOI is ${formatCurrency(portfolio.currentMonthNoi)} versus ${formatCurrency(
+            portfolio.currentMonthBudgetNoi,
+          )} budget, with ${formatCurrency(portfolio.momNoiChange)} MoM movement and ${formatCurrency(
+            portfolio.yoyNoiChange,
+          )} YoY change.`,
+          portfolio.priorYearBudgetNoi != null
+            ? `${portfolio.asOf} NOI is ${formatCurrency(portfolio.yoyBudgetNoiChange)} versus prior-year budget baseline ${formatCurrency(
+                portfolio.priorYearBudgetNoi,
+              )}.`
+            : "Prior-year approved budget baseline has not been loaded for YoY budget comparisons.",
+          portfolio.noiYoYImprovement != null
+            ? `NOI YTD improvement is ${formatCurrency(portfolio.noiYoYImprovement)} versus last year and ${formatCurrency(
+                portfolio.noiTwoYearImprovement,
+              )} versus two years ago.`
+            : "NOI YTD trend will populate after prior-year benchmark rows are loaded.",
+          `Projected full-year NOI is ${formatCurrency(portfolio.projectedNoi)} versus annual plan of ${formatCurrency(
+            portfolio.annualBudgetNoi,
+          )}, creating a projected gap of ${formatCurrency(portfolio.projectedGap)}.`,
+          portfolio.projectedGap < 0 && portfolio.remainingMonths > 0
+            ? `Closing the current projected gap requires about ${formatCurrency(
+                portfolio.requiredMonthlyLift,
+              )} of NOI improvement per remaining month across the loaded portfolio.`
+            : "The current projected run-rate is pacing at or above annual plan.",
+          ...topProps,
+          ...portfolioLines,
+        ]
+      : [
+          `Portfolio occupancy is ${formatPercent(portfolio.occupancyPct)} with delinquency at ${formatPercent(
+            portfolio.delinquencyPct,
+          )} across ${formatNumber(portfolio.topProperties.length)} properties.`,
+          `Portfolio operations are running at ${formatNumber(portfolio.turnsPer100, 1)} turns / 100 units.`,
+          `Top communities by current score: ${portfolio.topProperties
+            .slice(0, 3)
+            .map((summary) => `${summary.property} (${formatNumber(summary.score, 0)})`)
+            .join(", ")}.`,
+          `Upload financial rows to unlock NOI, budget variance, and recovery pacing for ${portfolio.asOf}.`,
+          ...topProps,
+        ];
 
     return { portfolioBullets, selectedBullets };
   }
@@ -5786,9 +5905,11 @@
 
   function buildOwnershipReportHtml(view) {
     const { portfolioBullets, selectedBullets } = buildBoardSummaryBullets(view);
+    const hasFinancialData = Boolean(view.hasFinancialData);
     const rankingRows = view.propertySummaries
-      .map(
-        (summary) => `
+      .map((summary) =>
+        hasFinancialData
+          ? `
           <tr>
             <td>${escapeHtml(summary.property)}</td>
             <td>${formatNumber(summary.score, 0)}</td>
@@ -5798,16 +5919,48 @@
             <td>${summary.leasing ? formatPercent(summary.leasing.occupancyPct) : "No data"}</td>
             <td>${escapeHtml(summary.primaryDriver)}</td>
           </tr>
+        `
+          : `
+          <tr>
+            <td>${escapeHtml(summary.property)}</td>
+            <td>${formatNumber(summary.score, 0)}</td>
+            <td>${escapeHtml(summary.risk)}</td>
+            <td>${summary.leasing ? formatPercent(summary.leasing.occupancyPct) : "No data"}</td>
+            <td>${summary.leasing ? formatPercent(summary.leasing.leasedPct) : "No data"}</td>
+            <td>${summary.operations ? formatNumber(summary.operations.turnsPer100, 1) : "No data"}</td>
+            <td>${escapeHtml(summary.primaryDriver)}</td>
+          </tr>
         `,
       )
       .join("");
+
+    const reportTitle = hasFinancialData ? "RISE Executive Accountability Ownership Report" : "ATLAS RISE Community Progress Report";
+    const reportIntro = hasFinancialData
+      ? `This report summarizes current financial performance, scorecard context, and driver narratives for the selected portfolio snapshot.`
+      : `This report summarizes the uploaded operations and leasing data for the selected community snapshot. Financial rows are not loaded yet, so the report emphasizes occupancy, leasing, turns, and delinquency instead of NOI.`;
+    const titleMetrics = hasFinancialData
+      ? [
+          { label: "YTD NOI", value: formatCurrency(view.portfolio.noiActual) },
+          { label: "Budget NOI", value: formatCurrency(view.portfolio.noiBudget) },
+          { label: "Projected NOI", value: formatCurrency(view.portfolio.projectedNoi) },
+          { label: "Avg Portfolio Score", value: formatNumber(view.portfolio.score, 0) },
+        ]
+      : [
+          { label: "Average Occupancy", value: formatPercent(view.portfolio.occupancyPct) },
+          { label: "Average Leased", value: formatPercent(view.portfolio.leasedPct) },
+          { label: "Turns / 100", value: formatNumber(view.portfolio.turnsPer100, 1) },
+          { label: "Avg Portfolio Score", value: formatNumber(view.portfolio.score, 0) },
+        ];
+    const rankingHeaders = hasFinancialData
+      ? ["Property", "Score", "Risk", "NOI Var", "Proj Gap", "Occ", "Primary Driver"]
+      : ["Property", "Score", "Risk", "Occupancy", "Leased", "Turns / 100", "Primary Driver"];
 
     return `
       <!DOCTYPE html>
       <html lang="en">
         <head>
           <meta charset="utf-8" />
-          <title>RISE Ownership Report</title>
+          <title>${escapeHtml(reportTitle)}</title>
           <style>
             body { font-family: Arial, sans-serif; margin: 28px; color: #1f2937; }
             h1, h2, h3 { margin: 0 0 10px; color: #17324a; }
@@ -5824,14 +5977,18 @@
           </style>
         </head>
         <body>
-          <h1>RISE Executive Accountability Ownership Report</h1>
+          <h1>${escapeHtml(reportTitle)}</h1>
           <p>As of ${escapeHtml(view.portfolio.asOf)}</p>
+          <p>${escapeHtml(reportIntro)}</p>
 
           <div class="grid">
-            <div class="card"><div class="label">YTD NOI</div><div class="value">${formatCurrency(view.portfolio.noiActual)}</div></div>
-            <div class="card"><div class="label">Budget NOI</div><div class="value">${formatCurrency(view.portfolio.noiBudget)}</div></div>
-            <div class="card"><div class="label">Projected NOI</div><div class="value">${formatCurrency(view.portfolio.projectedNoi)}</div></div>
-            <div class="card"><div class="label">Avg Portfolio Score</div><div class="value">${formatNumber(view.portfolio.score, 0)}</div></div>
+            ${titleMetrics
+              .map(
+                (card) => `
+              <div class="card"><div class="label">${escapeHtml(card.label)}</div><div class="value">${escapeHtml(card.value)}</div></div>
+            `,
+              )
+              .join("")}
           </div>
 
           <h2>Portfolio summary</h2>
@@ -5844,13 +6001,7 @@
           <table>
             <thead>
               <tr>
-                <th>Property</th>
-                <th>Score</th>
-                <th>Risk</th>
-                <th>NOI Var</th>
-                <th>Proj Gap</th>
-                <th>Occ</th>
-                <th>Primary Driver</th>
+                ${rankingHeaders.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}
               </tr>
             </thead>
             <tbody>${rankingRows}</tbody>
