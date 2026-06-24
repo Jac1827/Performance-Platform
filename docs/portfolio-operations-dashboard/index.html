@@ -18759,6 +18759,20 @@ function renderPortfolioHomeTab() {
     const selectedTrendRow = trendRows[selectedMonth] || null;
     const lastClosedTrendMonth = getClosedMonthTrendCeiling(selectedMonth, new Date().getFullYear());
     const lastClosedTrendRow = lastClosedTrendMonth >= 0 ? trendRows[lastClosedTrendMonth] : null;
+    const currentCalendarMonth = new Date().getMonth();
+    const applicationTrendCeilingMonth = Math.min(selectedMonth, currentCalendarMonth);
+    const applicationTrendRows = trendRows.filter(row => {
+      const totalApplications = Math.max(0, Number(row.applications) || 0);
+      const approvedApps = Math.max(0, Number(row.approvedApps) || 0);
+      return row.monthIdx <= applicationTrendCeilingMonth
+        && row.communityCount > 0
+        && (totalApplications > 0 || approvedApps > 0);
+    });
+    const latestApplicationTrendRow = applicationTrendRows[applicationTrendRows.length - 1] || null;
+    const previousApplicationTrendRow = applicationTrendRows[applicationTrendRows.length - 2] || null;
+    const latestApplicationApprovalRate = latestApplicationTrendRow && Number(latestApplicationTrendRow.applications) > 0
+      ? (Number(latestApplicationTrendRow.approvedApps) / Number(latestApplicationTrendRow.applications)) * 100
+      : null;
     const approvedTrendCard = renderSafeSection(
       () => buildPortfolioTrendCard({
         title: "Approved apps trend",
@@ -18819,41 +18833,36 @@ function renderPortfolioHomeTab() {
       }),
       `<div class="portfolio-list-card"><h3>Net absorption trend</h3><p>Trend data is temporarily unavailable for this snapshot.</p></div>`
     );
-    const leasedOccupancyTrendCard = renderSafeSection(
-      () => {
-        const projectedYearEndRow = trendRows[trendRows.length - 1] || null;
-        return buildPortfolioTrendCard({
-          title: `${trendScopeTitle} leased occupancy trend`,
-          subtitle: `Actual leased occupancy through ${selectedLabel} ${new Date().getFullYear()}, then projected forward using the saved Monthly Leasing Schedule move-ins and effective move-outs for each community.`,
-          summaryLabel: "Selected / Year-end",
-          summaryValue: selectedTrendRow && selectedTrendRow.communityCount > 0
-            ? `${formatPortfolioTrendMetricValue(selectedTrendRow.leasedOccupancyPct, "pct")} → ${formatPortfolioTrendMetricValue(projectedYearEndRow?.leasedOccupancyPct, "pct")}`
-            : "—",
-          summarySub: "Future months stay on the chart as forward-looking projections.",
-          chips: [
-            `<strong>${formatPortfolioTrendMetricValue(selectedTrendRow?.leasedOccupancyPct, "pct")}</strong> selected month`,
-            `<strong>${formatPortfolioTrendMetricValue(projectedYearEndRow?.leasedOccupancyPct, "pct")}</strong> December projection`,
-            `<strong>${selectedTrendRow?.communityCount ?? 0}</strong> active communities included`
-          ],
-          chartHtml: buildPortfolioTrendLineChart(
-            trendRows.map(row => ({
-              shortLabel: row.shortLabel,
-              value: row.communityCount > 0 ? row.leasedOccupancyPct : null,
-              projected: row.projected
-            })),
-            {
-              kind: "pct",
-              minClamp: 0,
-              maxClampMinimum: 100,
-              lineColor: "#1f6feb",
-              projectedLineColor: "#7c3aed",
-              projectedDotColor: "#a371f7",
-              axisFormatter: value => `${Number(value).toFixed(0)}%`
-            }
-          )
-        });
-      },
-      `<div class="portfolio-list-card"><h3>Portfolio leased occupancy trend</h3><p>Trend data is temporarily unavailable for this snapshot.</p></div>`
+    const applicationComparisonTrendCard = renderSafeSection(
+      () => buildPortfolioTrendCard({
+        title: `${trendScopeTitle} application trend`,
+        subtitle: `${trendScopeTitle} approved applications compared with total applications received, showing only saved months through ${FULL_MONTHS[applicationTrendCeilingMonth]} ${new Date().getFullYear()}.`,
+        summaryLabel: latestApplicationTrendRow ? FULL_MONTHS[latestApplicationTrendRow.monthIdx] : "Applications",
+        summaryValue: latestApplicationTrendRow
+          ? `${formatPortfolioTrendMetricValue(latestApplicationTrendRow.approvedApps, "number")} / ${formatPortfolioTrendMetricValue(latestApplicationTrendRow.applications, "number")}`
+          : "—",
+        summarySub: latestApplicationTrendRow && previousApplicationTrendRow
+          ? `${formatPortfolioTrendValue(latestApplicationTrendRow.applications, previousApplicationTrendRow.applications, "count_pct")} total apps`
+          : "Approved apps versus total apps received",
+        chips: [
+          `<strong>${formatPortfolioTrendMetricValue(latestApplicationTrendRow?.applications, "number")}</strong> total apps received`,
+          `<strong>${formatPortfolioTrendMetricValue(latestApplicationTrendRow?.approvedApps, "number")}</strong> approved apps`,
+          `<strong>${latestApplicationApprovalRate === null ? "—" : `${latestApplicationApprovalRate.toFixed(1)}%`}</strong> approval rate`,
+          `<strong>${applicationTrendRows.length}</strong> month${applicationTrendRows.length === 1 ? "" : "s"} shown`
+        ],
+        chartHtml: buildPortfolioApplicationComparisonChart(
+          applicationTrendRows.map(row => ({
+            monthIdx: row.monthIdx,
+            shortLabel: row.shortLabel,
+            applications: row.applications,
+            approvedApps: row.approvedApps
+          })),
+          {
+            highlightMonthIdx: latestApplicationTrendRow?.monthIdx
+          }
+        )
+      }),
+      `<div class="portfolio-list-card"><h3>Application trend</h3><p>Trend data is temporarily unavailable for this snapshot.</p></div>`
     );
     const tourToLeaseTrendCard = renderSafeSection(
       () => buildPortfolioTrendCard({
@@ -18947,7 +18956,7 @@ function renderPortfolioHomeTab() {
     ${netAbsorptionTrendCard}
   </div>
   <div class="portfolio-section-grid" style="margin-top:16px">
-    ${leasedOccupancyTrendCard}
+    ${applicationComparisonTrendCard}
     ${tourToLeaseTrendCard}
   </div>`;
   } catch (error) {
@@ -20095,12 +20104,14 @@ function buildPortfolioHomeMonthlyTrendRows(anchorMonth = getSelectedDashboardMo
         ? entry.record.monthlyData
         : defaultMonthly();
       const monthEntry = monthEntries[monthIdx] ?? {};
+      const applicationMetrics = getApplicationDecisionMetrics(monthEntry);
       const prop = getPropertyByName(entry.name);
       const totalUnits = getTotalUnitsFor(prop, entry.record.customUnits);
       const corporateUnits = getCorporateLeaseUnitsForRecord(entry.record, totalUnits);
       const baseUnits = getOccupancyBaseUnits(totalUnits, corporateUnits);
       acc.communityCount += 1;
-      acc.approvedApps += getApplicationsApprovedCount(monthEntry);
+      acc.applications += applicationMetrics.applications;
+      acc.approvedApps += applicationMetrics.approvals;
       acc.moveIns += Math.max(0, Number(monthEntry.moveIns) || 0);
       acc.moveOuts += getEffectiveMoveOutsForMonth(monthIdx, monthEntries).effective;
       acc.tours += Math.max(0, Number(monthEntry.tours) || 0);
@@ -20112,6 +20123,7 @@ function buildPortfolioHomeMonthlyTrendRows(anchorMonth = getSelectedDashboardMo
       return acc;
     }, {
       communityCount: 0,
+      applications: 0,
       approvedApps: 0,
       moveIns: 0,
       moveOuts: 0,
@@ -20127,6 +20139,7 @@ function buildPortfolioHomeMonthlyTrendRows(anchorMonth = getSelectedDashboardMo
       year: trendYear,
       projected: monthIdx > anchorMonth,
       communityCount: totals.communityCount,
+      applications: totals.applications,
       approvedApps: totals.approvedApps,
       moveIns: totals.moveIns,
       moveOuts: totals.moveOuts,
@@ -20218,6 +20231,82 @@ function buildPortfolioTrendLineChart(points = [], options = {}) {
       const x = left + (stepX * idx);
       const isHighlighted = point?.projected ? false : idx === highlightMonthIdx;
       return `<text x="${x}" y="${height - 12}" text-anchor="middle" font-size="10" fill="${isHighlighted ? "#1b3a4b" : "#7d8590"}" font-weight="${isHighlighted ? "700" : "500"}">${escapeHtml(point?.shortLabel || FULL_MONTHS[idx].slice(0, 3))}</text>`;
+    }).join("")}
+  </svg>`;
+}
+
+function buildPortfolioApplicationComparisonChart(points = [], options = {}) {
+  const validPoints = (Array.isArray(points) ? points : []).filter(point => {
+    const applications = Number(point?.applications);
+    const approvedApps = Number(point?.approvedApps);
+    return Number.isFinite(applications) || Number.isFinite(approvedApps);
+  });
+  if (validPoints.length === 0) {
+    return `<div class="alert alert-info">No saved application trend points are available for this view yet.</div>`;
+  }
+  const width = 640;
+  const height = 220;
+  const left = 42;
+  const right = 14;
+  const top = 30;
+  const bottom = 34;
+  const chartWidth = width - left - right;
+  const chartHeight = height - top - bottom;
+  const totalColor = options.totalColor || "#1d4ed8";
+  const approvedColor = options.approvedColor || "#2a8f83";
+  const maxDatum = Math.max(
+    5,
+    ...validPoints.flatMap(point => [
+      Math.max(0, Number(point.applications) || 0),
+      Math.max(0, Number(point.approvedApps) || 0)
+    ])
+  );
+  const minValue = 0;
+  const maxValue = Math.max(maxDatum * 1.16, 5);
+  const yForValue = value => top + chartHeight - (((Math.max(0, Number(value) || 0) - minValue) / (maxValue - minValue)) * chartHeight);
+  const stepX = validPoints.length > 1 ? chartWidth / (validPoints.length - 1) : 0;
+  const pointAt = (point, idx, key) => ({
+    ...point,
+    value: Math.max(0, Number(point[key]) || 0),
+    x: left + (stepX * idx),
+    y: yForValue(point[key])
+  });
+  const totalPoints = validPoints.map((point, idx) => pointAt(point, idx, "applications"));
+  const approvedPoints = validPoints.map((point, idx) => pointAt(point, idx, "approvedApps"));
+  const buildLine = seriesPoints => seriesPoints.length > 1
+    ? seriesPoints.map(point => `${point.x},${point.y}`).join(" ")
+    : "";
+  const tickCount = 4;
+  const ticks = Array.from({ length: tickCount + 1 }, (_, idx) => {
+    const value = minValue + (((maxValue - minValue) / tickCount) * idx);
+    return {
+      value,
+      y: top + chartHeight - ((idx / tickCount) * chartHeight)
+    };
+  });
+  const highlightMonthIdx = Number.isInteger(options.highlightMonthIdx)
+    ? options.highlightMonthIdx
+    : (validPoints[validPoints.length - 1]?.monthIdx ?? getSelectedDashboardMonthIndex());
+  return `<svg viewBox="0 0 ${width} ${height}" style="width:100%;height:auto;display:block">
+    <rect x="0" y="0" width="${width}" height="${height}" rx="14" fill="transparent"/>
+    <g transform="translate(${width - 238} 10)">
+      <line x1="0" y1="0" x2="18" y2="0" stroke="${totalColor}" stroke-width="3" stroke-linecap="round"/>
+      <text x="24" y="4" font-size="10" font-weight="700" fill="#334155">Total apps received</text>
+      <line x1="134" y1="0" x2="152" y2="0" stroke="${approvedColor}" stroke-width="3" stroke-linecap="round"/>
+      <text x="158" y="4" font-size="10" font-weight="700" fill="#334155">Approved apps</text>
+    </g>
+    ${ticks.map(tick => `<g>
+      <line x1="${left}" y1="${tick.y}" x2="${width - right}" y2="${tick.y}" stroke="rgba(27,58,75,0.08)" stroke-width="1"/>
+      <text x="${left - 8}" y="${tick.y + 4}" text-anchor="end" font-size="10" fill="#7d8590">${escapeHtml(formatPortfolioTrendMetricValue(tick.value, "number"))}</text>
+    </g>`).join("")}
+    ${totalPoints.length > 1 ? `<polyline fill="none" stroke="${totalColor}" stroke-width="3" points="${buildLine(totalPoints)}"/>` : ""}
+    ${approvedPoints.length > 1 ? `<polyline fill="none" stroke="${approvedColor}" stroke-width="3" points="${buildLine(approvedPoints)}"/>` : ""}
+    ${totalPoints.map(point => `<circle cx="${point.x}" cy="${point.y}" r="4.5" fill="${totalColor}" stroke="#ffffff" stroke-width="1.5"/>`).join("")}
+    ${approvedPoints.map(point => `<circle cx="${point.x}" cy="${point.y}" r="4.5" fill="${approvedColor}" stroke="#ffffff" stroke-width="1.5"/>`).join("")}
+    ${validPoints.map((point, idx) => {
+      const x = left + (stepX * idx);
+      const isHighlighted = Number(point.monthIdx) === highlightMonthIdx;
+      return `<text x="${x}" y="${height - 12}" text-anchor="middle" font-size="10" fill="${isHighlighted ? "#1b3a4b" : "#7d8590"}" font-weight="${isHighlighted ? "700" : "500"}">${escapeHtml(point.shortLabel || FULL_MONTHS[point.monthIdx]?.slice(0, 3) || "")}</text>`;
     }).join("")}
   </svg>`;
 }
