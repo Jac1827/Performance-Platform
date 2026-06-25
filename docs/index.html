@@ -301,9 +301,21 @@ const DASHBOARD_STORAGE_MIGRATION_KEYS = [
   'atlas_rise_side_nav_collapsed_v1'
 ];
 const PERFORMANCE_SHARED_SYNC_SCOPE = 'atlas_performance_v1';
+const PERFORMANCE_SHARED_SYNC_WORKER_ORIGIN = 'https://rise-performance-platform-site.jacquelyn-heflin.workers.dev';
 function getPerformanceSharedSyncBaseUrl(){
+  const explicitOverride = String(window.ATLAS_SHARED_SYNC_BASE_URL || '').trim();
+  if(/^https?:\/\//i.test(explicitOverride)) return explicitOverride.replace(/\/+$/, '');
   const origin = String(window.location?.origin || '');
-  return /^https?:\/\//i.test(origin) ? origin : 'https://api.appdeploy.ai/app/582d88ce519f411cab';
+  if(/^https?:\/\//i.test(origin)){
+    try{
+      const host = new URL(origin).hostname.toLowerCase();
+      const isLocalDevHost = host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host.endsWith('.local');
+      if(!isLocalDevHost && host !== 'github.io' && !host.endsWith('.github.io')){
+        return origin.replace(/\/+$/, '');
+      }
+    }catch{}
+  }
+  return PERFORMANCE_SHARED_SYNC_WORKER_ORIGIN;
 }
 const PERFORMANCE_SHARED_SYNC_BASE_URL = getPerformanceSharedSyncBaseUrl();
 const PERFORMANCE_SHARED_SYNC_ENDPOINT = `${PERFORMANCE_SHARED_SYNC_BASE_URL}/api/state`;
